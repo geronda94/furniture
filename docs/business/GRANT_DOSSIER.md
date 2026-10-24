@@ -253,6 +253,10 @@
 - `GTM_PLAYBOOK.md` — запуск с низкими трудозатратами.
 - `CONTENT_ENGINE.md` — мультиязычный контент.
 - `WHITE_LABEL_SAAS.md` — white-label модель.
+- `GRANT_PLAN.md` — подготовка к грантам/консультациям.
+- `EXPERT_BRIEF.md` — one-pager.
+- `INDUSTRIAL_3D.md` — анализ промышленного 3D.
+- `VISUALIZATION_MARKET.md` — рынок 3D-визуализации.
 - `../13-editor-state.md` — техническое состояние.
 - `../12-web-constructor.md` — архитектура.
 - `../15-roadmap.md` — роадмап.
