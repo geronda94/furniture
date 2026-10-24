@@ -83,6 +83,10 @@ blender -b -P blender_build.py -- ../projects/kitchen-10m/scene3d.json ../projec
 | `business/GTM_PLAYBOOK.md` | запуск с низкими трудозатратами |
 | `business/CONTENT_ENGINE.md` | мультиязычный контент-конвейер |
 | `business/WHITE_LABEL_SAAS.md` | white-label SaaS + лиды |
+| `business/GRANT_PLAN.md` | план подготовки к грантам/консультациям |
+| `business/EXPERT_BRIEF.md` | one-pager для эксперта |
+| `business/INDUSTRIAL_3D.md` | промышленное 3D: ниши, боли, цены |
+| `business/VISUALIZATION_MARKET.md` | 3D-визуализация: ниши, спрос, цены |
 
 ## Документация
 
