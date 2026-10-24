@@ -1,0 +1,41 @@
+{
+  "cabinet-600": {
+    "parts.json": "b7d79fdbf50ea3f2",
+    "parts.csv": "f7892e3e1473e053",
+    "cutting.svg": "897507121ad81f62",
+    "report.txt": "d7cfcc11c54deb15"
+  },
+  "cabinet-900-overlay": {
+    "parts.json": "69d4b78eea8504c4",
+    "parts.csv": "47dc0dd3e9434bd2",
+    "cutting.svg": "0172fe555a3f62ca",
+    "report.txt": "307eeedd297d9a39"
+  },
+  "kitchen-600": {
+    "parts.json": "da8d1ae70537a42f",
+    "parts.csv": "21518bd485fac748",
+    "cutting.svg": "a30c44fdf5c97510",
+    "report.txt": "7f959b5185684025",
+    "scene3d.json": "3521d1fe3aea1036",
+    "kitchen_facade.dxf": "89c36d975bb13c71",
+    "kitchen_parts.dxf": "ea1635060b2d557e"
+  },
+  "kitchen-mixed": {
+    "parts.json": "7864e21b1b8fd271",
+    "parts.csv": "61642c9a9a41060e",
+    "cutting.svg": "3c1b3f9a809c91a3",
+    "report.txt": "35af41a7847a767b",
+    "scene3d.json": "4b60ec95f9333850",
+    "kitchen_facade.dxf": "d375768f299103aa",
+    "kitchen_parts.dxf": "69e53954fd9760a9"
+  },
+  "kitchen-overlay-open": {
+    "parts.json": "8f107999a10696b1",
+    "parts.csv": "161c9770db15214f",
+    "cutting.svg": "4ba4da759b7581ea",
+    "report.txt": "f6e4da4a3613b809",
+    "scene3d.json": "80f03e1e2d661491",
+    "kitchen_facade.dxf": "4847dd8a63ce363e",
+    "kitchen_parts.dxf": "28f2d3b930d563ba"
+  }
+}

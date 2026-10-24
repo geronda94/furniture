@@ -1,0 +1,29 @@
+# зависимости и сборка
+**/node_modules/
+apps/web/dist/
+**/__pycache__/
+**/*.pyc
+.venv/
+venv/
+
+# секреты и локальные настройки
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+
+# временное
+.playwright-mcp/
+tmp/
+out/
+*.log
+.DS_Store
+
+# крупные/производные артефакты Blender
+*.blend1
+projects/*/renders/
+projects/*/video/
+projects/*/previews/
+projects/*/cards/

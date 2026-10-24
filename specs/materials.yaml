@@ -1,0 +1,52 @@
+# Библиотека материалов и декоров.
+# Данные, не правила: цены и названия можно менять под цех/поставщика.
+# pattern: solid | wood | stone | metal
+# texture_url: необязательная ссылка на бесшовную текстуру (если есть)
+
+categories:
+  - id: ldsp
+    name: ЛДСП / декоры
+    items:
+      - { id: ldsp-white, name: "Белый матовый", color: "#f2f1ed", accent: "#dcdad4", pattern: solid, price_m2: 980 }
+      - { id: ldsp-cashmere, name: "Кашемир", color: "#c9b79f", accent: "#a9947a", pattern: solid, price_m2: 1120 }
+      - { id: ldsp-oak-natural, name: "Дуб натуральный", color: "#d9c3a3", accent: "#b7956c", pattern: wood, texScale: 650, price_m2: 1350 }
+      - { id: ldsp-oak-sonoma, name: "Дуб Сонома", color: "#b99a72", accent: "#8f7352", pattern: wood, texScale: 720, price_m2: 1280 }
+      - { id: ldsp-walnut, name: "Орех", color: "#7a5638", accent: "#543722", pattern: wood, texScale: 620, price_m2: 1480 }
+      - { id: ldsp-graphite, name: "Графит", color: "#3b434b", accent: "#2b3238", pattern: solid, price_m2: 1080 }
+      - { id: ldsp-concrete, name: "Бетон светлый", color: "#b9b7b1", accent: "#96938c", pattern: stone, texScale: 900, price_m2: 1240 }
+      - { id: ldsp-navy, name: "Тёмно-синий", color: "#2f4054", accent: "#21303f", pattern: solid, price_m2: 1180 }
+      - { id: ldsp-sage, name: "Шалфей", color: "#8d9a86", accent: "#6e7b68", pattern: solid, price_m2: 1180 }
+      - { id: ldsp-milk, name: "Молочный", color: "#e9e3d8", accent: "#cfc6b7", pattern: solid, price_m2: 1040 }
+
+  - id: plaster
+    name: Штукатурка / стены
+    items:
+      - { id: plaster-white, name: "Штукатурка белая", color: "#efeee9", accent: "#d8d6cf", pattern: solid, price_m2: 420 }
+      - { id: plaster-warm, name: "Штукатурка тёплая", color: "#e6ded1", accent: "#cfc4b2", pattern: solid, price_m2: 460 }
+      - { id: plaster-grey, name: "Штукатурка серая", color: "#c9c9c6", accent: "#aeaeaa", pattern: stone, texScale: 1200, price_m2: 480 }
+      - { id: plaster-microcement, name: "Микроцемент", color: "#9fa1a0", accent: "#838684", pattern: stone, texScale: 1100, price_m2: 850 }
+
+  - id: floor
+    name: Паркет / ламинат
+    items:
+      - { id: parquet-oak, name: "Паркет дуб натуральный", color: "#b08a5e", accent: "#8a6843", pattern: wood, texScale: 1200, price_m2: 3900 }
+      - { id: parquet-oak-light, name: "Паркет дуб светлый", color: "#c8a878", accent: "#a18456", pattern: wood, texScale: 1200, price_m2: 4200 }
+      - { id: parquet-herringbone, name: "Паркет ёлка", color: "#a77c50", accent: "#825d39", pattern: wood, texScale: 900, price_m2: 5200 }
+      - { id: laminate-oak, name: "Ламинат дуб", color: "#b9946a", accent: "#92714d", pattern: wood, texScale: 1100, price_m2: 1450 }
+      - { id: laminate-grey, name: "Ламинат серый", color: "#9c9a95", accent: "#7d7b76", pattern: wood, texScale: 1000, price_m2: 1350 }
+      - { id: laminate-dark, name: "Ламинат тёмный орех", color: "#6f5038", accent: "#513824", pattern: wood, texScale: 1000, price_m2: 1600 }
+
+  - id: worktop
+    name: Столешницы
+    items:
+      - { id: top-graphite, name: "Столешница графит", color: "#24282c", accent: "#181b1e", pattern: stone, texScale: 1200, price_m2: 5200 }
+      - { id: top-quartz-white, name: "Кварц белый", color: "#eceae4", accent: "#d2cec5", pattern: stone, texScale: 900, price_m2: 7800 }
+      - { id: top-oak, name: "Столешница дуб", color: "#b98d5f", accent: "#8f6a43", pattern: wood, texScale: 1000, price_m2: 6100 }
+      - { id: top-marble, name: "Мрамор", color: "#dedcd7", accent: "#a9a6a0", pattern: stone, texScale: 800, price_m2: 9200 }
+
+  - id: back
+    name: Задние стенки
+    items:
+      - { id: back-dvp-white, name: "ДВП белая", color: "#efede7", accent: "#ddd9d0", pattern: solid, price_m2: 320 }
+      - { id: back-dvp-oak, name: "ДВП дуб", color: "#c9ab82", accent: "#a88a62", pattern: wood, texScale: 700, price_m2: 420 }
+      - { id: back-cardboard, name: "Картон 3 мм", color: "#c8b48d", accent: "#a8946c", pattern: solid, price_m2: 180 }

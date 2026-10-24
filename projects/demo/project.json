@@ -1,0 +1,224 @@
+{
+  "schema": "furniture/project@0",
+  "name": "Кухня — демо",
+  "shop": "shop-default",
+  "room": {
+    "w": 3600,
+    "d": 2800,
+    "h": 2700,
+    "wallT": 100,
+    "floor": {
+      "enabled": true,
+      "material": "floor",
+      "t": 0
+    },
+    "ceiling": {
+      "enabled": false,
+      "material": "ceiling",
+      "t": 0
+    },
+    "wallItems": [
+      {
+        "id": "wmvmp4n6f1",
+        "kind": "socket",
+        "wall": 2,
+        "x": 1800,
+        "z": 300,
+        "w": 160,
+        "h": 80,
+        "depth": 12
+      }
+    ],
+    "openings": [
+      {
+        "id": "o1",
+        "kind": "window",
+        "wall": 0,
+        "x": 200,
+        "w": 1200,
+        "z0": 900,
+        "z1": 2200,
+        "open": false,
+        "hinge": "left",
+        "angle": 80
+      },
+      {
+        "id": "o2",
+        "kind": "door",
+        "wall": 3,
+        "x": 800,
+        "w": 900,
+        "z0": 0,
+        "z1": 2100,
+        "open": false,
+        "hinge": "left",
+        "angle": 95
+      }
+    ]
+  },
+  "instances": [
+    {
+      "id": "i1",
+      "product": "base-cabinet",
+      "name": "Тумба 800",
+      "x": 400,
+      "y": 2240,
+      "z": 0,
+      "rot": 0,
+      "zLocked": true,
+      "params": {
+        "W": 800,
+        "H": 720,
+        "D": 560,
+        "doors": 2,
+        "drawers": 0,
+        "shelves": 2,
+        "dividers": 0,
+        "frame": "inset",
+        "hardware": "blum",
+        "runners": "tandem-21",
+        "t": 16,
+        "back": "dvp",
+        "backT": 4,
+        "roof": true,
+        "reinforce": "auto",
+        "mount": "floor",
+        "plinthH": 100,
+        "worktopT": 38
+      },
+      "anim": {
+        "door:13": {
+          "open": {
+            "id": "open",
+            "label": "Открывание",
+            "unit": "°",
+            "min": 0,
+            "max": 90,
+            "value": 90,
+            "keys": [
+              {
+                "t": 0,
+                "v": 0,
+                "ease": "easeInOut"
+              },
+              {
+                "t": 0.7,
+                "v": 90,
+                "ease": "easeInOut"
+              }
+            ]
+          }
+        },
+        "door:14": {
+          "open": {
+            "id": "open",
+            "label": "Открывание",
+            "unit": "°",
+            "min": 0,
+            "max": 90,
+            "value": 90,
+            "keys": [
+              {
+                "t": 0,
+                "v": 0,
+                "ease": "easeInOut"
+              },
+              {
+                "t": 0.7,
+                "v": 90,
+                "ease": "easeInOut"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "folders": [],
+  "materials": {
+    "corpus": {
+      "name": "ЛДСП Дуб натуральный",
+      "color": "#d9c3a3",
+      "accent": "#b7956c",
+      "pattern": "wood",
+      "texScale": 650
+    },
+    "facade": {
+      "name": "ЛДСП Графит",
+      "color": "#3b434b",
+      "accent": "#2b3238",
+      "pattern": "solid"
+    },
+    "worktop": {
+      "name": "Столешница графит",
+      "color": "#24282c",
+      "accent": "#181b1e",
+      "pattern": "stone",
+      "texScale": 1200
+    },
+    "plinth": {
+      "name": "Цоколь антрацит",
+      "color": "#171a1d",
+      "accent": "#0e1012",
+      "pattern": "solid"
+    },
+    "back": {
+      "name": "ДВП светлая",
+      "color": "#efede7",
+      "accent": "#ddd9d0",
+      "pattern": "solid"
+    },
+    "drawer": {
+      "name": "Ящик металл",
+      "color": "#9aa0a6",
+      "accent": "#7c8288",
+      "pattern": "metal"
+    },
+    "floor": {
+      "name": "Пол — дуб",
+      "color": "#8b7a63",
+      "accent": "#6a5c49",
+      "pattern": "metal",
+      "texScale": 1100
+    },
+    "ceiling": {
+      "name": "Потолок",
+      "color": "#efeee9",
+      "accent": "#ddd9d0",
+      "pattern": "solid"
+    },
+    "leg": {
+      "name": "Ножка",
+      "color": "#1b1c1e",
+      "accent": "#101112",
+      "pattern": "solid"
+    }
+  },
+  "log": [
+    {
+      "time": "2026-10-24T17:59:01.335Z",
+      "label": "Изменён предмет на стене"
+    },
+    {
+      "time": "2026-10-24T17:59:05.226Z",
+      "label": "Изменён предмет на стене"
+    },
+    {
+      "time": "2026-10-24T17:59:07.864Z",
+      "label": "Изменён предмет на стене"
+    },
+    {
+      "time": "2026-10-24T18:01:03.742Z",
+      "label": "Изменение"
+    },
+    {
+      "time": "2026-10-24T18:01:26.422Z",
+      "label": "Изменение"
+    },
+    {
+      "time": "2026-10-24T18:01:27.253Z",
+      "label": "Изменение"
+    }
+  ],
+  "views": []
+}

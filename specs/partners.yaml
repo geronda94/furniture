@@ -1,0 +1,25 @@
+# Партнёры: цеха, раскройщики, сборщики, дизайнеры.
+# Заготовка для передачи лидов и расчёта комиссии.
+partners:
+  - id: demo-shop
+    name: "Демо-цех (раскрой + сборка)"
+    city: "Москва"
+    services: [cutting, edging, assembly]
+    commission_percent: 10
+    price_list: default
+    contacts:
+      phone: "+7 000 000-00-00"
+      telegram: "@demo_shop"
+  - id: demo-cutter
+    name: "Демо-раскрой"
+    city: "Москва"
+    services: [cutting, edging]
+    commission_percent: 7
+    price_list: default
+
+lead_statuses:
+  - new
+  - sent
+  - quoted
+  - won
+  - lost

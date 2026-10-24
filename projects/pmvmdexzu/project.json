@@ -1,0 +1,115 @@
+{
+  "schema": "furniture/project@0",
+  "name": "Новый проект",
+  "shop": "shop-default",
+  "room": {
+    "w": 3600,
+    "d": 2800,
+    "h": 2700,
+    "wallT": 100,
+    "floor": {
+      "enabled": true,
+      "material": "floor",
+      "t": 0
+    },
+    "ceiling": {
+      "enabled": false,
+      "material": "ceiling",
+      "t": 0
+    },
+    "wallItems": [],
+    "openings": [
+      {
+        "id": "omvmdg54n1",
+        "kind": "window",
+        "wall": 0,
+        "x": 1200,
+        "w": 1200,
+        "z0": 900,
+        "z1": 2200,
+        "hinge": "left",
+        "angle": 80
+      },
+      {
+        "id": "omvmdgelh2",
+        "kind": "door",
+        "wall": 1,
+        "x": 950,
+        "w": 900,
+        "z0": 0,
+        "z1": 2100,
+        "hinge": "right",
+        "angle": 80,
+        "open": true
+      }
+    ]
+  },
+  "instances": [],
+  "folders": [
+    {
+      "id": "fmvmdi2se",
+      "name": "Комната 1",
+      "ids": []
+    }
+  ],
+  "materials": {
+    "corpus": {
+      "name": "ЛДСП Дуб натуральный",
+      "color": "#d9c3a3",
+      "accent": "#b7956c",
+      "pattern": "wood",
+      "texScale": 650
+    },
+    "facade": {
+      "name": "ЛДСП Графит",
+      "color": "#3b434b",
+      "accent": "#2b3238",
+      "pattern": "solid"
+    },
+    "worktop": {
+      "name": "Столешница графит",
+      "color": "#24282c",
+      "accent": "#181b1e",
+      "pattern": "stone",
+      "texScale": 1200
+    },
+    "plinth": {
+      "name": "Цоколь антрацит",
+      "color": "#171a1d",
+      "accent": "#0e1012",
+      "pattern": "solid"
+    },
+    "back": {
+      "name": "ДВП светлая",
+      "color": "#efede7",
+      "accent": "#ddd9d0",
+      "pattern": "solid"
+    },
+    "drawer": {
+      "name": "Ящик металл",
+      "color": "#9aa0a6",
+      "accent": "#7c8288",
+      "pattern": "metal"
+    },
+    "floor": {
+      "name": "Пол — дуб",
+      "color": "#8b7a63",
+      "accent": "#6a5c49",
+      "pattern": "wood",
+      "texScale": 1100
+    },
+    "ceiling": {
+      "name": "Потолок",
+      "color": "#efeee9",
+      "accent": "#ddd9d0",
+      "pattern": "solid"
+    },
+    "leg": {
+      "name": "Ножка",
+      "color": "#1b1c1e",
+      "accent": "#101112",
+      "pattern": "solid"
+    }
+  },
+  "views": []
+}

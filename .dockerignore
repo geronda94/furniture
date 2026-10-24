@@ -1,0 +1,10 @@
+.git
+**/node_modules
+**/__pycache__
+**/*.pyc
+apps/web/dist
+.playwright-mcp
+projects/*/renders
+projects/*/video
+projects/*/previews
+projects/*/cards
