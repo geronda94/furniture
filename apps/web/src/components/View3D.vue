@@ -58,6 +58,7 @@ function sync(): void {
     derived,
     state.project.materials,
     state.project.materialVars,
+    state.rev,
   )
   renderer.setSelected(state.selected.length ? [...state.selected]
     : state.selection ? [state.selection] : [])

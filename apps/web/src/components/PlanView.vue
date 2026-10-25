@@ -118,6 +118,7 @@ function placedObjects(): PlacedObject[] {
               state.project.materialVars,
               inst,
               o,
+              part,
             )
           : undefined,
       })
@@ -232,6 +233,37 @@ function draw() {
     selections: state.selected.length ? state.selected : [],
     dims: props.compact ? [] : dims,
   })
+
+  // Отделка пола: зоны плитки/ламината (схематично, полупрозрачно)
+  for (const f of state.project.finishes ?? []) {
+    if (f.kind !== 'floor') continue
+    const pts = [
+      [f.x, f.y], [f.x + f.w, f.y],
+      [f.x + f.w, f.y + f.d], [f.x, f.y + f.d],
+    ].map((p) => proj.point([p[0], p[1], 0]))
+    ctx.save()
+    ctx.globalAlpha = 0.22
+    ctx.fillStyle = f.color
+    ctx.beginPath()
+    ctx.moveTo(pts[0].x, pts[0].y)
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y)
+    ctx.closePath()
+    ctx.fill()
+    ctx.globalAlpha = 0.9
+    ctx.setLineDash([6, 4])
+    ctx.strokeStyle = f.color
+    ctx.lineWidth = 1.2
+    ctx.stroke()
+    ctx.setLineDash([])
+    ctx.globalAlpha = 1
+    ctx.fillStyle = 'rgba(230,235,240,0.9)'
+    ctx.font = '10px ui-sans-serif, system-ui, sans-serif'
+    const mid = proj.point([f.x + f.w / 2, f.y + f.d / 2, 0])
+    ctx.textAlign = 'center'
+    const area = Math.round((f.w * f.d) / 10000) / 100
+    ctx.fillText(`${f.name} · ${area} м²`, mid.x, mid.y)
+    ctx.restore()
+  }
 
   // направляющие привязки
   const gx = state.guides?.x ?? null

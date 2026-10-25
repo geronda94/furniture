@@ -1,0 +1,55 @@
+# Прайс рынка EU (EUR). Стартовые значения — заготовка под конкретный цех.
+market: eu
+currency: EUR
+locale: de-DE
+symbol: €
+vat_percent: 21
+updated: 2026-10-25
+source: "стартовые цены, уточнить у цеха"
+
+waste_percent: 15
+
+materials:
+  ЛДСП: 14
+  ДВП: 5
+  Картон: 2.5
+  МДФ: 19
+  Столешница: 60
+
+cutting:
+  per_sheet: 10
+  per_m2: 7
+
+edge:
+  pvc_04: 1.2
+  pvc_2: 4.5
+  abs_2: 5.5
+  laser_1: 6.5
+  none: 0
+
+hardware:
+  hinge: 3.2
+  runner_pair: 26
+  leg: 2
+  handle: 2.2
+  confirmat: 0.15
+  minifix: 0.5
+  screw: 0.06
+  dowel: 0.04
+  shelf_pin: 0.1
+  gas_strut: 9
+
+handles:
+  bar-128: 3.5
+  bar-160: 4
+  rail-192: 5
+  knob-30: 2
+  profile-04: 20
+
+assembly:
+  module: 15
+  door: 6
+  drawer: 8
+
+markup_percent: 25
+partner_commission_percent: 8

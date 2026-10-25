@@ -1,0 +1,26 @@
+# Рынки: страна → валюта, локаль, НДС и прайс-лист.
+#
+# Прайс-лист рынка лежит в specs/pricing/<file>. Значения — стартовые
+# (заготовка), их нужно сверить с конкретным цехом/поставщиком.
+# Новый рынок = строка здесь + файл прайса (см. pricing/template.yaml).
+
+default: ro
+
+markets:
+  - id: ro
+    name: Румыния
+    currency: RON
+    locale: ro-RO
+    symbol: lei
+    vat_percent: 21
+    file: ro.yaml
+    source: "стартовые цены, уточнить у цеха"
+
+  - id: eu
+    name: ЕС / экспорт (EUR)
+    currency: EUR
+    locale: de-DE
+    symbol: €
+    vat_percent: 21
+    file: eu.yaml
+    source: "стартовые цены, уточнить у цеха"

@@ -36,6 +36,22 @@ categories:
       - { id: laminate-grey, name: "Ламинат серый", color: "#9c9a95", accent: "#7d7b76", pattern: wood, texScale: 1000, price_m2: 1350 }
       - { id: laminate-dark, name: "Ламинат тёмный орех", color: "#6f5038", accent: "#513824", pattern: wood, texScale: 1000, price_m2: 1600 }
 
+  - id: tile
+    name: Плитка / керамогранит
+    items:
+      - { id: tile-white-300, name: "Плитка белая 300×300", color: "#e8e7e2", accent: "#cbc9c2", pattern: stone, price_m2: 1250 }
+      - { id: tile-marble-600, name: "Керамогранит мрамор 600×600", color: "#dcd8d0", accent: "#b5afa4", pattern: stone, price_m2: 2100 }
+      - { id: tile-grey-300, name: "Плитка серая 300×300", color: "#a9a7a2", accent: "#8b8984", pattern: stone, price_m2: 1150 }
+      - { id: tile-terracotta, name: "Терракота 200×200", color: "#b97758", accent: "#955a40", pattern: stone, price_m2: 980 }
+      - { id: tile-dark-600, name: "Керамогранит графит 600×600", color: "#4c4b48", accent: "#33322f", pattern: stone, price_m2: 2300 }
+
+  - id: mdf
+    name: МДФ / фрезеровка
+    items:
+      - { id: mdf-white, name: "МДФ белый фрезерованный", color: "#f1efe9", accent: "#d6d3ca", pattern: solid, price_m2: 1650 }
+      - { id: mdf-cashmere, name: "МДФ кашемир", color: "#cdbca5", accent: "#a99378", pattern: solid, price_m2: 1780 }
+      - { id: mdf-graphite, name: "МДФ графит", color: "#3c4248", accent: "#2a2f34", pattern: solid, price_m2: 1720 }
+
   - id: worktop
     name: Столешницы
     items:

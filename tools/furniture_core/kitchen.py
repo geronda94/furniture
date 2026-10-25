@@ -117,20 +117,20 @@ def drawer_box(inner_w, drawer_front_h, cfg, visible=True,
     box_h = min(r.box_height,
                 max(70.0, drawer_front_h - 20 - r.side_extra))
     side_h = box_h + r.side_extra
-    ed_top = EF if visible else 0
+    # верхний торец борта/стенок ящика виден при открытии → кромка
+    ed_top = EI
     t = cfg.t
     inner = max(30.0, box_w - 2 * t)
     depth_inner = max(30.0, box_len - 2 * t)
     return [
         # борта выше переда/зада: к ним крепятся скрытые направляющие снизу
-        Part("Ящик боковина", 2, box_len, side_h, "ЛДСП", {"top": ed_top},
-             front_key="top"),
+        Part("Ящик боковина", 2, box_len, side_h, "ЛДСП", {"top": ed_top}),
         # передняя стенка короба: к ней крепится фасад
         Part("Ящик передняя стенка", 1, inner, box_h, "ЛДСП",
-             {"top": ed_top}, front_key="top"),
+             {"top": ed_top}),
         # задняя стенка и дно — между боковинами/стенками, без нахлёста
         Part("Ящик задняя стенка", 1, inner, box_h, "ЛДСП",
-             {"top": ed_top}, front_key="top"),
+             {"top": ed_top}),
         Part("Ящик дно", 1, inner, depth_inner, "ЛДСП", {}),
     ]
 
@@ -260,7 +260,8 @@ def _split_count(W, requested, cfg, maxw):
 
 
 def gen_kitchen(sections, cfg: Config, open_sections=(),
-                runner: Runner | None = None, hinge: Hinge | None = None):
+                runner: Runner | None = None, hinge: Hinge | None = None,
+                facade_material: str = "ЛДСП"):
     t = cfg.t
     parts = []
     holes = []
@@ -281,8 +282,6 @@ def gen_kitchen(sections, cfg: Config, open_sections=(),
     for i, s in enumerate(sections):
         W, H, D = s.width, cfg.corpus_h, cfg.corpus_d
         fh_total = H - cfg.gap_top - cfg.gap_bottom
-        first = (i == 0)
-        last = (i == len(sections) - 1)
         is_open = i in open_sections
         n_doors = _door_count(s)
         n_drawers = _drawer_count(s)
@@ -292,13 +291,29 @@ def gen_kitchen(sections, cfg: Config, open_sections=(),
         overlay = (cfg.frame == "overlay")
         side_h = H - 2 * t if overlay else H
         top_w = W if overlay else W - 2 * t
-        l_vis = EF if (first or is_open) else 0
-        r_vis = EF if (last or is_open) else 0
+        # Кромка — по фактической видимости торцов.
+        # Вкладной каркас: боковины на всю высоту, крыша/дно между ними —
+        # верхний и нижний торцы боковины открыты. Накладной: боковины между
+        # крышей и дном — их торцы закрыты, а боковые торцы крыши/дна видны.
+        side_edges = {"right": EF}
+        if not (overlay and cfg.include_roof):
+            side_edges["top"] = EF
+        if not overlay:
+            side_edges["bottom"] = EF
+        if cfg.back == "none":
+            side_edges["left"] = EI
         parts.append(Part("Боковина лев.", 1, D, side_h, "ЛДСП",
-                          {"right": l_vis}, front_key="right"))
+                          dict(side_edges), front_key="right"))
         parts.append(Part("Боковина прав.", 1, D, side_h, "ЛДСП",
-                          {"right": r_vis}, front_key="right"))
-        cr_ed = {"bottom": EF} if is_open else {}
+                          dict(side_edges), front_key="right"))
+        # Крыша/дно: передний торец виден; при накладном каркасе видны и
+        # боковые торцы, при отсутствии задника — задний.
+        cr_ed = {"bottom": EF}
+        if overlay:
+            cr_ed["left"] = EF
+            cr_ed["right"] = EF
+        if cfg.back == "none":
+            cr_ed["top"] = EI
         if cfg.include_roof:
             parts.append(Part("Крыша", 1, top_w, D, "ЛДСП", dict(cr_ed),
                               front_key="bottom"))
@@ -313,18 +328,23 @@ def gen_kitchen(sections, cfg: Config, open_sections=(),
             by_name: dict[str, int] = {}
             for r in rails:
                 by_name[r["name"]] = by_name.get(r["name"], 0) + 1
+            rail_edges = {"bottom": EF}
+            if cfg.back == "none":
+                rail_edges["top"] = EI
             for name, qty in by_name.items():
                 parts.append(Part(name, qty, top_w, cfg.reinforce_h, "ЛДСП",
-                                  {}, front_key="bottom"))
+                                  dict(rail_edges), front_key="bottom"))
 
         # перегородки — только явные (не автоматически по числу дверей).
         # Стойка стоит между дном и крышей (не пробивает их).
         part_xs = _divider_positions(W, t, s.dividers)
 
         # полки — в каждом отсеке отдельно, чтобы не проходить сквозь стойку.
-        # В открытой секции передний торец полки виден → кромка.
+        # Передний торец полки виден при открытой двери/в открытой секции.
         if s.shelves > 0:
-            shelf_edges = {"bottom": EF} if is_open else {}
+            shelf_edges = {"bottom": EF}
+            if cfg.back == "none":
+                shelf_edges["top"] = EI
             for cx0, cx1 in _compartments(W, t, part_xs):
                 cw = round(cx1 - cx0 - 3, 1)
                 if cw > 50:
@@ -335,8 +355,14 @@ def gen_kitchen(sections, cfg: Config, open_sections=(),
             # перегородка — на всю внутреннюю высоту корпуса
             p_h = H - 2 * t - lower_rail_height(cfg)
             if p_h > 30:
+                divider_edges = {"right": EF}
+                if not cfg.include_roof:
+                    divider_edges["top"] = EF
+                if cfg.back == "none":
+                    divider_edges["left"] = EI
                 parts.append(Part("Перегородка", len(part_xs), D,
-                                  p_h, "ЛДСП", {}, front_key="right"))
+                                  p_h, "ЛДСП", dict(divider_edges),
+                                  front_key="right"))
         if cfg.mount != "wall" and cfg.plinth_h > 0:
             legs_n += 4                   # опоры под секцией (закупные)
 
@@ -348,10 +374,11 @@ def gen_kitchen(sections, cfg: Config, open_sections=(),
             for block in _custom_blocks(s, cfg, fh_total):
                 if block["type"] == "doors":
                     _doors(parts, holes, s, W, block["h"],
-                           cfg, count=block["count"], hinge=hinge)
+                           cfg, count=block["count"], hinge=hinge,
+                           material=facade_material)
                 else:
                     for _, dh in _drawer_rows(block, cfg):
-                        _drawer_front(parts, s, W, dh, cfg)
+                        _drawer_front(parts, s, W, dh, cfg, material=facade_material)
             for block in _custom_blocks(s, cfg, fh_total):
                 if block["type"] != "drawers":
                     continue
@@ -365,14 +392,17 @@ def gen_kitchen(sections, cfg: Config, open_sections=(),
             if s.drawers and s.doors:
                 top_dr_h = 200.0
                 door_h = fh_total - top_dr_h - cfg.gap_between
-                _doors(parts, holes, s, W, door_h, cfg, hinge=hinge)
-                _drawer_front(parts, s, W, top_dr_h, cfg)
+                _doors(parts, holes, s, W, door_h, cfg, hinge=hinge,
+                       material=facade_material)
+                _drawer_front(parts, s, W, top_dr_h, cfg,
+                              material=facade_material)
             elif s.drawers:
                 hs = _drawer_heights(s, cfg, fh_total)
                 for dh in hs:
-                    _drawer_front(parts, s, W, dh, cfg)
+                    _drawer_front(parts, s, W, dh, cfg, material=facade_material)
             else:
-                _doors(parts, holes, s, W, fh_total, cfg, hinge=hinge)
+                _doors(parts, holes, s, W, fh_total, cfg, hinge=hinge,
+                       material=facade_material)
 
             # --- ящики (коробки на скрытых направляющих) ---
             if s.drawers:
@@ -395,12 +425,12 @@ def gen_kitchen(sections, cfg: Config, open_sections=(),
 
 
 def _doors(parts, holes, s, W, door_h, cfg, count=None,
-           hinge: Hinge | None = None):
+           hinge: Hinge | None = None, material: str = "ЛДСП"):
     n = _split_count(W, count if count is not None else s.doors, cfg,
                      MAX_DOOR_W)
     fw = (W - 2 * cfg.gap_side - (n - 1) * cfg.gap_between) / n
     parts.append(Part(f"Фасад дверь ({s.label()})", n, round(fw, 1),
-                      round(door_h, 1), "ЛДСП",
+                      round(door_h, 1), material,
                       {"left": EF, "right": EF, "top": EF, "bottom": EF}))
     nh = hinge_count(door_h)
     off = hinge.cup_offset if hinge else HINGE_CUP_OFFSET.get(cfg.hardware, 22.5)
@@ -412,11 +442,11 @@ def _doors(parts, holes, s, W, door_h, cfg, count=None,
                           f"отступ {off:g} мм от торца"})
 
 
-def _drawer_front(parts, s, W, dh, cfg):
+def _drawer_front(parts, s, W, dh, cfg, material="ЛДСП"):
     n = _split_count(W, 1, cfg, MAX_DRW_W)
     fw = (W - 2 * cfg.gap_side - (n - 1) * cfg.gap_between) / n
     parts.append(Part(f"Фасад ящик ({s.label()})", n, round(fw, 1),
-                      round(dh, 1), "ЛДСП",
+                      round(dh, 1), material,
                       {"left": EF, "right": EF, "top": EF, "bottom": EF}))
 
 

@@ -1,0 +1,37 @@
+# Типы кромки. thickness связывает тип с толщиной в деталировке (Part.edges).
+# price_key — ключ цены в прайсе рынка (specs/pricing/<market>.yaml).
+types:
+  - id: pvc_2
+    name: ПВХ 2 мм
+    thickness: 2.0
+    color: "#ff8a3d"
+    price_key: pvc_2
+    note: "Видимые торцы: фасады, боковины, открытые полки"
+
+  - id: pvc_04
+    name: ПВХ 0.4 мм
+    thickness: 0.4
+    color: "#4ea3ff"
+    price_key: pvc_04
+    note: "Внутренние/скрытые торцы, цоколь"
+
+  - id: abs_2
+    name: ABS 2 мм
+    thickness: 2.0
+    color: "#39c28b"
+    price_key: abs_2
+    note: "Альтернатива ПВХ 2 мм для влажных зон"
+
+  - id: laser_1
+    name: Лазерная 1 мм
+    thickness: 1.0
+    color: "#b58cff"
+    price_key: laser_1
+    note: "Без видимого шва; нужен лазерный станок"
+
+  - id: none
+    name: Без кромки
+    thickness: 0.0
+    color: "#8a8f96"
+    price_key: none
+    note: "Постформинг / скрытый торец / ДВП"

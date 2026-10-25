@@ -1,0 +1,57 @@
+# Прайс рынка RO (RON). Стартовые значения — заготовка под конкретный цех.
+market: ro
+currency: RON
+locale: ro-RO
+symbol: lei
+vat_percent: 21
+updated: 2026-10-25
+source: "стартовые цены, уточнить у цеха"
+
+waste_percent: 15
+
+materials:
+  ЛДСП: 62
+  ДВП: 20
+  Картон: 9
+  МДФ: 85
+  Столешница: 260
+
+cutting:
+  per_sheet: 45
+  per_m2: 32
+
+# кромка, за метр по типу
+edge:
+  pvc_04: 7
+  pvc_2: 20
+  abs_2: 24
+  laser_1: 28
+  none: 0
+
+hardware:
+  hinge: 14
+  runner_pair: 110
+  leg: 8
+  handle: 10
+  confirmat: 0.6
+  minifix: 2.2
+  screw: 0.3
+  dowel: 0.15
+  shelf_pin: 0.4
+  gas_strut: 35
+
+# цены ручек по id (перекрывают каталог)
+handles:
+  bar-128: 16
+  bar-160: 18
+  rail-192: 22
+  knob-30: 9
+  profile-04: 80
+
+assembly:
+  module: 70
+  door: 25
+  drawer: 32
+
+markup_percent: 25
+partner_commission_percent: 8

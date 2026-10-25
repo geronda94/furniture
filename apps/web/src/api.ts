@@ -1,5 +1,16 @@
 import type { Materials, SceneObject } from './render25d/types'
 
+export interface EdgeSide {
+  thickness: number
+  type: string
+  label: string
+  color: string
+  price_key: string
+  front: boolean
+  side_label: string
+  length_m: number
+}
+
 export interface BomRow {
   name: string
   qty: number
@@ -9,6 +20,7 @@ export interface BomRow {
   saw_h: number
   material: string
   edge: string
+  edges?: Record<string, EdgeSide>
   grain: string
   front: string
 }
@@ -63,6 +75,20 @@ export interface CostLine {
 
 export interface CostInfo {
   currency: string
+  locale?: string
+  symbol?: string
+  market?: string
+  market_name?: string
+  shop?: string
+  shop_name?: string
+  supplier?: string
+  supplier_name?: string
+  vat_percent?: number
+  vat?: number
+  total_with_vat?: number
+  source?: string
+  updated?: string
+  draft?: boolean
   lines: CostLine[]
   subtotal: number
   markup_percent: number
@@ -75,13 +101,17 @@ export interface CostInfo {
 export interface AssemblyOperation {
   id: string
   part: string
+  part_kind?: string
   face: string
+  basis?: string
   x: number
   y: number
   dia: number
   depth: number
   kind: string
   hardware: string
+  hardware_id?: string
+  unit?: string
   section: number
   qty: number
   visibility: 'hidden' | 'visible'
@@ -92,16 +122,41 @@ export interface AssemblyOperation {
 
 export interface HardwarePlan {
   hinge_model: string
+  hinge_id?: string
   handle_model: string
+  handle_id?: string
   runner_model: string
+  runner_id?: string
+  runner_template?: boolean
+  fastener_model?: string
+  fastener_id?: string
+  shelf_support_model?: string
+  shelf_support_id?: string
+  gas_strut_model?: string
+  gas_strut_id?: string
   hinges: number
   hinge_plates: number
   handles: number
+  handle_holes?: number
   confirmats: number
+  fasteners?: number
+  screws?: number
+  leg_holes?: number
+  joints?: {
+    joint: string
+    class: string
+    fastener: string
+    fastener_id: string
+    count: number
+  }[]
   shelf_pins: number
   system32_holes: number
   slide_mounts: number
+  slide_box_holes?: number
+  gas_struts?: number
+  visible_fasteners?: number
   requires_pattern: number
+  edge_types?: Record<string, { id: string; name: string; thickness: number; color: string }>
 }
 
 export interface EdgePlanRow {
@@ -112,7 +167,17 @@ export interface EdgePlanRow {
   h: number
   front: string
   summary: string
-  sides: Record<string, { thickness: number; label: string }>
+  sides: Record<string, EdgeSide>
+}
+
+export interface ShelfPosition {
+  section: number
+  z_from_floor: number
+  t: number
+  w: number
+  d: number
+  to_shelf_above: number | null
+  from_shelf_below: number | null
 }
 
 export interface SolveResponse {
@@ -136,6 +201,8 @@ export interface SolveResponse {
   materials: Materials
   hardware: RunnerInfo & { runners_all: RunnerInfo[] }
   drawers: DrawerDims[]
+  shelves?: ShelfPosition[]
+  edges_by_type?: Record<string, number>
   assembly?: string[]
   edges_m?: Record<string, number>
   cutouts?: unknown[]
@@ -179,13 +246,85 @@ export async function apiMaterials(): Promise<MaterialCategory[]> {
 
 let hardwareCache: RunnerInfo[] | null = null
 
-export async function apiHardware(): Promise<RunnerInfo[]> {
-  if (hardwareCache) return hardwareCache
+export interface HardwareCatalog {
+  drawer_runners: RunnerInfo[]
+  hinges: { id: string; name: string; brand: string }[]
+  handles: HandleInfo[]
+  fasteners: { id: string; name: string; kind: string; face_dia: number; pilot_dia: number; note: string }[]
+  shelf_supports: { id: string; name: string; kind: string; per_side: number; note: string }[]
+  gas_struts: { id: string; name: string; brand: string; force_n: number; door_weight_max: number; note: string }[]
+  legs: {
+    id: string
+    name: string
+    kind: string
+    plate: number
+    hole_dia: number
+    depth: number
+    holes: { dx: number; dy: number }[]
+    template: boolean
+    note: string
+  }[]
+  edge_types: { id: string; name: string; thickness: number; color: string; note: string }[]
+}
+
+let catalogCache: HardwareCatalog | null = null
+
+export async function apiHardwareCatalog(): Promise<HardwareCatalog> {
+  if (catalogCache) return catalogCache
   const r = await fetch('/api/hardware')
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
-  const data = (await r.json()) as { drawer_runners: RunnerInfo[] }
+  catalogCache = (await r.json()) as HardwareCatalog
+  return catalogCache
+}
+
+export async function apiHardware(): Promise<RunnerInfo[]> {
+  if (hardwareCache) return hardwareCache
+  const data = await apiHardwareCatalog()
   hardwareCache = data.drawer_runners
   return hardwareCache
+}
+
+export interface PricingMarket {
+  id: string
+  name: string
+  currency: string
+  locale: string
+  symbol: string
+  vat_percent: number
+  source: string
+}
+
+export interface PricingShop {
+  id: string
+  name: string
+  market: string
+  sheet: { w?: number; h?: number; trim?: number; kerf?: number }
+  note: string
+}
+
+export interface PricingSupplier {
+  id: string
+  name: string
+  brands: string[]
+  note: string
+}
+
+export interface PricingOptions {
+  markets: PricingMarket[]
+  shops: PricingShop[]
+  suppliers: PricingSupplier[]
+  default: { market: string; shop: string; supplier: string }
+  active?: CostInfo
+}
+
+let pricingCache: PricingOptions | null = null
+
+export async function apiPricingOptions(force = false): Promise<PricingOptions> {
+  if (pricingCache && !force) return pricingCache
+  const r = await fetch('/api/pricing/options')
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  pricingCache = (await r.json()) as PricingOptions
+  return pricingCache
 }
 
 export async function apiHandles(): Promise<HandleInfo[]> {
@@ -195,11 +334,14 @@ export async function apiHandles(): Promise<HandleInfo[]> {
   return data.handles ?? []
 }
 
-export async function apiSolve(product: unknown): Promise<SolveResponse> {
+export async function apiSolve(
+  product: unknown,
+  opts: { market?: string; shop?: string; supplier?: string } = {},
+): Promise<SolveResponse> {
   const r = await fetch('/api/solve', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ product }),
+    body: JSON.stringify({ product, ...opts }),
   })
   if (!r.ok) {
     const text = await r.text().catch(() => '')

@@ -93,6 +93,18 @@ export interface Opening {
   w: number
   z0: number
   z1: number
+  /** толщина стены/откоса под этот проём, мм */
+  wallT?: number
+  /** ширина рамы/коробки, мм */
+  frameT?: number
+  /** глубина подоконника, мм */
+  sillDepth?: number
+  /** ширина наличника/откоса, мм */
+  casing?: number
+  /** материал конструкции: ПВХ, алюминий, дерево, МДФ */
+  material?: string
+  /** цена за изделие (валюта проекта) */
+  price?: number
 }
 
 export type Materials = Record<string, Material>
@@ -119,6 +131,8 @@ export interface MaterialVariable {
   name: string
   enabled: boolean
   scope: MaterialScope
+  /** пустая строка — все зоны; иначе только модули этой зоны (этаж/комната) */
+  zone?: string
   parts: MaterialPart[]
   material: Material
 }

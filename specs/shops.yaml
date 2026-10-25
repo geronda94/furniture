@@ -1,0 +1,34 @@
+# Цеха: формат листа, раскрой, кромка, сборка. Стартовые данные — заготовка.
+# Цех привязан к рынку; цены в валюте рынка.
+#
+# Новый цех = строка здесь. Числа сверять с раскройщиком/бригадой.
+
+default: shop-ro-bucuresti
+
+shops:
+  - id: shop-ro-bucuresti
+    name: Бухарест · базовый цех
+    market: ro
+    sheet: { w: 2750, h: 1830, trim: 15, kerf: 4 }
+    cutting: { per_sheet: 45, per_m2: 32 }
+    edge: { pvc_04: 7, pvc_2: 20, abs_2: 24, laser_1: 28, none: 0 }
+    assembly: { module: 70, door: 25, drawer: 32 }
+    note: "Стартовые расценки"
+
+  - id: shop-ro-cluj
+    name: Клуж · крупный формат
+    market: ro
+    sheet: { w: 2800, h: 2070, trim: 15, kerf: 4.4 }
+    cutting: { per_sheet: 55, per_m2: 36 }
+    edge: { pvc_04: 8, pvc_2: 22, abs_2: 26, laser_1: 30, none: 0 }
+    assembly: { module: 80, door: 28, drawer: 36 }
+    note: "Стартовые расценки; проверить формат листа"
+
+  - id: shop-eu-default
+    name: ЕС · базовый цех (EUR)
+    market: eu
+    sheet: { w: 2800, h: 2070, trim: 15, kerf: 4 }
+    cutting: { per_sheet: 10, per_m2: 7 }
+    edge: { pvc_04: 1.2, pvc_2: 4.5, abs_2: 5.5, laser_1: 6.5, none: 0 }
+    assembly: { module: 15, door: 6, drawer: 8 }
+    note: "Стартовые расценки"

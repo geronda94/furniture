@@ -1,0 +1,21 @@
+# Шаблон прайса нового рынка.
+# Скопировать в specs/pricing/<market>.yaml, заполнить цены в валюте рынка
+# и добавить рынок в specs/markets.yaml (file: <market>.yaml).
+market: xx
+currency: XXX
+locale: xx-XX
+symbol: ""
+vat_percent: 20
+updated: 2026-10-25
+source: "заполнить по данным цеха"
+
+waste_percent: 15
+materials: {}
+cutting: { per_sheet: 0, per_m2: 0 }
+edge: { pvc_04: 0, pvc_2: 0, abs_2: 0, laser_1: 0, none: 0 }
+hardware: { hinge: 0, runner_pair: 0, leg: 0, handle: 0, confirmat: 0,
+            minifix: 0, dowel: 0, shelf_pin: 0, gas_strut: 0 }
+handles: {}
+assembly: { module: 0, door: 0, drawer: 0 }
+markup_percent: 25
+partner_commission_percent: 8

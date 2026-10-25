@@ -326,7 +326,7 @@ function exportBom(): void {
       <div class="panel__head">
         <span>{{ wallKindTitle }}</span>
         <span class="dim">
-          {{ Math.round(wall.len) }} мм · T{{ room.wallT }}
+          {{ Math.round(wall.len) }} мм · T{{ Math.round(wall.wallT ?? room.wallT) }}
         </span>
       </div>
       <div class="panel__body">
@@ -546,6 +546,53 @@ function exportBom(): void {
             </button>
             <span v-else class="dim ctx__note">стекло, проём</span>
           </label>
+        </div>
+        <div class="ctx__sub">Конструкция и продажа</div>
+        <div class="field-row field-row--2">
+          <NumField
+            label="Толщина стены"
+            :value="opening.wallT ?? room.wallT"
+            :min="40" :max="400" :step="5"
+            @change="updateOpening(opening.id, { wallT: $event })"
+          />
+          <NumField
+            label="Рама / коробка"
+            :value="opening.frameT ?? 70"
+            :min="20" :max="300" :step="5"
+            @change="updateOpening(opening.id, { frameT: $event })"
+          />
+        </div>
+        <div class="field-row field-row--2">
+          <NumField
+            label="Подоконник, глубина"
+            :value="opening.sillDepth ?? 250"
+            :min="40" :max="800" :step="10"
+            @change="updateOpening(opening.id, { sillDepth: $event })"
+          />
+          <NumField
+            label="Наличник / откос"
+            :value="opening.casing ?? 70"
+            :min="0" :max="300" :step="5"
+            @change="updateOpening(opening.id, { casing: $event })"
+          />
+        </div>
+        <div class="field-row field-row--2">
+          <label class="field">
+            <span class="field__label">Материал</span>
+            <select class="select" :value="opening.material || 'ПВХ'"
+              @change="updateOpening(opening.id, { material: ($event.target as HTMLSelectElement).value })">
+              <option value="ПВХ">ПВХ</option>
+              <option value="Алюминий">Алюминий</option>
+              <option value="Дерево">Дерево</option>
+              <option value="МДФ">МДФ</option>
+            </select>
+          </label>
+          <NumField
+            label="Цена изделия"
+            :value="opening.price ?? 0"
+            :min="0" :max="1000000" :step="100"
+            @change="updateOpening(opening.id, { price: $event })"
+          />
         </div>
         <div v-if="opening.kind === 'door'" class="field-row field-row--2">
           <label class="field">

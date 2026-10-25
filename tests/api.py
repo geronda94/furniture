@@ -28,7 +28,9 @@ def project(name: str) -> dict:
     return {
         "schema": SCHEMA,
         "name": name,
-        "shop": "shop-default",
+        "shop": "shop-ro-bucuresti",
+        "market": "ro",
+        "supplier": "generic",
         "room": {"w": 3600, "d": 2800, "h": 2700, "openings": []},
         "instances": [],
         "folders": [],
@@ -64,6 +66,69 @@ def main() -> int:
                 r.status_code == 200 and len(hw.get("hinges", [])) >= 3
                 and len(hw.get("drawer_runners", [])) >= 3
                 and len(hw.get("handles", [])) >= 3)
+    ok &= check("hardware: крепёж, полкодержатели, патроны",
+                len(hw.get("fasteners", [])) >= 3
+                and len(hw.get("shelf_supports", [])) >= 3
+                and len(hw.get("gas_struts", [])) >= 1
+                and len(hw.get("legs", [])) >= 3
+                and len(hw.get("edge_types", [])) >= 3,
+                str(list(hw.keys())))
+
+    r = c.get("/api/pricing/options")
+    po = r.json()
+    ok &= check("pricing: рынки/цеха/поставщики",
+                r.status_code == 200 and len(po.get("markets", [])) >= 2
+                and len(po.get("shops", [])) >= 2
+                and len(po.get("suppliers", [])) >= 3,
+                str(po.get("default")))
+    ok &= check("pricing: активный прайс",
+                (po.get("active") or {}).get("currency") == "RON",
+                str((po.get("active") or {}).get("currency")))
+
+    r = c.post("/api/solve", json={
+        "market": "eu", "supplier": "blum",
+        "product": {"product": "base-cabinet", "params": {
+            "W": 800, "H": 720, "D": 560, "doors": 2,
+            "fastener": "minifix", "shelfSupport": "lock-pin",
+        }},
+    })
+    eu = r.json()
+    ok &= check("solve: рынок EU / поставщик Blum",
+                r.status_code == 200 and eu["cost"]["currency"] == "EUR"
+                and eu["cost"]["supplier"] == "blum",
+                f'{eu.get("cost", {}).get("currency")}/'
+                f'{eu.get("cost", {}).get("supplier")}')
+    ok &= check("solve: присадка из каталога",
+                any(o["kind"] == "fastener_face" and o["dia"] == 15
+                    for o in eu.get("operations", []))
+                and eu["hardware_plan"]["shelf_support_id"] == "lock-pin")
+    ok &= check("solve: разметка опор",
+                r.json().get("hardware_plan", {}).get("leg_holes", 0) > 0,
+                str(r.json().get("hardware_plan", {}).get("leg_holes")))
+    ok &= check("solve: соединения и саморезы",
+                bool(eu["hardware_plan"].get("joints"))
+                and "screws" in eu["hardware_plan"],
+                str(eu["hardware_plan"].get("joints", [])[:1]))
+
+    r = c.post("/api/solve", json={
+        "product": {"product": "base-cabinet", "params": {
+            "W": 800, "H": 720, "D": 560, "doors": 2,
+            "hiddenFasteners": True,
+            "edges": {"visible": "abs_2",
+                      "byPart": {"Полка": {"front": "none"}}},
+        }},
+    })
+    adv = r.json()
+    ok &= check("solve: скрытый крепёж",
+                all(j["fastener_id"] == "minifix"
+                    for j in adv["hardware_plan"]["joints"]))
+    shelf = next(b for b in adv["bom"] if b["name"] == "Полка")
+    ok &= check("solve: переопределение кромки",
+                "ПЕРЕД-" in shelf["edge"],
+                shelf["edge"])
+    roof = next(e for e in adv["edge_plan"] if e["part"] == "Крыша")
+    ok &= check("solve: тип кромки ABS",
+                all(v["type"] == "abs_2" for v in roof["sides"].values()))
 
     pid = f"test-api-{int(time.time() * 1000):x}"
     try:

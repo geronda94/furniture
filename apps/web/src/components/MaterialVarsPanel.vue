@@ -3,11 +3,16 @@ import { ref } from 'vue'
 import MaterialLibrary from './MaterialLibrary.vue'
 import {
   addMaterialVar,
+  addZone,
   createDefaultMaterialVars,
+  duplicateMaterialVar,
   moveMaterialVar,
   removeMaterialVar,
+  removeZone,
+  renameZone,
   state,
   updateMaterialVar,
+  zonesList,
 } from '../state/project'
 import {
   PART_LABELS,
@@ -82,6 +87,40 @@ function onScope(v: MaterialVariable, e: Event): void {
   updateMaterialVar(v.id, {
     scope: (e.target as HTMLSelectElement).value as MaterialScope,
   })
+}
+
+function onZone(v: MaterialVariable, e: Event): void {
+  updateMaterialVar(v.id, {
+    zone: (e.target as HTMLInputElement).value.trim() || undefined,
+  })
+}
+
+function zoneOptions(): string[] {
+  return zonesList()
+}
+
+function editZone(zone: string): void {
+  const next = window.prompt('Название зоны / этажа', zone)
+  if (next != null) renameZone(zone, next)
+}
+
+function deleteZone(zone: string): void {
+  if (window.confirm(`Удалить зону «${zone}»? Модули и переменные останутся без зоны.`)) {
+    removeZone(zone)
+  }
+}
+
+function newZone(e: Event): void {
+  const input = e.target as HTMLInputElement
+  const zone = addZone(input.value)
+  input.value = ''
+  if (!zone) return
+  const last = state.project.materialVars[state.project.materialVars.length - 1]
+  if (last) updateMaterialVar(last.id, { zone })
+}
+
+function metaZone(v: MaterialVariable): string {
+  return v.zone ? `зона «${v.zone}»` : 'все зоны'
 }
 
 function onColor(v: MaterialVariable, e: Event): void {
@@ -204,6 +243,24 @@ function onPick(payload: { material?: Material; texture?: string }): void {
       </div>
     </div>
 
+    <div class="mvar__zones">
+      <span class="dim">Зоны / этажи:</span>
+      <span
+        v-for="z in zoneOptions()" :key="z"
+        class="chip chip--sm mvar__zone-chip"
+        :title="'Двойной клик — переименовать. Переменные с этой зоной действуют только на модули зоны «' + z + '»'"
+        @dblclick="editZone(z)"
+      >{{ z }}
+        <button class="mvar__zone-x" title="Удалить зону" @click.stop="deleteZone(z)">×</button>
+      </span>
+      <span v-if="!zoneOptions().length" class="dim">пока нет</span>
+      <input
+        class="input mvar__zone-new"
+        placeholder="＋ зона (Enter)"
+        @keyup.enter="newZone"
+      />
+    </div>
+
     <div v-if="!state.project.materialVars.length" class="mvar__empty">
       <p>
         Пока переменных нет — используются материалы проекта по ролям.
@@ -237,7 +294,7 @@ function onPick(payload: { material?: Material; texture?: string }): void {
             @change="updateMaterialVar(v.id, { name: ($event.target as HTMLInputElement).value })"
           />
           <span class="mvar__meta">
-            {{ scopeLabel(v) }} · {{ partsSummary(v) }}
+            {{ scopeLabel(v) }} · {{ metaZone(v) }} · {{ partsSummary(v) }}
             <template v-if="!v.enabled"> · выключена</template>
           </span>
         </div>
@@ -249,6 +306,7 @@ function onPick(payload: { material?: Material; texture?: string }): void {
         >{{ v.enabled ? 'вкл' : 'выкл' }}</button>
         <button class="btn btn--sm mvar__move" :disabled="i === 0" title="Выше" @click="moveMaterialVar(v.id, -1)">↑</button>
         <button class="btn btn--sm mvar__move" :disabled="i === state.project.materialVars.length - 1" title="Ниже" @click="moveMaterialVar(v.id, 1)">↓</button>
+        <button class="btn btn--sm" title="Дублировать (например, для другого этажа)" @click="duplicateMaterialVar(v.id)">⧉</button>
         <button class="btn btn--sm mvar__danger" title="Удалить" @click="removeMaterialVar(v.id)">×</button>
       </header>
 
@@ -260,6 +318,17 @@ function onPick(payload: { material?: Material; texture?: string }): void {
         <select class="select mvar__scope" :value="v.scope" @change="onScope(v, $event)">
           <option v-for="s in scopes" :key="s.id" :value="s.id">{{ s.label }}</option>
         </select>
+        <input
+          class="input mvar__zone"
+          :value="v.zone || ''"
+          list="mvar-zones"
+          placeholder="Зона: все"
+          title="Пусто — все зоны. Иначе переменная действует только на модули этой зоны (этаж/комната)"
+          @change="onZone(v, $event)"
+        />
+        <datalist id="mvar-zones">
+          <option v-for="z in zoneOptions()" :key="z" :value="z"></option>
+        </datalist>
         <select class="select mvar__pattern" :value="v.material.pattern" @change="onPattern(v, $event)">
           <option value="solid">Цвет</option>
           <option value="wood">Дерево</option>

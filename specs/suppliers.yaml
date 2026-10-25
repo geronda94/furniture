@@ -1,0 +1,40 @@
+# Поставщики фурнитуры: переопределение цен рынка и скидки/наценки.
+# Цены — в валюте рынка. factor применяется к цене ручек из каталога,
+# если для конкретной ручки нет цены в blocks handles.
+
+default: generic
+
+suppliers:
+  - id: generic
+    name: Универсальная фурнитура
+    brands: [generic]
+    hardware: {}
+    note: "Цены из прайса рынка"
+
+  - id: blum
+    name: Blum
+    brands: [blum]
+    hardware: { hinge: 22, runner_pair: 180, gas_strut: 55 }
+    handle_factor: 1.35
+    note: "Ориентир по Blum; сверить с дилером"
+
+  - id: hettich
+    name: Hettich
+    brands: [hettich]
+    hardware: { hinge: 18, runner_pair: 150, gas_strut: 48 }
+    handle_factor: 1.2
+    note: "Ориентир по Hettich"
+
+  - id: gtv
+    name: GTV
+    brands: [gtv]
+    hardware: { hinge: 10, runner_pair: 85, gas_strut: 30 }
+    handle_factor: 0.9
+    note: "Ориентир по GTV"
+
+  - id: boyard
+    name: Boyard
+    brands: [boyard]
+    hardware: { hinge: 8, runner_pair: 70, gas_strut: 26 }
+    handle_factor: 0.8
+    note: "Ориентир по Boyard"
