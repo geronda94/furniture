@@ -1133,6 +1133,12 @@ export class BabylonRenderer {
     }
     this.setMode('orbit')
     this.objectId = instanceId
+    // В режиме детали комната и соседние модули только мешают: камера
+    // подходит вплотную, и обратные стороны стен дают чёрные плоскости.
+    this.roomRoot.setEnabled(false)
+    for (const [id, root] of this.roots) {
+      root.setEnabled(id === instanceId)
+    }
     let min = new Vector3(Infinity, Infinity, Infinity)
     let max = new Vector3(-Infinity, -Infinity, -Infinity)
     for (const m of meshes) {
@@ -1170,6 +1176,8 @@ export class BabylonRenderer {
 
   exitObjectMode(): void {
     if (!this.savedCamera) return
+    this.roomRoot.setEnabled(true)
+    for (const root of this.roots.values()) root.setEnabled(true)
     const c = this.savedCamera
     this.orbit.alpha = c.alpha
     this.orbit.beta = c.beta
