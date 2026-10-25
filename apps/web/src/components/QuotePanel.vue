@@ -6,8 +6,14 @@ import type { SolveResponse } from '../api'
 
 const emit = defineEmits<{ (e: 'close'): void }>()
 
-const money = (v: number) =>
-  new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(v) + ' ₽'
+const costRef = computed(() => solved.value[0]?.cost ?? null)
+const money = (v: number) => {
+  const c = costRef.value
+  return (
+    new Intl.NumberFormat(c?.locale || 'ru-RU', { maximumFractionDigits: 0 })
+      .format(v) + ' ' + (c?.symbol || c?.currency || '')
+  )
+}
 
 interface Row {
   id: string
@@ -66,6 +72,18 @@ const partner = computed(() =>
 const total = computed(() =>
   solved.value.reduce((sum, d) => sum + (d.cost?.total ?? 0), 0),
 )
+const vat = computed(() =>
+  solved.value.reduce((sum, d) => sum + (d.cost?.vat ?? 0), 0),
+)
+const totalWithVat = computed(() =>
+  solved.value.reduce((sum, d) => sum + (d.cost?.total_with_vat ?? d.cost?.total ?? 0), 0),
+)
+const vatPercent = computed(() => costRef.value?.vat_percent ?? 0)
+const pricingNote = computed(() => {
+  const c = costRef.value
+  if (!c) return ''
+  return [c.market_name, c.shop_name, c.supplier_name].filter(Boolean).join(' · ')
+})
 const errors = computed(() =>
   state.project.instances.flatMap((inst) =>
     (derived[inst.id]?.validation.errors ?? []).map((e) => `${inst.name}: ${e}`),
@@ -160,8 +178,13 @@ function print(): void {
               <li><span>Наценка</span><b>{{ money(markup) }}</b></li>
               <li><span>Партнёрская комиссия</span><b>{{ money(partner) }}</b></li>
             </template>
-            <li class="quote__grand"><span>К оплате</span><b>{{ money(total) }}</b></li>
+            <li v-if="vat"><span>НДС {{ vatPercent }}%</span><b>{{ money(vat) }}</b></li>
+            <li class="quote__grand"><span>К оплате</span><b>{{ money(totalWithVat) }}</b></li>
           </ul>
+          <p v-if="pricingNote" class="dim quote__pricing">
+            {{ pricingNote }} · {{ costRef?.currency }}
+            <span v-if="costRef?.draft"> · цены-заготовка</span>
+          </p>
 
           <ul v-if="errors.length" class="issues">
             <li v-for="e in errors" :key="e" class="is-err">{{ e }}</li>

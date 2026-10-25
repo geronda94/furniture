@@ -260,6 +260,12 @@ export interface PartRelations {
   toBottom: number
   toFront: number
   toBack: number
+  /** торцы боковины/перегородки, ограничивающих отсек, мм от пола модуля */
+  sideBottom?: number
+  sideTop?: number
+  /** от верхней грани детали до верхнего торца боковины / от нижней до нижнего */
+  toSideTop?: number
+  toSideBottom?: number
 }
 
 function relationTitle(info: ModuleInfo, e: ElementInfo): string {
@@ -313,7 +319,7 @@ export function relationsFor(
       if (above >= -0.5 && above < bestAbove) {
         bestAbove = above
         out.above = {
-          label: `до «${relationTitle(info, c)}»`,
+          label: `до низа «${relationTitle(info, c)}»`,
           distance: Math.round(above),
           from: e.z + e.h,
           to: c.z,
@@ -323,7 +329,7 @@ export function relationsFor(
       if (below >= -0.5 && below < bestBelow) {
         bestBelow = below
         out.below = {
-          label: `до «${relationTitle(info, c)}»`,
+          label: `до верха «${relationTitle(info, c)}»`,
           distance: Math.round(below),
           from: c.z + c.h,
           to: e.z,
@@ -353,6 +359,32 @@ export function relationsFor(
       }
     }
   }
+  // Торцы боковины/перегородки, между которыми стоит деталь: нужны мастеру
+  // для разметки на боковой стенке (верх/низ), а не только просветы.
+  const walls = info.elements.filter(
+    (x) => x.name.startsWith('Боковина') || x.name === 'Перегородка',
+  )
+  let leftWall: typeof walls[number] | null = null
+  let rightWall: typeof walls[number] | null = null
+  for (const wall of walls) {
+    const wallRight = wall.x + wall.w
+    if (wallRight <= e.x + 1) {
+      if (!leftWall || wallRight > leftWall.x + leftWall.w) leftWall = wall
+    }
+    if (wall.x >= e.x + e.w - 1) {
+      if (!rightWall || wall.x < rightWall.x) rightWall = wall
+    }
+  }
+  const limit = [leftWall, rightWall].filter(Boolean) as typeof walls
+  if (limit.length && e.kind !== 'door' && e.kind !== 'drawerfront') {
+    const bottoms = limit.map((x) => x.z)
+    const tops = limit.map((x) => x.z + x.h)
+    out.sideBottom = Math.round(Math.min(...bottoms))
+    out.sideTop = Math.round(Math.max(...tops))
+    out.toSideTop = Math.round(out.sideTop - (e.z + e.h))
+    out.toSideBottom = Math.round(e.z - out.sideBottom)
+  }
+
   return out
 }
 

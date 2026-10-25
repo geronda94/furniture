@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useModalDrag } from '../composables/useModalDrag'
+import ObjectIcon from './ObjectIcon.vue'
 import {
   addInstance,
   addOpening,
@@ -19,7 +20,7 @@ const emit = defineEmits<{ (e: 'close'): void }>()
 const winEl = ref<HTMLElement | null>(null)
 const { style: dragStyle, onDown: onDragStart } = useModalDrag(winEl)
 
-type Tab = 'furniture' | 'opening'
+type Tab = 'furniture' | 'tech' | 'opening'
 const tab = ref<Tab>('furniture')
 const query = ref('')
 const group = ref('Все')
@@ -52,13 +53,21 @@ function backToCatalog(): void {
 
 const groups = computed(() => [
   'Все',
-  ...Array.from(new Set(MODULE_PRESETS.map((p) => p.group))),
+  ...Array.from(new Set(
+    MODULE_PRESETS.map((p) => p.group).filter((g) => g !== 'Техника'),
+  )),
 ])
 
 const items = computed(() => {
   const q = query.value.trim().toLowerCase()
   return MODULE_PRESETS.filter((p) => {
-    if (group.value !== 'Все' && p.group !== group.value) return false
+    if (tab.value === 'tech') {
+      if (p.group !== 'Техника') return false
+    } else if (p.group === 'Техника') {
+      return false
+    }
+    if (tab.value === 'furniture' && group.value !== 'Все' &&
+        p.group !== group.value) return false
     if (!q) return true
     return `${p.label} ${p.hint} ${p.group}`.toLowerCase().includes(q)
   })
@@ -88,6 +97,12 @@ watch(
     }
   },
 )
+watch(tab, () => {
+  if (tab.value === 'opening') return
+  const first = items.value[0]
+  if (first) selectedKey.value = first.key
+})
+
 watch(group, () => {
   if (!items.value.some((p) => p.key === selectedKey.value)) {
     const first = items.value[0]
@@ -143,7 +158,7 @@ function applyOpeningPreset(p: (typeof OPENING_PRESETS)[number]): void {
 pickOpening('window')
 
 const canAdd = computed(() => {
-  if (tab.value === 'furniture') {
+  if (tab.value === 'furniture' || tab.value === 'tech') {
     return !!selected.value && (!mobile.value || mobileSettings.value)
   }
   return opening.w >= 200 && opening.z1 > opening.z0
@@ -156,7 +171,7 @@ function num(e: Event): number {
 
 function add(): void {
   if (!canAdd.value) return
-  if (tab.value === 'furniture') {
+  if (tab.value === 'furniture' || tab.value === 'tech') {
     addInstance(selectedKey.value, undefined, undefined, { ...params })
   } else {
     addOpening(openingKind.value, {
@@ -188,7 +203,7 @@ onBeforeUnmount(() => {
   <div class="modal modal--add" @click.self="emit('close')">
     <section class="modal__win add" ref="winEl" :style="dragStyle" role="dialog" aria-modal="true" aria-label="Добавить объект">
       <header class="modal__head" @pointerdown="onDragStart">
-        <span class="modal__title">Добавить объект</span>
+        <span class="modal__title">Библиотека объектов</span>
         <span class="modal__sub">{{ state.project.name }}</span>
         <div class="modal__tools">
           <button class="btn btn--ghost btn--sm" title="Закрыть" @click="emit('close')">
@@ -200,7 +215,7 @@ onBeforeUnmount(() => {
       <div class="add__body" ref="bodyEl">
         <div
           class="add__catalog"
-          :class="{ 'add__step-hidden': tab === 'furniture' && mobileSettings }"
+          :class="{ 'add__step-hidden': (tab === 'furniture' || tab === 'tech') && mobileSettings }"
         >
           <div class="add__tabs">
             <button
@@ -212,6 +227,13 @@ onBeforeUnmount(() => {
             </button>
             <button
               class="add__tab"
+              :class="{ 'add__tab--on': tab === 'tech' }"
+              @click="tab = 'tech'"
+            >
+              Техника
+            </button>
+            <button
+              class="add__tab"
               :class="{ 'add__tab--on': tab === 'opening' }"
               @click="tab = 'opening'"
             >
@@ -219,14 +241,18 @@ onBeforeUnmount(() => {
             </button>
           </div>
 
-          <template v-if="tab === 'furniture'">
+          <template v-if="tab === 'furniture' || tab === 'tech'">
+            <div v-if="tab === 'tech'" class="add__hint">
+              Ниши/тумбы под встроенную технику. Технику ставим отдельным
+              объектом; глубину и высоту можно уточнить в параметрах.
+            </div>
             <input
               v-model="query"
               class="input add__search"
               type="search"
               placeholder="Поиск: тумба, ящики, мойка…"
             />
-            <div class="add__groups">
+            <div v-if="tab === 'furniture'" class="add__groups">
               <button
                 v-for="g in groups"
                 :key="g"
@@ -246,7 +272,10 @@ onBeforeUnmount(() => {
                 @click="selectCard(p.key)"
                 @dblclick="selectedKey = p.key; add()"
               >
-                <span class="cat-card__mark">{{ p.group.slice(0, 1) }}</span>
+                <ObjectIcon
+                  class="cat-card__icon"
+                  :kind="p.key.replace('tech-', '')"
+                />
                 <span class="cat-card__name">{{ p.label }}</span>
                 <span class="cat-card__hint">{{ p.hint }}</span>
                 <span class="cat-card__group">{{ p.group }}</span>
@@ -264,7 +293,7 @@ onBeforeUnmount(() => {
                 :class="{ 'cat-card--on': openingKind === 'window' }"
                 @click="pickOpening('window')"
               >
-                <span class="cat-card__mark">О</span>
+                <ObjectIcon class="cat-card__icon" kind="window" />
                 <span class="cat-card__name">Окно</span>
                 <span class="cat-card__hint">закреплено за стеной</span>
                 <span class="cat-card__group">Проёмы</span>
@@ -274,7 +303,7 @@ onBeforeUnmount(() => {
                 :class="{ 'cat-card--on': openingKind === 'door' }"
                 @click="pickOpening('door')"
               >
-                <span class="cat-card__mark">Д</span>
+                <ObjectIcon class="cat-card__icon" kind="door" />
                 <span class="cat-card__name">Дверь</span>
                 <span class="cat-card__hint">открывается в комнату</span>
                 <span class="cat-card__group">Проёмы</span>
@@ -284,7 +313,7 @@ onBeforeUnmount(() => {
                 :class="{ 'cat-card--on': openingKind === 'arch' }"
                 @click="pickOpening('arch')"
               >
-                <span class="cat-card__mark">П</span>
+                <ObjectIcon class="cat-card__icon" kind="arch" />
                 <span class="cat-card__name">Проём</span>
                 <span class="cat-card__hint">без створки</span>
                 <span class="cat-card__group">Проёмы</span>
@@ -303,13 +332,13 @@ onBeforeUnmount(() => {
 
         <aside
           class="add__settings"
-          :class="{ 'add__step-hidden': tab === 'furniture' && !mobileSettings }"
+          :class="{ 'add__step-hidden': (tab === 'furniture' || tab === 'tech') && !mobileSettings }"
         >
           <button
             class="btn btn--ghost btn--sm add__back"
             @click="backToCatalog"
           >← К каталогу</button>
-          <div v-if="tab === 'furniture' && selected" class="add__settings-head">
+          <div v-if="(tab === 'furniture' || tab === 'tech') && selected" class="add__settings-head">
             <b>{{ selected.label }}</b>
             <span class="dim">{{ selected.group }}</span>
           </div>
@@ -318,7 +347,7 @@ onBeforeUnmount(() => {
             <span class="dim">проём в стене</span>
           </div>
 
-          <template v-if="tab === 'furniture'">
+          <template v-if="tab === 'furniture' || tab === 'tech'">
             <label class="field">
               <span class="field__label">Ширина, мм</span>
               <input
@@ -462,7 +491,7 @@ onBeforeUnmount(() => {
       <footer class="add__foot">
         <span class="dim">
           {{
-            tab === 'furniture'
+            (tab === 'furniture' || tab === 'tech')
               ? (mobileSettings
                 ? 'Проверьте размеры и добавьте модуль'
                 : 'Выберите модуль из каталога')
@@ -478,7 +507,7 @@ onBeforeUnmount(() => {
           @click="showStep(true)"
         >Настроить</button>
         <button v-else class="btn btn--primary" :disabled="!canAdd" @click="add">
-          {{ tab === 'furniture' ? 'Добавить модуль' : 'Добавить проём' }}
+          {{ (tab === 'furniture' || tab === 'tech') ? 'Добавить модуль' : 'Добавить проём' }}
         </button>
       </footer>
     </section>

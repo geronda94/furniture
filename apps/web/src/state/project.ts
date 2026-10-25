@@ -40,11 +40,29 @@ import type {
   WallItemKind,
 } from '../render25d/types'
 import { outlinePoints, pointInPoly, roomBounds, roomWallLength, roomWalls } from '../render25d/room'
+import {
+  partGroupKey,
+  partUid,
+  resolveMaterial,
+  resolveObjectMaterial,
+} from '../material/vars'
 
 export type Frame = 'inset' | 'overlay'
 export type Hardware = 'blum' | 'hettich' | 'gtv'
 export type BackKind = 'dvp' | 'same' | 'cardboard' | 'none'
 export type Reinforce = 'auto' | 'on' | 'off'
+
+/** Политика кромки: типы по видимости + переопределения по деталям. */
+export interface EdgePolicy {
+  /** тип/толщина для видимых кромок (pvc_2, abs_2, …) */
+  visible?: string
+  /** тип/толщина для скрытых кромок (pvc_04, …) */
+  hidden?: string
+  /** имя детали (можно с * на конце) → сторона → auto|none|тип */
+  byPart?: Record<string, Record<string, string>>
+  /** показывать ли кромку в BOM/превью (данные не удаляются) */
+  show?: boolean
+}
 
 /** Блок компоновки фасадов сверху вниз. height=0 — высота по остатку. */
 export interface FrontBlock {
@@ -95,6 +113,26 @@ export interface Params {
   dividers: number
   /** id ручки из specs/hardware.yaml */
   handle: string
+  /** материал фасадов: ЛДСП или МДФ */
+  facadeMaterial?: 'ldsp' | 'mdf'
+  /** тип фасада: гладкий, фрезерованный, с ручкой, push, профиль */
+  facadeStyle?: 'flat' | 'milled' | 'handle' | 'push' | 'profile' 
+  /** id крепежа корпуса: confirmat | minifix | dowel */
+  fastener?: string
+  /** id опоры полок: system32 | lock-pin | minifix-shelf | dowel-shelf */
+  shelfSupport?: string
+  /** id газового патрона (пусто — без патрона) */
+  gasStrut?: string
+  /** id крепления опор/колёс из specs/hardware.yaml.legs */
+  legMount?: string
+  /** скрытый крепёж корпуса: авто выбирает минификс вместо евровинта */
+  hiddenFasteners?: boolean
+  /** переопределения крепежа по классу соединения */
+  connectionOverrides?: Record<string, string>
+  /** политика кромки: типы и переопределения по деталям */
+  edges?: EdgePolicy
+  /** сверлить ряды System 32 на боковинах */
+  system32?: boolean
 }
 
 /** Глобальные переменные проекта: значения по умолчанию для всех модулей. */
@@ -162,6 +200,16 @@ export interface Instance {
   overrides?: ManagedParam[]
   /** материалы только для этого модуля (перекрывают материалы проекта) */
   materials?: Materials
+  /** зона/этаж: к модулю применяются переменные с той же зоной */
+  zone?: string
+  /** материал конкретной детали (ключ — индекс; legacy) */
+  partMaterials?: Record<string, Material>
+  /** материал всех одинаковых деталей (группа: имя+секция+ящик) */
+  partMaterialGroups?: Record<string, Material>
+  /** материал конкретной детали (ключ — устойчивый uid: группа+позиция) */
+  partOverrides?: Record<string, Material>
+  /** выполненные шаги сборки (индексы) */
+  assemblyDone?: number[]
   /** анимация субобъектов: ключ (door:N | drawer:N) → набор каналов */
   anim?: Record<string, ChannelSet>
   /** @deprecated миграция старых проектов */
@@ -284,6 +332,46 @@ export const MODULE_PRESETS: ModulePreset[] = [
     hint: 'ящик + 2 двери',
     group: 'Комбинированные',
     params: { W: 900, H: 720, D: 560, doors: 2, drawers: 1, shelves: 2 },
+  },
+  {
+    key: 'tech-fridge',
+    label: 'Ниша под холодильник',
+    hint: 'открытый корпус 700×1900, без фасада',
+    group: 'Техника',
+    params: { W: 700, H: 1900, D: 650, doors: 0, drawers: 0, shelves: 0,
+      plinthH: 0, worktopT: 0, back: 'none', roof: true },
+  },
+  {
+    key: 'tech-oven',
+    label: 'Ниша под духовку',
+    hint: 'открытая ниша 600×600',
+    group: 'Техника',
+    params: { W: 600, H: 600, D: 560, doors: 0, drawers: 0, shelves: 1,
+      plinthH: 0, worktopT: 0, back: 'none', roof: true },
+  },
+  {
+    key: 'tech-microwave',
+    label: 'Ниша под СВЧ',
+    hint: 'открытая ниша 600×450',
+    group: 'Техника',
+    params: { W: 600, H: 450, D: 560, doors: 0, drawers: 0, shelves: 1,
+      plinthH: 0, worktopT: 0, back: 'none', roof: true },
+  },
+  {
+    key: 'tech-cooktop',
+    label: 'Тумба под варочную панель',
+    hint: '3 ящика + вырез в столешнице',
+    group: 'Техника',
+    params: { W: 600, H: 720, D: 560, doors: 0, drawers: 3, shelves: 0,
+      cutouts: [{ x: 60, y: 90, w: 480, h: 360 }] },
+  },
+  {
+    key: 'tech-sink',
+    label: 'Тумба под мойку',
+    hint: '2 двери + вырез под мойку',
+    group: 'Техника',
+    params: { W: 800, H: 720, D: 560, doors: 2, drawers: 0, shelves: 1,
+      cutouts: [{ x: 150, y: 100, w: 500, h: 400 }] },
   },
   {
     key: 'base400',
@@ -430,16 +518,42 @@ export interface LogEntry {
   label: string
 }
 
+export interface Finish {
+  id: string
+  name: string
+  kind: 'floor' | 'ceiling' | 'wall'
+  x: number
+  y: number
+  w: number
+  d: number
+  material: string
+  color: string
+  tileW: number
+  tileH: number
+  grout: number
+  waste: number
+  price_m2: number
+}
+
 export interface Project {
   schema: string
   name: string
+  /** id цеха из specs/shops.yaml (или профиль specs/<id>.yaml) */
   shop: string
+  /** рынок/валюта из specs/markets.yaml */
+  market: string
+  /** поставщик фурнитуры из specs/suppliers.yaml */
+  supplier: string
   room: RoomDims
   instances: Instance[]
   folders: Folder[]
   globals: ProjectGlobals
   materials: Materials
   materialVars: MaterialVariable[]
+  /** отделка: плитка, ламинат, паркет и т.д. с расчётом площади/плитки */
+  finishes?: Finish[]
+  /** явный список зон/этажей (пустые зоны тоже можно завести) */
+  zones?: string[]
   views: SavedView[]
   log?: LogEntry[]
 }
@@ -575,7 +689,9 @@ export function defaultProject(): Project {
   return {
     schema: PROJECT_SCHEMA,
     name: 'Кухня — демо',
-    shop: 'shop-default',
+    shop: 'shop-ro-bucuresti',
+    market: 'ro',
+    supplier: 'generic',
     room: {
       w: 3600,
       d: 2800,
@@ -622,6 +738,8 @@ export function defaultProject(): Project {
     globals: defaultGlobals(),
     materials: JSON.parse(JSON.stringify(DEFAULT_MATERIALS)),
     materialVars: [],
+    finishes: [],
+    zones: [],
     views: [],
     log: [],
   }
@@ -670,6 +788,25 @@ function sanitizeParams(p: Params): Params {
     shelves: clamp(Math.round(p.shelves), 0, 8),
     dividers: clamp(Math.round(Number(p.dividers) || 0), 0, 4),
     handle: String(p.handle || 'bar-128'),
+    fastener: String(p.fastener || 'auto'),
+    facadeMaterial: p.facadeMaterial === 'mdf' ? 'mdf' : 'ldsp',
+    facadeStyle: (['flat', 'milled', 'handle', 'push', 'profile'] as const)
+      .includes(p.facadeStyle as never) ? p.facadeStyle : 'handle',
+    connectionOverrides: (p.connectionOverrides && typeof p.connectionOverrides === 'object')
+      ? Object.fromEntries(
+          Object.entries(p.connectionOverrides)
+            .filter(([k]) => ['carcass', 'divider', 'drawer'].includes(k))
+            .map(([k, v]) => [k, String(v)]),
+        )
+      : undefined,
+    hiddenFasteners: p.hiddenFasteners === true,
+    edges: (p.edges && typeof p.edges === 'object')
+      ? JSON.parse(JSON.stringify(p.edges)) as EdgePolicy
+      : undefined,
+    shelfSupport: String(p.shelfSupport || 'system32'),
+    gasStrut: String(p.gasStrut || ''),
+    legMount: String(p.legMount || 'leg-plate-60'),
+    system32: p.system32 !== false,
     frame: p.frame === 'overlay' ? 'overlay' : 'inset',
     hardware: (['blum', 'hettich', 'gtv'] as const).includes(p.hardware)
       ? p.hardware
@@ -707,7 +844,7 @@ function normalizeMaterialVars(raw: unknown): MaterialVariable[] {
   return raw
     .filter((v) => v && typeof v === 'object')
     .slice(0, 60)
-    .map((v, i) => {
+    .map((v, i): MaterialVariable | null => {
       const r = v as Partial<MaterialVariable>
       const material = sanitizeMaterial(r.material)
       if (!material) return null
@@ -721,6 +858,7 @@ function normalizeMaterialVars(raw: unknown): MaterialVariable[] {
         name: String(r.name || `Переменная ${i + 1}`),
         enabled: r.enabled !== false,
         scope,
+        zone: String(r.zone || '').trim() || undefined,
         parts: selected.length ? selected : ['carcass' as MaterialPart],
         material,
       }
@@ -761,6 +899,12 @@ function normalizeOpenings(
           open: !!o.open,
           hinge: o.hinge === 'right' ? 'right' : 'left',
           angle: clamp(Number(o.angle) || 80, 0, 120),
+          wallT: clamp(Math.round(Number(o.wallT) || room.wallT), 40, 400),
+          frameT: clamp(Math.round(Number(o.frameT) || 70), 20, 300),
+          sillDepth: clamp(Math.round(Number(o.sillDepth) || 250), 40, 800),
+          casing: clamp(Math.round(Number(o.casing) || 70), 0, 300),
+          material: String(o.material || 'ПВХ'),
+          price: Math.max(0, Number(o.price) || 0),
         },
         room,
       ),
@@ -865,6 +1009,42 @@ function normalizeProject(raw: unknown): Project {
         return diff.length ? diff : undefined
       })(),
       materials: normalizeMaterialOverrides(i.materials),
+      zone: String(i.zone || '').trim() || undefined,
+      partMaterials: (() => {
+        const raw = i.partMaterials
+        if (!raw || typeof raw !== 'object') return undefined
+        const out: Record<string, Material> = {}
+        for (const [k, v] of Object.entries(raw)) {
+          const mat = sanitizeMaterial(v)
+          if (mat) out[k] = mat
+        }
+        return Object.keys(out).length ? out : undefined
+      })(),
+      partMaterialGroups: (() => {
+        const raw = i.partMaterialGroups
+        if (!raw || typeof raw !== 'object') return undefined
+        const out: Record<string, Material> = {}
+        for (const [k, v] of Object.entries(raw)) {
+          const mat = sanitizeMaterial(v)
+          if (mat) out[k] = mat
+        }
+        return Object.keys(out).length ? out : undefined
+      })(),
+      partOverrides: (() => {
+        const raw = i.partOverrides
+        if (!raw || typeof raw !== 'object') return undefined
+        const out: Record<string, Material> = {}
+        for (const [k, v] of Object.entries(raw)) {
+          const mat = sanitizeMaterial(v)
+          if (mat) out[k] = mat
+        }
+        return Object.keys(out).length ? out : undefined
+      })(),
+      assemblyDone: Array.isArray(i.assemblyDone)
+        ? [...new Set(i.assemblyDone
+            .map((n) => Number(n))
+            .filter((n) => Number.isInteger(n) && n >= 0))].slice(0, 200)
+        : undefined,
       anim: (i.anim as Record<string, ChannelSet> | undefined) ?? {},
       ...((i as Instance & { doorsOpen?: boolean }).doorsOpen
         ? { legacyDoorsOpen: true }
@@ -887,7 +1067,9 @@ function normalizeProject(raw: unknown): Project {
   return {
     schema: PROJECT_SCHEMA,
     name: d.name || 'Мой проект',
-    shop: d.shop || 'shop-default',
+    shop: d.shop && d.shop !== 'shop-default' ? d.shop : base.shop,
+    market: d.market || base.market,
+    supplier: d.supplier || base.supplier,
     room: (() => {
       const rawOutline = Array.isArray(d.room?.outline)
         ? (d.room!.outline as [number, number][])
@@ -964,6 +1146,39 @@ function normalizeProject(raw: unknown): Project {
     globals,
     materials: normalizeMaterials(d.materials),
     materialVars: normalizeMaterialVars(d.materialVars),
+    finishes: Array.isArray(d.finishes)
+      ? d.finishes
+          .filter((f) => f && f.id)
+          .slice(0, 80)
+          .map((f) => ({
+            id: String(f.id),
+            name: String(f.name || 'Отделка'),
+            kind: f.kind === 'wall' || f.kind === 'ceiling' ? f.kind : 'floor',
+            x: Math.max(0, Number(f.x) || 0),
+            y: Math.max(0, Number(f.y) || 0),
+            w: Math.max(100, Number(f.w) || 1000),
+            d: Math.max(100, Number(f.d) || 1000),
+            material: String(f.material || 'Плитка'),
+            color: String(f.color || '#a9b4bd'),
+            tileW: Math.max(10, Number(f.tileW) || 300),
+            tileH: Math.max(10, Number(f.tileH) || 300),
+            grout: Math.max(0, Number(f.grout) || 2),
+            waste: Math.max(0, Number(f.waste) || 10),
+            price_m2: Math.max(0, Number(f.price_m2) || 0),
+          }))
+      : [],
+    zones: (() => {
+      const names = new Set<string>()
+      for (const z of d.zones ?? []) {
+        const s = String(z || '').trim()
+        if (s) names.add(s)
+      }
+      for (const i of d.instances ?? []) {
+        const z = String((i as Instance).zone || '').trim()
+        if (z) names.add(z)
+      }
+      return [...names]
+    })(),
     log: Array.isArray(d.log)
       ? d.log
           .filter((x) => x && typeof x.label === 'string')
@@ -1061,6 +1276,8 @@ export const ui = reactive({
   addOpen: false,
   /** показывать фасады в 3D (можно скрыть для просмотра деталей) */
   facades: true,
+  /** показывать ручки/петли/фурнитуру поверх схемы */
+  hardware: true,
   /** перемещение модулей мышью по 3D-канвасу (по умолчанию выключено) */
   dragMove: false,
   /** размеры поверх 3D-канваса */
@@ -1088,11 +1305,14 @@ export const ui = reactive({
   /** модалка настроек проекта */
   settingsOpen: false,
   /** вкладка настроек проекта */
-  settingsTab: 'globals' as 'globals' | 'materials' | 'vars',
+  settingsTab: 'globals' as 'globals' | 'materials' | 'vars' | 'pricing',
   /** модалка КП */
   quoteOpen: false,
   /** модалка версий проекта */
   versionsOpen: false,
+  /** модалка отделки (плитка/ламинат/паркет) */
+  finishOpen: false,
+  finishId: null as string | null,
 })
 
 /** Последняя позиция курсора (clientX/clientY) — для привязки плавающих окон. */
@@ -1980,10 +2200,17 @@ async function solveOne(inst: Instance): Promise<void> {
   busy++
   state.busy = true
   try {
-    const res = await apiSolve({
-      product: inst.product,
-      params: { ...inst.params },
-    })
+    const res = await apiSolve(
+      {
+        product: inst.product,
+        params: { ...inst.params },
+      },
+      {
+        market: state.project.market,
+        shop: state.project.shop,
+        supplier: state.project.supplier,
+      },
+    )
     derived[inst.id] = res
     ensureAnim(inst)
     state.error = ''
@@ -2177,6 +2404,17 @@ export function setGlobals(patch: Partial<ProjectGlobals>): void {
     void solveAll()
   }
   touch()
+  scheduleSave()
+}
+
+/** Рынок / цех / поставщик проекта: пересчитать все сметы. */
+export function setProjectPricing(
+  patch: Partial<Pick<Project, 'market' | 'shop' | 'supplier'>>,
+): void {
+  pushHistory('Цены проекта')
+  Object.assign(state.project, patch)
+  touch()
+  void solveAll()
   scheduleSave()
 }
 
@@ -2779,6 +3017,295 @@ export function setMaterial(
   scheduleSave()
 }
 
+/** Материал конкретной детали (перекрывает переменные и материал модуля). */
+export function setPartMaterial(
+  instanceId: string,
+  partIndex: number,
+  patch: Partial<Material>,
+): void {
+  const inst = state.project.instances.find((i) => i.id === instanceId)
+  const obj = derived[instanceId]?.objects[partIndex]
+  if (!inst || !obj) return
+  pushHistory('Материал детали')
+  const cur = resolveMaterial(
+    state.project.materials,
+    state.project.materialVars,
+    inst,
+    obj,
+    partIndex,
+  ).material
+  inst.partOverrides = {
+    ...(inst.partOverrides ?? {}),
+    [partUid(obj)]: { ...cur, ...patch },
+  }
+  touch()
+  scheduleSave()
+}
+
+export function setPartMaterialFull(
+  instanceId: string,
+  partIndex: number,
+  material: Material,
+): void {
+  const inst = state.project.instances.find((i) => i.id === instanceId)
+  const obj = derived[instanceId]?.objects[partIndex]
+  if (!inst || !obj) return
+  pushHistory('Материал детали')
+  inst.partOverrides = {
+    ...(inst.partOverrides ?? {}),
+    [partUid(obj)]: JSON.parse(JSON.stringify(material)) as Material,
+  }
+  touch()
+  scheduleSave()
+}
+
+/** Материал всем одинаковым деталям (та же группа: имя+секция+ящик). */
+export function setPartMaterialGroup(
+  instanceId: string,
+  partIndex: number,
+  patch: Partial<Material>,
+  full?: Material,
+): void {
+  const inst = state.project.instances.find((i) => i.id === instanceId)
+  const obj = derived[instanceId]?.objects[partIndex]
+  if (!inst || !obj) return
+  pushHistory('Материал группы деталей')
+  const cur = full ?? resolveMaterial(
+    state.project.materials,
+    state.project.materialVars,
+    inst,
+    obj,
+    partIndex,
+  ).material
+  inst.partMaterialGroups = {
+    ...(inst.partMaterialGroups ?? {}),
+    [partGroupKey(obj)]: { ...cur, ...patch },
+  }
+  touch()
+  scheduleSave()
+}
+
+export function resetPartMaterial(instanceId: string, partIndex: number): void {
+  const inst = state.project.instances.find((i) => i.id === instanceId)
+  const obj = derived[instanceId]?.objects[partIndex]
+  if (!inst) return
+  pushHistory('Сброс материала детали')
+  if (obj) {
+    const uid = partUid(obj)
+    const group = partGroupKey(obj)
+    if (inst.partOverrides?.[uid] || inst.partMaterialGroups?.[group]) {
+      const next = { ...(inst.partOverrides ?? {}) }
+      delete next[uid]
+      inst.partOverrides = Object.keys(next).length ? next : undefined
+      const gnext = { ...(inst.partMaterialGroups ?? {}) }
+      delete gnext[group]
+      inst.partMaterialGroups = Object.keys(gnext).length ? gnext : undefined
+    }
+  }
+  if (inst.partMaterials?.[String(partIndex)]) {
+    const next = { ...inst.partMaterials }
+    delete next[String(partIndex)]
+    inst.partMaterials = Object.keys(next).length ? next : undefined
+  }
+  touch()
+  scheduleSave()
+}
+
+export function resetPartMaterialGroup(
+  instanceId: string,
+  partIndex: number,
+): void {
+  const inst = state.project.instances.find((i) => i.id === instanceId)
+  const obj = derived[instanceId]?.objects[partIndex]
+  if (!inst || !obj) return
+  pushHistory('Сброс материала группы')
+  const next = { ...(inst.partMaterialGroups ?? {}) }
+  delete next[partGroupKey(obj)]
+  inst.partMaterialGroups = Object.keys(next).length ? next : undefined
+  touch()
+  scheduleSave()
+}
+
+export function partMaterialOverridden(
+  inst: Instance | null | undefined,
+  partIndex: number,
+): boolean {
+  if (!inst) return false
+  if (inst.partMaterials?.[String(partIndex)]) return true
+  const obj = inst ? derived[inst.id]?.objects[partIndex] : null
+  if (!obj) return false
+  return !!(inst.partOverrides?.[partUid(obj)] ||
+    inst.partMaterialGroups?.[partGroupKey(obj)])
+}
+
+export function partMaterialSource(
+  instanceId: string,
+  partIndex: number,
+): { source: string; label: string } | null {
+  const inst = state.project.instances.find((i) => i.id === instanceId)
+  const obj = derived[instanceId]?.objects[partIndex]
+  if (!inst || !obj) return null
+  const r = resolveMaterial(
+    state.project.materials,
+    state.project.materialVars,
+    inst,
+    obj,
+    partIndex,
+  )
+  return { source: r.source, label: r.label }
+}
+
+/** Политика кромки модуля. */
+export function setEdgePolicy(instanceId: string, patch: Partial<EdgePolicy>): void {
+  const inst = state.project.instances.find((i) => i.id === instanceId)
+  if (!inst) return
+  pushHistory('Кромка модуля')
+  inst.params.edges = { ...(inst.params.edges ?? {}), ...patch }
+  touch()
+  scheduleSolve(inst)
+  scheduleSave()
+}
+
+/** Переопределение кромки детали по стороне (auto — вернуть правило). */
+export function setEdgeOverride(
+  instanceId: string,
+  partName: string,
+  side: string,
+  value: string,
+): void {
+  const inst = state.project.instances.find((i) => i.id === instanceId)
+  if (!inst || !partName) return
+  pushHistory('Кромка детали')
+  const policy = { ...(inst.params.edges ?? {}) }
+  const byPart = { ...(policy.byPart ?? {}) }
+  const row = { ...(byPart[partName] ?? {}) }
+  if (!value || value === 'auto') delete row[side]
+  else row[side] = value
+  if (Object.keys(row).length) byPart[partName] = row
+  else delete byPart[partName]
+  inst.params.edges = {
+    ...policy,
+    byPart: Object.keys(byPart).length ? byPart : undefined,
+  }
+  touch()
+  scheduleSolve(inst)
+  scheduleSave()
+}
+
+export function setHiddenFasteners(instanceId: string, hidden: boolean): void {
+  const inst = state.project.instances.find((i) => i.id === instanceId)
+  if (!inst) return
+  pushHistory('Скрытый крепёж')
+  inst.params.hiddenFasteners = hidden
+  if (hidden && (!inst.params.fastener || inst.params.fastener === 'auto')) {
+    inst.params.fastener = 'auto'
+  }
+  touch()
+  scheduleSolve(inst)
+  scheduleSave()
+}
+
+export function setConnectionOverride(
+  instanceId: string,
+  cls: string,
+  value: string,
+): void {
+  const inst = state.project.instances.find((i) => i.id === instanceId)
+  if (!inst) return
+  pushHistory('Крепёж соединения')
+  const next = { ...(inst.params.connectionOverrides ?? {}) }
+  if (!value || value === 'auto') delete next[cls]
+  else next[cls] = value
+  inst.params.connectionOverrides = Object.keys(next).length ? next : undefined
+  touch()
+  scheduleSolve(inst)
+  scheduleSave()
+}
+
+export function toggleAssemblyStep(instanceId: string, index: number): void {
+  const inst = state.project.instances.find((i) => i.id === instanceId)
+  if (!inst) return
+  const set = new Set(inst.assemblyDone ?? [])
+  if (set.has(index)) set.delete(index)
+  else set.add(index)
+  inst.assemblyDone = [...set].sort((a, b) => a - b)
+  touch()
+  scheduleSave()
+}
+
+/** Зона/этаж модуля: к нему применяются переменные с той же зоной. */
+export function setInstanceZone(instanceId: string, zone: string): void {
+  const inst = state.project.instances.find((i) => i.id === instanceId)
+  if (!inst) return
+  pushHistory('Зона модуля')
+  inst.zone = zone.trim() || undefined
+  touch()
+  scheduleSave()
+}
+
+export function addZone(name: string): string {
+  const zone = name.trim()
+  if (!zone) return ''
+  state.project.zones = [...new Set([...(state.project.zones ?? []), zone])]
+  touch()
+  scheduleSave()
+  return zone
+}
+
+export function renameZone(from: string, to: string): void {
+  const a = from.trim()
+  const b = to.trim()
+  if (!a || !b || a === b) return
+  pushHistory('Переименование зоны')
+  state.project.zones = [...new Set(
+    (state.project.zones ?? []).map((z) => (z === a ? b : z)),
+  )]
+  for (const inst of state.project.instances) {
+    if ((inst.zone || '') === a) inst.zone = b
+  }
+  for (const v of state.project.materialVars) {
+    if ((v.zone || '') === a) v.zone = b
+  }
+  touch()
+  scheduleSave()
+}
+
+export function removeZone(name: string): void {
+  const zone = name.trim()
+  if (!zone) return
+  pushHistory('Удаление зоны')
+  state.project.zones = (state.project.zones ?? []).filter((z) => z !== zone)
+  for (const inst of state.project.instances) {
+    if (inst.zone === zone) inst.zone = undefined
+  }
+  for (const v of state.project.materialVars) {
+    if (v.zone === zone) v.zone = undefined
+  }
+  touch()
+  scheduleSave()
+}
+
+export function zonesList(): string[] {
+  return [...new Set([
+    ...(state.project.zones ?? []),
+    ...state.project.instances.map((i) => i.zone || '').filter(Boolean),
+  ])].sort((a, b) => a.localeCompare(b, 'ru'))
+}
+
+/** Копия переменной материала (для другого этажа/зоны или части). */
+export function duplicateMaterialVar(id: string): string {
+  const src = state.project.materialVars.find((v) => v.id === id)
+  if (!src) return ''
+  pushHistory('Копия переменной материала')
+  const copy: MaterialVariable = JSON.parse(JSON.stringify(src))
+  copy.id = `mv${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`
+  copy.name = `${src.name} (копия)`
+  state.project.materialVars.push(copy)
+  touch()
+  scheduleSave()
+  return copy.id
+}
+
 /** Сбросить материал модуля к материалу проекта (role не задан — все). */
 export function resetInstanceMaterial(instanceId: string, role?: string): void {
   const inst = state.project.instances.find((i) => i.id === instanceId)
@@ -3160,6 +3687,78 @@ export function removeWallItem(id: string): void {
   notify('Предмет со стены удалён', 'undo')
 }
 
+export function addFinish(patch: Partial<Finish> = {}): string {
+  pushHistory('Добавлена отделка')
+  const id = `fin${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`
+  const room = state.project.room
+  const f: Finish = {
+    id,
+    name: patch.name || `Отделка ${(state.project.finishes?.length ?? 0) + 1}`,
+    kind: patch.kind === 'ceiling' || patch.kind === 'wall' ? patch.kind : 'floor',
+    x: Math.max(0, Number(patch.x) || 0),
+    y: Math.max(0, Number(patch.y) || 0),
+    w: Math.max(100, Number(patch.w) || Math.round(room.w / 2)),
+    d: Math.max(100, Number(patch.d) || Math.round(room.d / 2)),
+    material: patch.material || 'Плитка',
+    color: patch.color || '#a9b4bd',
+    tileW: Math.max(10, Number(patch.tileW) || 300),
+    tileH: Math.max(10, Number(patch.tileH) || 300),
+    grout: Math.max(0, Number(patch.grout) || 2),
+    waste: Math.max(0, Number(patch.waste) || 10),
+    price_m2: Math.max(0, Number(patch.price_m2) || 0),
+  }
+  state.project.finishes = [...(state.project.finishes ?? []), f]
+  touch()
+  scheduleSave()
+  return id
+}
+
+export function updateFinish(id: string, patch: Partial<Finish>): void {
+  const list = state.project.finishes ?? []
+  const i = list.findIndex((f) => f.id === id)
+  if (i < 0) return
+  pushHistory('Изменена отделка')
+  const next = { ...list[i], ...patch }
+  next.w = Math.max(100, Math.round(next.w))
+  next.d = Math.max(100, Math.round(next.d))
+  next.tileW = Math.max(10, Math.round(next.tileW))
+  next.tileH = Math.max(10, Math.round(next.tileH))
+  next.waste = Math.max(0, next.waste)
+  next.price_m2 = Math.max(0, next.price_m2)
+  state.project.finishes = list.map((f) => (f.id === id ? next : f))
+  touch()
+  scheduleSave()
+}
+
+export function removeFinish(id: string): void {
+  if (!(state.project.finishes ?? []).some((f) => f.id === id)) return
+  pushHistory('Удалена отделка')
+  state.project.finishes = (state.project.finishes ?? []).filter((f) => f.id !== id)
+  touch()
+  scheduleSave()
+}
+
+export function finishCalc(f: Finish): {
+  area: number
+  tiles: number
+  boxes: number
+  cost: number
+  groutKg: number
+} {
+  const area = (f.w * f.d) / 1e6
+  const tileArea = (f.tileW * f.tileH) / 1e6
+  const tiles = Math.ceil((area / Math.max(0.0001, tileArea)) * (1 + f.waste / 100))
+  const perBox = f.material.includes('Плитка') ? Math.max(1, Math.round(1.44 / tileArea)) : 1
+  const boxes = Math.ceil(tiles / perBox)
+  return {
+    area: Math.round(area * 100) / 100,
+    tiles,
+    boxes,
+    cost: Math.round(area * f.price_m2 * (1 + f.waste / 100) * 100) / 100,
+    groutKg: Math.round(Math.sqrt(tileArea) * f.grout * area * 1.6 * 10) / 10,
+  }
+}
+
 export function setSurface(
   kind: 'floor' | 'ceiling',
   patch: Partial<RoomSurface>,
@@ -3195,6 +3794,12 @@ export function addOpening(
     ...(opts.open != null ? { open: opts.open } : {}),
     hinge: opts.hinge === 'right' ? 'right' : 'left',
     angle: clamp(Number(opts.angle) || 80, 0, 120),
+    wallT: opts.wallT ?? room.wallT,
+    frameT: opts.frameT ?? 70,
+    sillDepth: opts.sillDepth ?? 250,
+    casing: opts.casing ?? 70,
+    material: opts.material ?? 'ПВХ',
+    price: opts.price ?? 0,
   }
   room.openings.push(clampOpening(o, room))
   state.openingId = o.id

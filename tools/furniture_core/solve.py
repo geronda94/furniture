@@ -7,12 +7,15 @@ from collections import Counter
 from .config import Config
 from .cutting import pack, validate
 from .hardware import (
-    find_handle, find_hinge, find_runner, load_handles, load_hinges,
-    load_runners,
+    edge_type_for, find_fastener, find_gas_strut, find_handle, find_hinge,
+    Handle, find_runner, find_shelf_support, load_edge_types, load_fasteners,
+    load_gas_struts, load_handles, load_hinges, load_legs, load_runners,
+    load_shelf_supports,
 )
-from .pricing import load_pricing
+from .pricing import load_options, load_pricing
 from .kitchen import Section, gen_kitchen, scene3d
-from .assembly import build_operations, summarize
+from .assembly import build_operations, summarize, validate_operations
+from .parts import apply_edge_policy
 
 SCHEMA = "furniture/product@0"
 
@@ -105,7 +108,8 @@ def _sections(product: dict, cfg: Config):
     return [_section_from_params(product.get("params", {}))]
 
 
-def solve(product: dict, cfg: Config | None = None) -> dict:
+def solve(product: dict, cfg: Config | None = None, *, market: str | None = None,
+          shop: str | None = None, supplier: str | None = None) -> dict:
     """Посчитать изделие. Координаты сцены — локальные (угол корпуса в 0,0,0)."""
     cfg = replace(cfg or Config())
     params = product.get("params", {}) or {}
@@ -144,14 +148,36 @@ def solve(product: dict, cfg: Config | None = None) -> dict:
     runner = find_runner(runners, cfg.runners)
     hinge = find_hinge(load_hinges(), cfg.hardware)
     handles = load_handles()
-    handle = find_handle(handles, params.get("handle") or "bar-128")
+    style = str(params.get("facadeStyle") or "handle")
+    if style == "push":
+        handle = Handle(id="no-handle", name="Без ручки (push-to-open)",
+                        mount="profile", centers=-1)
+    elif style == "profile":
+        handle = find_handle(handles, "profile-04")
+    else:
+        handle = find_handle(handles, params.get("handle") or "bar-128")
+    fastener_list = load_fasteners()
+    fastener = find_fastener(fastener_list, params.get("fastener"))
+    shelf_support = find_shelf_support(
+        load_shelf_supports(), params.get("shelfSupport"))
+    gas_strut = find_gas_strut(load_gas_struts(), params.get("gasStrut"))
+    legs_all = load_legs()
+    leg_mount = next((l for l in legs_all
+                      if l.id == (params.get("legMount") or "leg-plate-60")),
+                     legs_all[0] if legs_all else None)
+    edge_types = load_edge_types()
 
     sections = _sections(product, cfg)
     if not sections:
         raise ValueError("нет секций: product.sections пуст")
 
-    parts, total_w, holes = gen_kitchen(sections, cfg, runner=runner,
-                                        hinge=hinge)
+    facade_material = ("МДФ" if params.get("facadeMaterial") == "mdf"
+                       else "ЛДСП")
+    parts, total_w, holes = gen_kitchen(
+        sections, cfg, runner=runner, hinge=hinge,
+        facade_material=facade_material,
+    )
+    parts = apply_edge_policy(parts, params.get("edges"), edge_types)
     sheets, usable_w, usable_h = pack(parts, cfg)
     errs, warns = validate(total_w, cfg.corpus_h, cfg.corpus_d, parts, cfg,
                            sheets, usable_w, usable_h)
@@ -165,9 +191,43 @@ def solve(product: dict, cfg: Config | None = None) -> dict:
     objects = scene3d(sections, cfg, runner=runner, cutouts=cutouts)
     operations = build_operations(
         objects, cfg, runner=runner, hinge=hinge, handle=handle,
+        fastener=fastener, fasteners=fastener_list,
+        shelf_support=shelf_support,
+        gas_strut=gas_strut, leg_mount=leg_mount,
+        edge_types=edge_types, params=params,
     )
-    hardware_plan = summarize(operations, runner, handle, hinge)
-    edge_names = {2.0: "ПВХ 2 мм", 0.4: "ПВХ 0.4 мм", 0.0: "без кромки"}
+    hardware_plan = summarize(
+        operations, runner, handle, hinge, fastener=fastener,
+        shelf_support=shelf_support, gas_strut=gas_strut,
+        edge_types=edge_types,
+    )
+    warns += validate_operations(operations, objects, hinge=hinge,
+                                 handle=handle)
+    side_ru = {"left": "лев", "right": "прав", "top": "верх",
+               "bottom": "низ"}
+
+    def edge_sides(part) -> dict:
+        rows: dict = {}
+        for side, thickness in part.edges.items():
+            if not thickness:
+                continue
+            et = next((t for t in edge_types
+                       if t.id == part.edge_kind.get(side)), None)
+            if et is None:
+                et = edge_type_for(edge_types, float(thickness))
+            length = part.w if side in ("top", "bottom") else part.h
+            rows[side] = {
+                "thickness": round(float(thickness), 2),
+                "type": et.id,
+                "label": et.name,
+                "color": et.color,
+                "price_key": et.price_key,
+                "front": side == part.front_key,
+                "side_label": side_ru.get(side, side),
+                "length_m": round(length * part.qty / 1000, 3),
+            }
+        return rows
+
     edge_plan = [{
         "part": p.name,
         "qty": p.qty,
@@ -176,14 +236,7 @@ def solve(product: dict, cfg: Config | None = None) -> dict:
         "h": p.h,
         "front": p.front_key,
         "summary": p.edge_summary(),
-        "sides": {
-            side: {
-                "thickness": thickness,
-                "label": edge_names.get(float(thickness),
-                                        f"кромка {thickness:g} мм"),
-            }
-            for side, thickness in p.edges.items() if thickness
-        },
+        "sides": edge_sides(p),
     } for p in parts]
     for c in cutouts if isinstance(cutouts, list) else []:
         if not isinstance(c, dict):
@@ -212,18 +265,24 @@ def solve(product: dict, cfg: Config | None = None) -> dict:
         "saw_h": p.saw()[1],
         "material": p.material,
         "edge": p.edge_summary(),
+        "edges": edge_sides(p),
         "grain": p.grain,
         "front": p.front_key,
     } for p in parts]
 
     edge_mm: dict[float, float] = {}
-    for part in parts:
-        for side, thick in part.edges.items():
-            if not thick:
-                continue
-            length = part.w if side in ("top", "bottom") else part.h
-            edge_mm[thick] = edge_mm.get(thick, 0) + length * part.qty
+    edge_by_type: dict[str, float] = {}
+    for plan in edge_plan:
+        for side, row in plan["sides"].items():
+            thick = float(row["thickness"])
+            length = (plan["w"] if side in ("top", "bottom")
+                      else plan["h"]) * int(plan["qty"])
+            edge_mm[thick] = edge_mm.get(thick, 0) + length
+            label = str(row["label"])
+            edge_by_type[label] = edge_by_type.get(label, 0) + length
     edges_m = {str(k): round(v / 1000, 2) for k, v in sorted(edge_mm.items())}
+    edges_by_type = {k: round(v / 1000, 2)
+                     for k, v in sorted(edge_by_type.items())}
 
     # КПД раскроя по ЛДСП
     ld = [s for s in sheets if s["material"] == "ЛДСП"]
@@ -271,7 +330,10 @@ def solve(product: dict, cfg: Config | None = None) -> dict:
             if b.get("name") == "Ящик передняя стенка":
                 d["panel"] = {"w": b["sx"], "h": b["sz"], "t": b["sy"]}
         elif b["kind"] == "drawerfront":
-            d["front"] = {"w": b["sx"], "h": b["sz"], "t": b["sy"]}
+            d["front"] = {"w": b["sx"], "h": b["sz"], "t": b["sy"],
+                          "z": b["z"]}
+    floor_z = cfg.plinth_h if cfg.mount != "wall" else 0.0
+    top_z = floor_z + cfg.corpus_h
     t = cfg.t
     for d in by_id.values():
         box = d.get("box") or {}
@@ -298,7 +360,41 @@ def solve(product: dict, cfg: Config | None = None) -> dict:
             "side_extra": round(runner.side_extra, 1),
             "side_h": round(box_h + runner.side_extra, 1),
             "runner_note": runner.note,
+            # положение относительно низа модуля / фасада (для сборщика)
+            "box_bottom_from_floor": round(box.get("z0", 0) - floor_z, 1),
+            "box_top_from_floor": round(box.get("z1", 0) - floor_z, 1),
+            "runner_center_from_floor": round(
+                (box.get("z0", 0) + box.get("z1", 0)) / 2 - floor_z, 1),
+            "front_bottom_from_floor": round(
+                float(front.get("z", floor_z)) - floor_z, 1),
+            "front_top_from_ceiling": round(
+                top_z - float(front.get("z", floor_z))
+                - float(front.get("h", 0)), 1),
         })
+
+    shelves_pos = [{
+        "section": b.get("sec", 0),
+        "z_from_floor": round(b["z"] - floor_z, 1),
+        "t": round(b["sz"], 1),
+        "w": round(b["sx"], 1),
+        "d": round(b["sy"], 1),
+        "to_shelf_above": None,
+        "from_shelf_below": None,
+    } for b in objects if b.get("name") == "Полка"]
+    by_sec: dict[int, list[dict]] = {}
+    for row in shelves_pos:
+        by_sec.setdefault(int(row["section"]), []).append(row)
+    for rows in by_sec.values():
+        rows.sort(key=lambda r: r["z_from_floor"])
+        for i, row in enumerate(rows):
+            if i:
+                row["from_shelf_below"] = round(
+                    row["z_from_floor"] - rows[i - 1]["z_from_floor"]
+                    - rows[i - 1]["t"], 1)
+            if i + 1 < len(rows):
+                row["to_shelf_above"] = round(
+                    rows[i + 1]["z_from_floor"] - row["z_from_floor"]
+                    - row["t"], 1)
 
     if drawers:
         holes.append({
@@ -313,29 +409,53 @@ def solve(product: dict, cfg: Config | None = None) -> dict:
         })
 
     assembly = ["Проверить деталировку и кромку по карте раскроя"]
-    if cfg.back != "none":
-        assembly.append(f"Установить заднюю стенку ({back_material_name(cfg)})")
-    assembly.append("Присадить боковины System 32 и соединить корпус")
+    if hardware_plan.get("fasteners"):
+        models = sorted({str(j.get("fastener")) for j in
+                         (hardware_plan.get("joints") or [])
+                         if j.get("fastener")})
+        assembly.append(
+            f"Соединить корпус: {', '.join(models) or hardware_plan['fastener_model']} — "
+            f"{hardware_plan['fasteners']} шт (карта присадки)")
     if any(p.name == "Перегородка" for p in parts):
         assembly.append("Поставить перегородки по схеме")
+    if cfg.back != "none":
+        assembly.append(
+            f"Установить заднюю стенку ({back_material_name(cfg)}): "
+            f"скобы/саморезы по периметру")
     if any(p.name == "Полка" for p in parts):
-        assembly.append("Установить полкодержатели и полки")
-    if params.get("doors") or any(
-            b.get("type") == "doors" for b in (params.get("fronts") or [])):
-        assembly.append("Навесить двери и отрегулировать петли")
-    if params.get("drawers") or any(
-            b.get("type") == "drawers" for b in (params.get("fronts") or [])):
-        assembly.append("Установить направляющие и вставить ящики")
+        assembly.append(
+            f"Установить полкодержатели ({hardware_plan.get('shelf_support_model')}) "
+            f"и полки")
+    if hardware_plan.get("hinges"):
+        assembly.append(
+            f"Навесить двери: {hardware_plan['hinge_model']}, "
+            f"{hardware_plan['hinges']} шт петель; отрегулировать")
+    if drawers:
+        assembly.append(
+            f"Установить направляющие {hardware_plan.get('runner_model')} "
+            f"и вставить ящики ({len(drawers)} шт)")
         assembly.append("Прикрутить фасады ящиков к передним стенкам коробов")
+    if hardware_plan.get("gas_struts"):
+        assembly.append(
+            f"Установить газовые патроны {hardware_plan.get('gas_strut_model')} "
+            f"по шаблону производителя")
+    if hardware_plan.get("handles"):
+        assembly.append(
+            f"Прикрутить ручки: {hardware_plan['handle_model']} — "
+            f"{hardware_plan['handles']} шт")
+    if hardware_plan.get("leg_holes"):
+        assembly.append(
+            f"Просверлить дно под опоры: {leg_mount.name if leg_mount else ''} — "
+            f"{hardware_plan['leg_holes']} отв. (карта присадки)")
     if cfg.mount != "wall" and cfg.plinth_h > 0:
         assembly.append("Поставить ножки и цоколь")
     if cfg.mount != "wall" and cfg.worktop_t > 0:
-        assembly.append("Уложить столешницу")
+        assembly.append("Уложить столешницу и закрепить изнутри саморезами/уголками")
     if params.get("cutouts"):
         assembly.append("Выполнить вырезы в столешнице по присадке")
 
     # ---- смета ----
-    pr = load_pricing()
+    pr = load_pricing(market=market, shop=shop, supplier=supplier)
     cost_lines: list[dict] = []
     sheet_counts = Counter(str(s["material"]) for s in sheets)
     material_area: dict[str, float] = {}
@@ -367,45 +487,104 @@ def solve(product: dict, cfg: Config | None = None) -> dict:
             "unit_price": round(pr.cutting_per_sheet, 2),
             "total": round(cutting, 2),
         })
-    edge_total = 0.0
-    for t, meters in edges_m.items():
-        price = pr.edge.get(str(t), 0.0)
-        if not price or not meters:
+    edge_by_key: dict[str, dict] = {}
+    for plan in edge_plan:
+        for row in plan["sides"].values():
+            key = str(row.get("price_key") or row.get("type"))
+            item = edge_by_key.setdefault(key, {
+                "label": str(row.get("label")), "m": 0.0,
+                "thickness": float(row.get("thickness") or 0),
+            })
+            item["m"] += float(row.get("length_m") or 0)
+    for key, item in edge_by_key.items():
+        meters = round(item["m"], 3)
+        price = pr.edge_price(key, item["thickness"])
+        if not meters:
             continue
-        edge_total += price * meters
         cost_lines.append({
-            "key": "edge", "label": f"Кромка {t} мм",
+            "key": "edge", "label": f"Кромка: {item['label']}",
             "qty": meters, "unit": "м",
             "unit_price": round(price, 2), "total": round(price * meters, 2),
         })
-    hinge_total = sum(float(h.get("hinges", 0) or 0) for h in holes)
-    if hinge_total:
+    if hardware_plan.get("hinges"):
+        n = int(hardware_plan["hinges"])
         cost_lines.append({
-            "key": "hinges", "label": "Петли",
-            "qty": hinge_total, "unit": "шт",
-            "unit_price": pr.hinge, "total": round(pr.hinge * hinge_total, 2),
+            "key": "hinges", "label": f"Петли: {hinge.name}",
+            "qty": n, "unit": "шт",
+            "unit_price": round(pr.hinge, 2),
+            "total": round(pr.hinge * n, 2),
         })
     if drawers:
         cost_lines.append({
-            "key": "runners", "label": "Направляющие ящиков",
+            "key": "runners", "label": f"Направляющие: {runner.name}",
             "qty": len(drawers), "unit": "компл",
-            "unit_price": pr.runner_pair, "total": round(pr.runner_pair * len(drawers), 2),
+            "unit_price": round(pr.runner_pair, 2),
+            "total": round(pr.runner_pair * len(drawers), 2),
         })
     legs = sum(1 for o in objects if o["name"] == "Ножка")
     if legs:
         cost_lines.append({
             "key": "legs", "label": "Опоры",
             "qty": legs, "unit": "шт",
-            "unit_price": pr.leg, "total": round(pr.leg * legs, 2),
+            "unit_price": round(pr.leg, 2), "total": round(pr.leg * legs, 2),
         })
     fronts = sum(1 for o in objects if o["kind"] in ("door", "drawerfront"))
-    if fronts:
-        price = handle.price or pr.handle
+    handle_units = int(hardware_plan.get("handles") or 0)
+    if handle.mount == "profile":
+        handle_units = 0          # профиль считается метражом, не штуками
+    if handle_units:
+        price = pr.handle_price(handle.id, handle.price)
         cost_lines.append({
             "key": "handles", "label": f"Ручки: {handle.name}",
-            "qty": fronts, "unit": "шт",
+            "qty": handle_units, "unit": "шт",
             "unit_price": round(price, 2),
-            "total": round(price * fronts, 2),
+            "total": round(price * handle_units, 2),
+        })
+    # крепёж — по фактическим операциям присадки и типам соединений
+    fw_count: dict[str, dict] = {}
+    for o in operations:
+        if o.get("kind") != "fastener_face":
+            continue
+        hid = str(o.get("hardware_id") or "")
+        row = fw_count.setdefault(hid, {
+            "label": str(o.get("hardware") or hid), "qty": 0,
+        })
+        row["qty"] += int(o.get("qty", 1))
+    for hid, row in fw_count.items():
+        price = pr.fastener_price(hid)
+        if not price:
+            continue
+        cost_lines.append({
+            "key": f"hw-{hid}", "label": row["label"],
+            "qty": row["qty"], "unit": "шт",
+            "unit_price": round(price, 2),
+            "total": round(price * row["qty"], 2),
+        })
+    screw_qty = int(hardware_plan.get("screws") or 0)
+    if screw_qty and pr.fastener_price("screw"):
+        price = pr.fastener_price("screw")
+        cost_lines.append({
+            "key": "hw-screw", "label": "Саморезы 4×30",
+            "qty": screw_qty, "unit": "шт",
+            "unit_price": round(price, 2),
+            "total": round(price * screw_qty, 2),
+        })
+    for hw_id, label, key, qty in (
+        (shelf_support.id, shelf_support.name, shelf_support.price_key,
+         int(hardware_plan.get("shelf_pins") or 0)),
+        (gas_strut.id if gas_strut else "", gas_strut.name if gas_strut else "",
+         "gas_strut", int(hardware_plan.get("gas_struts") or 0)),
+    ):
+        if not qty:
+            continue
+        price = pr.gas_strut if key == "gas_strut" else pr.fastener_price(key)
+        if not price:
+            continue
+        cost_lines.append({
+            "key": f"hw-{hw_id}", "label": label,
+            "qty": qty, "unit": "шт",
+            "unit_price": round(price, 2),
+            "total": round(price * qty, 2),
         })
     doors_n = sum(1 for o in objects if o["kind"] == "door")
     drawers_n = len(drawers)
@@ -418,15 +597,31 @@ def solve(product: dict, cfg: Config | None = None) -> dict:
     subtotal = round(sum(x["total"] for x in cost_lines), 2)
     markup = round(subtotal * pr.markup_percent / 100, 2)
     partner = round(subtotal * pr.partner_percent / 100, 2)
+    taxable = round(subtotal + markup, 2)
+    vat = round(taxable * pr.vat_percent / 100, 2)
     cost = {
         "currency": pr.currency,
+        "locale": pr.locale,
+        "symbol": pr.symbol,
+        "market": pr.market,
+        "market_name": pr.market_name,
+        "shop": pr.shop,
+        "shop_name": pr.shop_name,
+        "supplier": pr.supplier,
+        "supplier_name": pr.supplier_name,
+        "vat_percent": pr.vat_percent,
+        "source": pr.source,
+        "updated": pr.updated,
+        "draft": pr.draft,
         "lines": cost_lines,
         "subtotal": subtotal,
         "markup_percent": pr.markup_percent,
         "markup": markup,
         "partner_percent": pr.partner_percent,
         "partner": partner,
-        "total": round(subtotal + markup, 2),
+        "total": taxable,
+        "vat": vat,
+        "total_with_vat": round(taxable + vat, 2),
     }
 
     return {
@@ -459,16 +654,33 @@ def solve(product: dict, cfg: Config | None = None) -> dict:
         "hardware": {**runner.as_dict(), "hinge": hinge.as_dict(),
                      "handles": [h.as_dict() for h in handles],
                      "handle": handle.as_dict(),
+                     "fastener": fastener.as_dict(),
+                     "shelf_support": shelf_support.as_dict(),
+                     "gas_strut": gas_strut.as_dict() if gas_strut else None,
+                     "leg_mount": leg_mount.as_dict() if leg_mount else None,
                      "hinges_all": [h.as_dict() for h in load_hinges()],
                      "runners_all": [
             {"id": r.id, "name": r.name, "brand": r.brand,
-             "side_gap": r.side_gap, "lengths": r.lengths}
+             "side_gap": r.side_gap, "lengths": r.lengths,
+             "template": r.template}
             for r in runners
-        ]},
+        ],
+                     "fasteners_all": [f.as_dict()
+                                       for f in load_fasteners()],
+                     "shelf_supports_all": [s.as_dict()
+                                            for s in load_shelf_supports()],
+                     "gas_struts_all": [g.as_dict()
+                                        for g in load_gas_struts()],
+                     "legs_all": [l.as_dict() for l in legs_all],
+                     "edge_types_all": [e.as_dict()
+                                        for e in edge_types]},
         "drawers": drawers,
+        "shelves": shelves_pos,
         "cutouts": cutouts,
         "assembly": assembly,
         "edges_m": edges_m,
+        "edges_by_type": edges_by_type,
+        "pricing": pr.as_dict(),
         "sheet": {"w": cfg.sheet_w, "h": cfg.sheet_h,
                   "trim": cfg.trim, "kerf": cfg.kerf},
         "dims": dims,

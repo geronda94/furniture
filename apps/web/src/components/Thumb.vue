@@ -26,7 +26,7 @@ const signature = computed(() => {
           .join(',')}`,
     )
     .join(';')
-  return `${JSON.stringify(inst.params)}|${JSON.stringify(effectiveMaterials(inst))}|${JSON.stringify(state.project.materialVars)}|${d.objects.length}|${anim}`
+  return `${JSON.stringify(inst.params)}|${JSON.stringify(inst.partMaterials ?? null)}|${inst.zone ?? ''}|${JSON.stringify(effectiveMaterials(inst))}|${JSON.stringify(state.project.materialVars)}|${d.objects.length}|${anim}|${state.rev}`
 })
 
 function draw(): void {
@@ -54,6 +54,7 @@ function draw(): void {
       state.project.materialVars,
       inst,
       o,
+      part,
     ),
     anim: Object.fromEntries(
       Object.entries(

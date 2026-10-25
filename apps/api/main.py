@@ -29,7 +29,20 @@ if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
 from furniture_core import load_config, solve  # noqa: E402
-from furniture_core.hardware import load_handles, load_hinges, load_runners  # noqa: E402
+from furniture_core.hardware import (  # noqa: E402
+    load_edge_types,
+    load_fasteners,
+    load_gas_struts,
+    load_handles,
+    load_hinges,
+    load_legs,
+    load_runners,
+    load_shelf_supports,
+)
+from furniture_core.pricing import (  # noqa: E402
+    load_options as load_pricing_options,
+    load_pricing,
+)
 from .storage import (  # noqa: E402
     delete_project as repo_delete,
     delete_version as repo_delete_version,
@@ -56,6 +69,8 @@ app.add_middleware(
 class SolveIn(BaseModel):
     product: dict[str, Any]
     shop: str | None = None
+    market: str | None = None
+    supplier: str | None = None
 
 
 class ActionIn(BaseModel):
@@ -78,6 +93,16 @@ DEFAULT_PARAMS = {
     "mount": "floor", "plinthH": 100, "worktopT": 38,
     "gapSide": 2, "gapBetween": 3, "gapTop": 2, "gapBottom": 2,
     "handle": "bar-128",
+    "fastener": "auto",
+    "facadeMaterial": "ldsp",
+    "facadeStyle": "handle",
+    "hiddenFasteners": False,
+    "connectionOverrides": {},
+    "edges": {},
+    "shelfSupport": "system32",
+    "gasStrut": "",
+    "legMount": "leg-plate-60",
+    "system32": True,
 }
 
 MODULE_PRESETS = [
@@ -240,26 +265,85 @@ def shop_config(shop: str | None = None):
 
 @app.get("/api/hardware")
 def hardware():
-    """Каталог фурнитуры из specs/hardware.yaml (для выбора в UI)."""
-    runners = load_runners(ROOT / "specs" / "hardware.yaml")
-    hinges = load_hinges(ROOT / "specs" / "hardware.yaml")
-    handles = load_handles(ROOT / "specs" / "hardware.yaml")
+    """Каталог фурнитуры и крепежа из specs/hardware.yaml (для UI)."""
+    path = ROOT / "specs" / "hardware.yaml"
+    runners = load_runners(path)
+    hinges = load_hinges(path)
+    handles = load_handles(path)
     return {
         "drawer_runners": [r.as_dict() for r in runners],
         "hinges": [h.as_dict() for h in hinges],
         "handles": [h.as_dict() for h in handles],
+        "fasteners": [f.as_dict() for f in load_fasteners(path)],
+        "shelf_supports": [s.as_dict() for s in load_shelf_supports(path)],
+        "gas_struts": [g.as_dict() for g in load_gas_struts(path)],
+        "legs": [l.as_dict() for l in load_legs(path)],
+        "edge_types": [e.as_dict() for e in load_edge_types()],
     }
+
+
+@app.get("/api/pricing/options")
+def pricing_options(
+    market: str | None = None,
+    shop: str | None = None,
+    supplier: str | None = None,
+):
+    """Рынки, цеха, поставщики и активный прайс."""
+    opts = load_pricing_options()
+    pr = load_pricing(market=market, shop=shop, supplier=supplier)
+    return {
+        **opts,
+        "active": pr.as_dict(),
+        "price_lines": {
+            "materials": pr.materials,
+            "cutting": {
+                "per_sheet": pr.cutting_per_sheet,
+                "per_m2": pr.cutting_per_m2,
+            },
+            "edge": pr.edge,
+            "hinge": pr.hinge,
+            "runner_pair": pr.runner_pair,
+            "assembly": {
+                "module": pr.assembly_module,
+                "door": pr.assembly_door,
+                "drawer": pr.assembly_drawer,
+            },
+        },
+    }
+
+
+def _cfg_for_shop(shop_id: str | None):
+    """Профиль цеха: файл specs/<id>.yaml или запись из shops.yaml.
+
+    Старые проекты хранят shop-default (файл конфигурации), новые — id цеха
+    из specs/shops.yaml. Для нового id берём лист/пропил из shops.yaml,
+    остальное — базовый профиль.
+    """
+    if shop_id:
+        path = ROOT / "specs" / f"{shop_id}.yaml"
+        if path.exists():
+            return load_config(path), path
+    cfg = load_config(SHOP)
+    if shop_id:
+        for row in load_pricing_options().get("shops", []):
+            if row.get("id") != shop_id:
+                continue
+            sheet = row.get("sheet") or {}
+            cfg.sheet_w = float(sheet.get("w", cfg.sheet_w))
+            cfg.sheet_h = float(sheet.get("h", cfg.sheet_h))
+            cfg.trim = float(sheet.get("trim", cfg.trim))
+            cfg.kerf = float(sheet.get("kerf", cfg.kerf))
+            break
+    return cfg, SHOP
 
 
 @app.post("/api/solve")
 def solve_endpoint(body: SolveIn):
     """Посчитать изделие. Возвращает локальную сцену, BOM и валидацию."""
-    shop = ROOT / "specs" / body.shop if body.shop else SHOP
-    if not shop.exists():
-        raise HTTPException(400, f"нет профиля цеха: {shop.name}")
-    cfg = load_config(shop)
+    cfg, _ = _cfg_for_shop(body.shop)
     try:
-        return solve(body.product, cfg)
+        return solve(body.product, cfg, market=body.market,
+                     shop=body.shop, supplier=body.supplier)
     except Exception as exc:  # движок должен отвечать понятной ошибкой
         raise HTTPException(422, str(exc)) from exc
 
@@ -267,10 +351,10 @@ def solve_endpoint(body: SolveIn):
 @app.post("/api/validate")
 def validate_endpoint(body: SolveIn):
     """Только проверка: ошибки, предупреждения, габариты, состав."""
-    shop = ROOT / "specs" / body.shop if body.shop else SHOP
-    cfg = load_config(shop)
+    cfg, _ = _cfg_for_shop(body.shop)
     try:
-        res = solve(body.product, cfg)
+        res = solve(body.product, cfg, market=body.market,
+                    shop=body.shop, supplier=body.supplier)
     except Exception as exc:
         raise HTTPException(422, str(exc)) from exc
     return {
@@ -290,7 +374,8 @@ def ai_guide():
         "endpoints": {
             "GET /api/catalog": "пресеты, толщины, материалы корпуса, правила",
             "GET /api/shop": "профиль цеха (плита, кромки, лист, зазоры)",
-            "GET /api/hardware": "направляющие ящиков",
+            "GET /api/hardware": "фурнитура, крепёж, полкодержатели, кромка",
+            "GET /api/pricing/options": "рынки, цеха, поставщики, активный прайс",
             "POST /api/solve": "деталировка + 3D + BOM + раскрой",
             "POST /api/validate": "проверка без выдачи полного результата",
             "GET /api/projects": "список проектов",
@@ -310,9 +395,19 @@ def ai_guide():
             "set_room {patch}",
             "set_globals {patch}",
         ],
+        "params": {
+            "fastener": "auto | confirmat | minifix | dowel | screw-4x30",
+            "hiddenFasteners": "bool: авто-выбор минификса",
+            "connectionOverrides": "{ carcass | divider | drawer: fastener_id }",
+            "edges": "{ visible, hidden, byPart: { name: { side: auto|none|type } } }",
+            "shelfSupport": "system32 | lock-pin | minifix-shelf | dowel-shelf",
+            "gasStrut": "id из specs/hardware.yaml",
+            "legMount": "id из specs/hardware.yaml.legs",
+        },
         "rules": [
             "Размеры только из задания; не выдумывать.",
-            "Кромка только на видимые торцы.",
+            "Кромка — по видимости торцов; правило можно переопределить params.edges.",
+            "Крепёж — по docs/18-connections.md; не выдумывать id.",
             "Каждому дверному полотну — стойка.",
             "Каждая секция — независимый модуль со своей крышей.",
             "Необратимые действия — только с подтверждением человека.",
@@ -349,11 +444,14 @@ def project_summary(pid: str):
                  ("w", "d", "h", "wallT", "outline", "partitions")},
         "globals": doc.get("globals", {}),
         "materialVars": doc.get("materialVars", []),
+        "market": doc.get("market"),
+        "shop": doc.get("shop"),
+        "supplier": doc.get("supplier"),
         "openings": room.get("openings", []),
         "instances": [],
         "folders": doc.get("folders", []),
     }
-    cfg = load_config(SHOP)
+    cfg, _ = _cfg_for_shop(doc.get("shop"))
     for inst in doc.get("instances", []):
         row = {k: inst.get(k) for k in
                ("id", "name", "x", "y", "z", "rot", "params")}
@@ -363,8 +461,10 @@ def project_summary(pid: str):
             product = {**inst,
                        'params': {**globals_,
                                   **(inst.get('params') or {})}}
-            res = solve(product, cfg)
+            res = solve(product, cfg, market=doc.get("market"),
+                        shop=doc.get("shop"), supplier=doc.get("supplier"))
             row["dims"] = res["dims"]
+            row["cost"] = res["cost"]
             row["validation"] = res["validation"]
             row["totals"] = res["totals"]
         except Exception as exc:

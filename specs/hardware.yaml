@@ -14,6 +14,8 @@ drawer_runners:
     box_height: 150.0
     # скрытые направляющие крепятся снизу; борта ящика выше переда/зада
     side_extra: 10.0
+    # заводской шаблон зависит от модели: точные отверстия не выдумываем
+    template: false
     note: "Крепление снизу: 2 отверстия, 37 мм от переднего края"
 
   - id: hidden-14
@@ -24,6 +26,7 @@ drawer_runners:
     lengths: [250, 300, 350, 400, 450, 500]
     box_height: 150.0
     side_extra: 10.0
+    template: false
     note: "Скрытые направляющие; борта выше переда/зада на 10 мм"
 
   - id: hidden-10
@@ -34,6 +37,7 @@ drawer_runners:
     lengths: [250, 300, 350, 400, 450, 500]
     box_height: 150.0
     side_extra: 10.0
+    template: false
     note: "Скрытые направляющие; борта выше переда/зада на 10 мм"
 
   - id: ball-13
@@ -44,7 +48,16 @@ drawer_runners:
     lengths: [250, 300, 350, 400, 450, 500]
     box_height: 150.0
     side_extra: 0.0
-    note: "Полного выдвижения"
+    template: true
+    # типовая схема крепления: по 2 отверстия в корпус и в борт ящика,
+    # 37 мм от переднего/заднего края, по центру направляющей
+    body_holes:
+      - { from: front, offset: 37, dia: 5, depth: 13 }
+      - { from: rear, offset: 37, dia: 5, depth: 13 }
+    box_holes:
+      - { from: front, offset: 37, dia: 5, depth: 13 }
+      - { from: rear, offset: 37, dia: 5, depth: 13 }
+    note: "Полного выдвижения, типовая присадка"
 
   - id: roller-12.5
     brand: generic
@@ -54,6 +67,13 @@ drawer_runners:
     lengths: [250, 300, 350, 400, 450, 500]
     box_height: 150.0
     side_extra: 0.0
+    template: true
+    body_holes:
+      - { from: front, offset: 37, dia: 5, depth: 13 }
+      - { from: rear, offset: 37, dia: 5, depth: 13 }
+    box_holes:
+      - { from: front, offset: 37, dia: 5, depth: 13 }
+      - { from: rear, offset: 37, dia: 5, depth: 13 }
     note: "Бюджетный вариант, частичное выдвижение"
 
 # Петли: присадка по бренду (используется движком в деталировке/присадке)
@@ -66,6 +86,7 @@ hinges:
     cup_depth: 12.5
     cup_offset: 22.5
     plate_offset: 21.0
+    plate_pitch: 32.0
     edge_margin: 90.0
     max_pitch: 600.0
 
@@ -77,6 +98,7 @@ hinges:
     cup_depth: 12.5
     cup_offset: 22.0
     plate_offset: 21.0
+    plate_pitch: 32.0
     edge_margin: 90.0
     max_pitch: 600.0
 
@@ -88,31 +110,270 @@ hinges:
     cup_depth: 12.5
     cup_offset: 22.0
     plate_offset: 21.0
+    plate_pitch: 32.0
     edge_margin: 90.0
     max_pitch: 600.0
 
-# Ручки: каталожная позиция и цена за штуку (для сметы)
+# Крепёж корпуса. face_* — отверстие в пласти, pilot_* — в торец детали.
+fasteners:
+  - id: confirmat
+    name: Евровинт / эриксон 7×50
+    kind: confirmat
+    face_dia: 7.0
+    face_depth: 13.0
+    pilot_dia: 5.0
+    pilot_depth: 34.0
+    head_dia: 10.0
+    per_joint: 2
+    visibility: hidden
+    price_key: confirmat
+    note: "Зенковка под головку; пилот в торец"
+
+  - id: minifix
+    name: Минификс 15 мм
+    kind: minifix
+    face_dia: 15.0
+    face_depth: 12.5
+    pilot_dia: 5.0
+    pilot_depth: 24.0
+    head_dia: 15.0
+    per_joint: 2
+    visibility: hidden
+    price_key: minifix
+    note: "Эксцентрик в пласти + штифт в торец"
+
+  - id: screw-4x30
+    name: Саморез 4×30
+    kind: screw
+    face_dia: 4.0
+    face_depth: 12.0
+    pilot_dia: 3.0
+    pilot_depth: 20.0
+    head_dia: 8.0
+    per_joint: 1
+    visibility: visible
+    price_key: screw
+    note: "Фасады ящиков, задник, стяжки; зенковка по месту"
+
+  - id: dowel
+    name: Шкант 8×30
+    kind: dowel
+    face_dia: 8.0
+    face_depth: 15.0
+    pilot_dia: 8.0
+    pilot_depth: 15.0
+    head_dia: 8.0
+    per_joint: 2
+    visibility: hidden
+    price_key: dowel
+    note: "Без головки; клей при сборке"
+
+# Опоры полок: как сверлить боковины/перегородки под конкретный тип.
+shelf_supports:
+  - id: system32
+    name: Полкодержатель System 32 (5 мм)
+    kind: pin
+    hole_dia: 5.0
+    depth: 13.0
+    per_side: 2
+    x_mode: front_rear
+    offset: 37.0
+    price_key: shelf_pin
+    note: "Использует ряды System 32 с шагом 32 мм; полка встаёт в ближайший ряд"
+
+  - id: lock-pin
+    name: Полкодержатель с фиксацией (5 мм)
+    kind: lock
+    hole_dia: 5.0
+    depth: 13.0
+    per_side: 2
+    x_mode: front_rear
+    offset: 37.0
+    price_key: shelf_pin
+    note: "Отверстия по факту полки, не по сетке"
+
+  - id: minifix-shelf
+    name: Минификс для полки (15 мм)
+    kind: minifix
+    hole_dia: 15.0
+    depth: 12.5
+    per_side: 1
+    x_mode: rear
+    offset: 37.0
+    price_key: minifix
+    note: "Скрытое крепление полки к боковине"
+
+  - id: dowel-shelf
+    name: Шкант полки (8 мм)
+    kind: dowel
+    hole_dia: 8.0
+    depth: 12.0
+    per_side: 2
+    x_mode: front_rear
+    offset: 37.0
+    price_key: dowel
+    note: "Полка на шкантах без видимой фурнитуры"
+
+# Газовые патроны / подъёмники. Точки крепления зависят от модели и веса
+# створки, поэтому позиции помечаются requires_pattern, пока нет шаблона.
+gas_struts:
+  - id: blum-20n
+    brand: Blum
+    name: Газовый патрон 20 Н
+    force_n: 20
+    door_weight_max: 4.5
+    body_offset_x: 95.0      # от передней кромки боковины
+    body_offset_top: 60.0    # от верхней кромки боковины
+    door_offset_x: 55.0      # от петлевой стороны створки
+    door_offset_bottom: 70.0 # от нижней кромки створки
+    hole_dia: 4.0
+    hole_depth: 12.0
+    template: false
+    note: "Проверить по шаблону производителя под вес створки"
+
+  - id: blum-40n
+    brand: Blum
+    name: Газовый патрон 40 Н
+    force_n: 40
+    door_weight_max: 9.0
+    body_offset_x: 95.0
+    body_offset_top: 60.0
+    door_offset_x: 55.0
+    door_offset_bottom: 70.0
+    hole_dia: 4.0
+    hole_depth: 12.0
+    template: false
+    note: "Проверить по шаблону производителя под вес створки"
+
+# Опоры: площадка/втулка/колесо и схема отверстий в дне.
+# dx/dy — смещения отверстий от центра опоры, мм.
+legs:
+  - id: leg-plate-60
+    name: Опора с площадкой 60×60
+    kind: plate
+    plate: 60
+    hole_dia: 4.5
+    depth: 16
+    holes:
+      - { dx: -22, dy: -22 }
+      - { dx: 22, dy: -22 }
+      - { dx: 22, dy: 22 }
+      - { dx: -22, dy: 22 }
+    template: true
+    note: "4 самореза 4×16 по углам площадки"
+
+  - id: leg-plate-50
+    name: Опора с площадкой 50×50
+    kind: plate
+    plate: 50
+    hole_dia: 4.5
+    depth: 16
+    holes:
+      - { dx: -18, dy: -18 }
+      - { dx: 18, dy: -18 }
+      - { dx: 18, dy: 18 }
+      - { dx: -18, dy: 18 }
+    template: true
+    note: "4 самореза по углам площадки"
+
+  - id: caster-plate-50
+    name: Колёсико с площадкой 50×50
+    kind: caster
+    plate: 50
+    hole_dia: 5.0
+    depth: 18
+    holes:
+      - { dx: -18, dy: -18 }
+      - { dx: 18, dy: -18 }
+      - { dx: 18, dy: 18 }
+      - { dx: -18, dy: 18 }
+    template: true
+    note: "4 болта/самореза; проверить высоту с цоколем"
+
+  - id: leg-thread-m8
+    name: Врезная гайка M8 под пятку
+    kind: insert
+    plate: 0
+    hole_dia: 10.0
+    depth: 13.0
+    holes:
+      - { dx: 0, dy: 0 }
+    template: true
+    note: "1 отверстие Ø10 в дне под врезную гайку"
+
+  - id: glide-screw
+    name: Пятка на саморезе
+    kind: glide
+    plate: 0
+    hole_dia: 4.0
+    depth: 12.0
+    holes:
+      - { dx: 0, dy: 0 }
+    template: true
+    note: "1 отверстие под саморез пятки"
+
+  - id: leg-none
+    name: Без разметки (закупные опоры)
+    kind: none
+    plate: 0
+    hole_dia: 0
+    depth: 0
+    holes: []
+    template: true
+    note: "Разметку не выдаём"
+
+# Ручки: каталожная позиция, цена (fallback) и правила положения.
+# door_margin — от края открывания (противоположного петле).
+# door_top — от верхней кромки створки.
 handles:
   - id: bar-128
     brand: generic
     name: Ручка-скоба 128 мм
     price: 150
     centers: 128
+    mount: through
+    hole_dia: 5.0
+    hole_depth: 13.0
+    door_margin: 60.0
+    door_top: 60.0
+    drawer_center: true
+
   - id: bar-160
     brand: generic
     name: Ручка-скоба 160 мм
     price: 170
     centers: 160
+    mount: through
+    hole_dia: 5.0
+    hole_depth: 13.0
+    door_margin: 60.0
+    door_top: 60.0
+    drawer_center: true
+
   - id: rail-192
     brand: generic
     name: Рейлинг 192 мм
     price: 210
     centers: 192
+    mount: through
+    hole_dia: 5.0
+    hole_depth: 13.0
+    door_margin: 60.0
+    door_top: 60.0
+    drawer_center: true
+
   - id: knob-30
     brand: generic
     name: Ручка-кнопка 30 мм
     price: 90
     centers: 0
+    mount: through
+    hole_dia: 5.0
+    hole_depth: 13.0
+    door_margin: 60.0
+    door_top: 60.0
+    drawer_center: true
+
   - id: profile-04
     brand: generic
     name: Профиль-ручка 4 м
@@ -120,3 +381,5 @@ handles:
     centers: 0
     mount: profile
     kind: profile
+    door_margin: 0
+    door_top: 0

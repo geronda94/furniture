@@ -10,6 +10,7 @@ import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight'
 import { ShadowGenerator } from '@babylonjs/core/Lights/Shadows/shadowGenerator'
 import '@babylonjs/core/Lights/Shadows/shadowGeneratorSceneComponent'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial'
+import { Material } from '@babylonjs/core/Materials/material'
 import { Texture } from '@babylonjs/core/Materials/Textures/texture'
 import { RenderTargetTexture } from '@babylonjs/core/Materials/Textures/renderTargetTexture'
 import { Mesh } from '@babylonjs/core/Meshes/mesh'
@@ -255,13 +256,20 @@ export class BabylonRenderer {
     derived: Record<string, SolveResponse>,
     materials: Materials,
     materialVars: MaterialVariable[] = [],
+    revision = 0,
   ): void {
     const alive = new Set<string>()
     let rebuilt = false
     const matsSig = JSON.stringify({
+      rev: revision,
       project: materials,
       vars: materialVars,
-      instances: instances.map((i) => [i.id, i.materials ?? null]),
+      instances: instances.map((i) => [
+        i.id,
+        i.materials ?? null,
+        i.partMaterials ?? null,
+        i.zone ?? '',
+      ]),
     })
     for (const inst of instances) {
       alive.add(inst.id)
@@ -434,7 +442,8 @@ export class BabylonRenderer {
         const role = obj?.role || 'corpus'
         const mk = ROLE_MAT[role] || role
         const src = obj
-          ? resolveObjectMaterial(materials, materialVars, inst, obj)
+          ? resolveObjectMaterial(materials, materialVars, inst, obj,
+              meta.part)
           : materials.corpus
         const schematic = this.quality === 'schematic'
         const textured = !schematic && !!src?.texture
@@ -442,15 +451,17 @@ export class BabylonRenderer {
         // разные глобальные переменные при одной роли материала.
         const matKey = `${inst.id}:${meta.part}:${mk}`
         const fa = this.materialFor(matKey)
-        fa.unfreeze()
         if (schematic) {
+          // «Каркас» — без текстур, но с фактическим цветом материала:
+          // иначе смена цвета выглядит как «не реагирует».
           const grey: Record<string, string> = {
             corpus: '#b8bcc1', facade: '#8f969d', worktop: '#7d848b',
             plinth: '#6e757c', back: '#d3d7db', drawer: '#9aa0a6',
             leg: '#555b61',
           }
-          fa.diffuseColor = matColor(grey[mk] || '#a9aeb3')
-          fa.emissiveColor = new Color3(0.06, 0.06, 0.06)
+          const base = src?.color || grey[mk] || '#a9aeb3'
+          fa.diffuseColor = matColor(base)
+          fa.emissiveColor = matColor(src?.accent || base).scale(0.04)
           fa.diffuseTexture = null
         } else {
           fa.diffuseColor = matColor(src?.color || '#999999')
@@ -466,7 +477,7 @@ export class BabylonRenderer {
           }
         }
         mesh.material = fa
-        fa.freeze()
+        fa.markAsDirty(Material.AllDirtyFlag)
       }
     }
   }

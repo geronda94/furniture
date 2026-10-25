@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import NumField from './NumField.vue'
 import MaterialPanel from './MaterialPanel.vue'
 import MaterialVarsPanel from './MaterialVarsPanel.vue'
@@ -7,6 +7,7 @@ import {
   applyGlobalsToAll,
   runners,
   setGlobals,
+  setProjectPricing,
   state,
   ui,
   type BackKind,
@@ -15,9 +16,10 @@ import {
   type ProjectGlobals,
   type Reinforce,
 } from '../state/project'
+import { apiPricingOptions, type PricingOptions } from '../api'
 
 const emit = defineEmits<{ (e: 'close'): void }>()
-const tab = ref<'globals' | 'materials' | 'vars'>(ui.settingsTab)
+const tab = ref<'globals' | 'materials' | 'vars' | 'pricing'>(ui.settingsTab)
 
 const g = () => state.project.globals
 
@@ -45,6 +47,30 @@ function onHardware(e: Event): void {
 }
 function onRunner(e: Event): void {
   set('runners', (e.target as HTMLSelectElement).value)
+}
+
+const pricing = ref<PricingOptions | null>(null)
+onMounted(() => {
+  apiPricingOptions().then((o) => (pricing.value = o)).catch(() => {})
+})
+const shops = computed(() =>
+  (pricing.value?.shops ?? []).filter(
+    (s) => !state.project.market || s.market === state.project.market,
+  ),
+)
+const activeMarket = computed(() =>
+  pricing.value?.markets.find((m) => m.id === state.project.market) ?? null,
+)
+function setMarket(e: Event): void {
+  const market = (e.target as HTMLSelectElement).value
+  const shop = pricing.value?.shops.find((s) => s.market === market)
+  setProjectPricing({ market, ...(shop ? { shop: shop.id } : {}) })
+}
+function setShop(e: Event): void {
+  setProjectPricing({ shop: (e.target as HTMLSelectElement).value })
+}
+function setSupplier(e: Event): void {
+  setProjectPricing({ supplier: (e.target as HTMLSelectElement).value })
 }
 </script>
 
@@ -80,6 +106,11 @@ function onRunner(e: Event): void {
             :class="{ 'wb__tab--on': tab === 'vars' }"
             @click="tab = 'vars'"
           >Переменные</button>
+          <button
+            class="wb__tab"
+            :class="{ 'wb__tab--on': tab === 'pricing' }"
+            @click="tab = 'pricing'"
+          >Цены и рынок</button>
         </div>
 
         <div v-if="tab === 'globals'" class="settings__body">
@@ -208,6 +239,47 @@ function onRunner(e: Event): void {
 
         <div v-else class="settings__body">
           <MaterialVarsPanel />
+        </div>
+
+        <div v-if="tab === 'pricing'" class="settings__body">
+          <p class="settings__lead">
+            Рынок задаёт валюту и НДС, цех — формат листа, раскрой, кромку и
+            сборку, поставщик — цены фурнитуры. Сметы всех модулей
+            пересчитываются сразу.
+          </p>
+          <div class="settings__grid">
+            <label class="field">
+              <span class="field__label">Рынок</span>
+              <select class="select" :key="`m-${pricing?.markets.length ?? 0}`" :value="state.project.market" @change="setMarket">
+                <option v-for="m in pricing?.markets ?? []" :key="m.id" :value="m.id">
+                  {{ m.name }} · {{ m.currency }} · НДС {{ m.vat_percent }}%
+                </option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="field__label">Цех</span>
+              <select class="select" :key="`s-${shops.map((x) => x.id).join(',')}`" :value="state.project.shop" @change="setShop">
+                <option v-for="s in shops" :key="s.id" :value="s.id">{{ s.name }}</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="field__label">Поставщик фурнитуры</span>
+              <select class="select" :key="`u-${pricing?.suppliers.length ?? 0}`" :value="state.project.supplier" @change="setSupplier">
+                <option v-for="s in pricing?.suppliers ?? []" :key="s.id" :value="s.id">
+                  {{ s.name }}
+                </option>
+              </select>
+            </label>
+          </div>
+          <div v-if="activeMarket" class="settings__price-note">
+            <b>{{ activeMarket.name }}</b> · {{ activeMarket.currency }}
+            ({{ activeMarket.symbol }}) · {{ activeMarket.source }}
+          </div>
+          <p class="dim">
+            Прайсы: <code>specs/pricing/&lt;market&gt;.yaml</code>,
+            цеха — <code>specs/shops.yaml</code>, поставщики —
+            <code>specs/suppliers.yaml</code>. Значения стартовые: сверить с цехом.
+          </p>
         </div>
       </section>
     </div>

@@ -7,6 +7,7 @@ import AddObjectModal from './components/AddObjectModal.vue'
 import StatusBar from './components/StatusBar.vue'
 import PresentationBar from './components/PresentationBar.vue'
 import ObjectModal from './components/ObjectModal.vue'
+import FinishModal from './components/FinishModal.vue'
 import Toast from './components/Toast.vue'
 import {
   clearGuides,
@@ -201,6 +202,7 @@ onBeforeUnmount(() => {
     <PresentationBar v-if="state.presentation" />
     <AddObjectModal v-if="ui.addOpen" @close="ui.addOpen = false" />
     <ObjectModal v-if="ui.object.open" />
+    <FinishModal v-if="ui.finishOpen" @close="ui.finishOpen = false" />
     <Toast />
   </div>
 </template>

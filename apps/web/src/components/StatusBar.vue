@@ -5,6 +5,7 @@ import {
   selectedDerived,
   selectedInstance,
   state,
+  ui,
 } from '../state/project'
 
 const errs = computed(
@@ -14,8 +15,26 @@ const warns = computed(
   () => selectedDerived.value?.validation.warnings.length ?? 0,
 )
 const totalCost = computed(() =>
-  Object.values(derived).reduce((sum, d) => sum + (d.cost?.total ?? 0), 0),
+  Object.values(derived).reduce(
+    (sum, d) => sum + (d.cost?.total_with_vat ?? d.cost?.total ?? 0),
+    0,
+  ),
 )
+const costMeta = computed(() => {
+  const first = Object.values(derived).find((d) => d.cost)?.cost
+  return {
+    locale: first?.locale || 'ru-RU',
+    symbol: first?.symbol || first?.currency || '',
+    market: first?.market_name || '',
+    shop: first?.shop_name || '',
+    draft: !!first?.draft,
+  }
+})
+
+function openPricing(): void {
+  ui.settingsTab = 'pricing'
+  ui.settingsOpen = true
+}
 </script>
 
 <template>
@@ -33,9 +52,15 @@ const totalCost = computed(() =>
       {{ selectedDerived.totals.sheets }} листов · КПД
       {{ selectedDerived.totals.kpd }}%
     </span>
-    <span v-if="totalCost" class="statusbar__item">
-      · смета {{ new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(totalCost) }} ₽
-    </span>
+    <button
+      v-if="totalCost" class="statusbar__item statusbar__cost"
+      title="Открыть рынок / цех / поставщика"
+      @click="openPricing"
+    >
+      · смета {{ new Intl.NumberFormat(costMeta.locale, { maximumFractionDigits: 0 }).format(totalCost) }} {{ costMeta.symbol }}
+      <span class="dim">{{ costMeta.market }}<template v-if="costMeta.shop"> · {{ costMeta.shop }}</template></span>
+      <span v-if="costMeta.draft" class="statusbar__draft">заготовка</span>
+    </button>
     <span class="statusbar__spacer"></span>
 
     <span v-if="state.error" class="statusbar__item statusbar__error" :title="state.error">

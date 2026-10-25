@@ -28,6 +28,8 @@ class Part:
     grain: str = ""              # 'по высоте' | ''
     grain_len: float = 0.0       # длина волокна вдоль длинной оси листа
     front_key: str = ""          # какой торец считать ПЕРЕДНИМ (видимым)
+    # тип кромки по сторонам: pvc_2 / pvc_04 / abs_2 / laser_1 / none
+    edge_kind: dict = field(default_factory=dict)
 
     def saw(self):
         """Пильный размер = чистовой минус кромки по сторонам."""
@@ -137,6 +139,7 @@ def merge_parts(parts: list[Part]) -> list[Part]:
         key = (
             p.name, p.material, round(p.w, 1), round(p.h, 1),
             tuple(sorted((k, round(v, 2)) for k, v in p.edges.items())),
+            tuple(sorted(p.edge_kind.items())),
             p.grain, round(p.grain_len, 1), p.front_key,
         )
         found = index.get(key)
@@ -144,7 +147,7 @@ def merge_parts(parts: list[Part]) -> list[Part]:
             found.qty += p.qty
             continue
         copy = Part(p.name, p.qty, p.w, p.h, p.material, dict(p.edges),
-                    p.grain, p.grain_len, p.front_key)
+                    p.grain, p.grain_len, p.front_key, dict(p.edge_kind))
         index[key] = copy
         out.append(copy)
     return out
@@ -162,3 +165,99 @@ def segment(name, length, height, cfg: Config, front_key="", edges=None,
         out.append(Part(nm, 1, round(seg, 1), height, material,
                         dict(edges or {}), front_key=front_key))
     return out
+
+
+def _edge_type(types, value):
+    """Найти тип кромки по id или толщине."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        for t in types:
+            if abs(t.thickness - float(value)) < 1e-6:
+                return t
+        return None
+    sid = str(value)
+    for t in types:
+        if t.id == sid:
+            return t
+    for t in types:
+        if str(t.thickness) == sid:
+            return t
+    return None
+
+
+def _side_key(part: Part, key: str) -> str | None:
+    """Семантические стороны: front/back → локальный ключ стороны."""
+    k = str(key)
+    if k in ("left", "right", "top", "bottom"):
+        return k
+    if k in ("front", "перед", "ПЕРЕД"):
+        return part.front_key or None
+    if k in ("back", "зад"):
+        opposite = {"left": "right", "right": "left",
+                    "top": "bottom", "bottom": "top"}
+        return opposite.get(part.front_key or "")
+    return None
+
+
+def apply_edge_policy(parts: list[Part], policy: dict | None,
+                      types: list) -> list[Part]:
+    """Применить правила/переопределения кромки к готовым деталям.
+
+    policy:
+      visible: id/толщина видимой кромки (перекрасить все видимые)
+      hidden:  id/толщина скрытой кромки
+      byPart:  { "Полка": { "front": "pvc_2", "top": "none" }, ... }
+               ключ может заканчиваться на * (префикс);
+               значение: auto | none | id типа | толщина
+
+    Функция не меняет геометрию — только карту кромки до раскроя.
+    """
+    if not isinstance(policy, dict) or not parts:
+        return parts
+    types = types or []
+    visible = _edge_type(types, policy.get("visible"))
+    hidden = _edge_type(types, policy.get("hidden"))
+    by_part = policy.get("byPart") or {}
+
+    def matches(name: str, key: str) -> bool:
+        return name == key or (key.endswith("*") and name.startswith(key[:-1]))
+
+    for part in parts:
+        # 1) глобальная замена по категории видимости
+        for side, thick in list(part.edges.items()):
+            if not thick:
+                continue
+            target = visible if float(thick) >= 1.5 else hidden
+            if target is not None:
+                if target.id == "none" or target.thickness <= 0:
+                    part.edges.pop(side, None)
+                    part.edge_kind.pop(side, None)
+                else:
+                    part.edges[side] = float(target.thickness)
+                    part.edge_kind[side] = target.id
+        # 2) переопределения по детали
+        rules: dict = {}
+        for key, rule in by_part.items():
+            if isinstance(rule, dict) and matches(part.name, str(key)):
+                rules.update(rule)
+        for key, value in rules.items():
+            side = _side_key(part, key)
+            if side is None:
+                continue
+            if value in (None, "auto", "", True):
+                continue
+            if value in ("none", "off", False, 0):
+                part.edges.pop(side, None)
+                part.edge_kind.pop(side, None)
+                continue
+            et = _edge_type(types, value)
+            if et is None:
+                continue
+            if et.id == "none" or et.thickness <= 0:
+                part.edges.pop(side, None)
+                part.edge_kind.pop(side, None)
+            else:
+                part.edges[side] = float(et.thickness)
+                part.edge_kind[side] = et.id
+    return parts

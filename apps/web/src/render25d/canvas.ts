@@ -236,6 +236,30 @@ function drawFace(
     ctx.fillStyle = f.color
     ctx.fill()
   }
+  // схематичный вид: горизонтальные пласти штрихуем, чтобы крыша/дно/полки
+  // не сливались с вертикальными боковинами
+  if (style === 'schematic' && Math.abs(f.normal[2]) > 0.7 &&
+      f.kind !== 'floor' && f.pts.length > 2) {
+    ctx.save()
+    path(ctx, f.pts)
+    ctx.clip()
+    ctx.strokeStyle = 'rgba(20, 24, 28, 0.16)'
+    ctx.lineWidth = 0.8
+    const xs = f.pts.map((p) => p.x)
+    const ys = f.pts.map((p) => p.y)
+    const minX = Math.min(...xs)
+    const maxX = Math.max(...xs)
+    const minY = Math.min(...ys)
+    const maxY = Math.max(...ys)
+    for (let x = minX - (maxY - minY); x < maxX; x += 7) {
+      ctx.beginPath()
+      ctx.moveTo(x, maxY)
+      ctx.lineTo(x + (maxY - minY), minY)
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
+
   ctx.restore()
 
   // у пола не рисуем контур: треугольники триангуляции дают видимые швы

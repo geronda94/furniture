@@ -12,7 +12,7 @@ import {
 } from '../render25d/canvas'
 import { clamp } from '../render25d/math'
 import type { Camera, Face, Materials, PlacedObject, Vec3 } from '../render25d/types'
-import { derived, effectiveMaterials, partAnimValues, state } from '../state/project'
+import { derived, effectiveMaterials, partAnimValues, state, ui } from '../state/project'
 import { moduleInfo, relationsFor, sizeLabel } from '../module/info'
 import { resolveObjectMaterial } from '../material/vars'
 
@@ -27,13 +27,17 @@ const props = withDefaults(
     fill?: boolean
     view?: 'iso' | 'front' | 'side' | 'top'
     schematic?: boolean
+    /** что показывать: всё, только каркас, фасады, ящики или полки */
+    scene?: 'all' | 'carcass' | 'fronts' | 'drawers' | 'shelves'
   }>(),
   { height: 190, showDims: false, compact: false, part: null,
-    drawerId: null, fill: false, view: 'iso', schematic: false },
+    drawerId: null, fill: false, view: 'iso', schematic: false,
+    scene: 'all' },
 )
 
 const emit = defineEmits<{
   (e: 'pick', part: number | null): void
+  (e: 'toggle', part: number): void
 }>()
 
 const canvasEl = ref<HTMLCanvasElement | null>(null)
@@ -66,9 +70,30 @@ let lastX = 0
 let lastY = 0
 
 function visible(i: number): boolean {
-  if (props.drawerId == null) return true
   const o = derived[props.instanceId]?.objects[i]
-  return !!o && o.drawer_id === props.drawerId
+  if (!o) return false
+  if (props.drawerId != null && o.drawer_id !== props.drawerId) return false
+  const isFacade = o.kind === 'door' || o.kind === 'drawerfront'
+  if (!ui.facades && isFacade) return false
+  switch (props.scene) {
+    case 'carcass':
+      if (isFacade || o.kind === 'drawerbox') return false
+      if (o.name === 'Полка' || o.name === 'Столешница') return false
+      if (o.name === 'Цоколь' || o.name === 'Ножка') return false
+      return true
+    case 'fronts':
+      return isFacade
+    case 'drawers':
+      return o.kind === 'drawerfront' || o.kind === 'drawerbox'
+    case 'shelves':
+      return o.name === 'Полка' || o.kind === 'corpus' || o.kind === 'back'
+    default:
+      return true
+  }
+}
+
+function hardwareVisible(): boolean {
+  return ui.hardware
 }
 
 function sceneMaterials(): Materials {
@@ -77,17 +102,10 @@ function sceneMaterials(): Materials {
   if (!props.schematic) return base
   const out: Materials = {}
   for (const [key, m] of Object.entries(base)) {
-    const light =
-      key === 'facade' ? '#c9c9c9' :
-      key === 'drawer' ? '#bdbdbd' :
-      key === 'back' ? '#efefef' :
-      key === 'worktop' ? '#d6d6d6' :
-      key === 'plinth' ? '#b8b8b8' :
-      '#e4e4e4'
+    // схема: цвета деталей сохраняем (иначе смена цвета «не реагирует»),
+    // убираем только текстуры и рисунок
     out[key] = {
       ...m,
-      color: light,
-      accent: '#9a9a9a',
       pattern: 'solid',
       texture: undefined,
       texScale: undefined,
@@ -105,12 +123,13 @@ function objects(): PlacedObject[] {
     placement: { id: props.instanceId, x: 0, y: 0, rot: 0 },
     anim: partAnimValues(inst, index),
     part: index,
-    material: !props.schematic && inst
+    material: inst
       ? resolveObjectMaterial(
           state.project.materials,
           state.project.materialVars,
           inst,
           o,
+          index,
         )
       : undefined,
   })).filter((p) => visible(p.part))
@@ -248,6 +267,43 @@ function dimsFor(
   return out
 }
 
+function drawHardware(proj: ReturnType<typeof buildScene>['projector']): void {
+  if (!ctx || !hardwareVisible()) return
+  const d = derived[props.instanceId]
+  if (!d) return
+  const dot = (p: [number, number, number], r: number, color: string) => {
+    const q = proj.point(p)
+    ctx!.beginPath()
+    ctx!.arc(q.x, q.y, r, 0, Math.PI * 2)
+    ctx!.fillStyle = color
+    ctx!.fill()
+    ctx!.strokeStyle = 'rgba(10, 12, 14, 0.55)'
+    ctx!.lineWidth = 0.8
+    ctx!.stroke()
+  }
+  d.objects.forEach((o, index) => {
+    if (!visible(index)) return
+    if (o.kind === 'door' || o.kind === 'drawerfront') {
+      if (!ui.facades) return
+      const z = o.z + o.sz - 60
+      const y = -6
+      if (o.kind === 'drawerfront') {
+        dot([o.x + o.sx / 2, y, o.z + o.sz / 2], 2.4, '#e8b25a')
+        return
+      }
+      const left = o.hinge !== 'right'
+      const hx = left ? o.x + o.sx - 60 : o.x + 60
+      dot([hx, y, z], 2.6, '#e8b25a')
+      const cy = o.z + o.sz / 2
+      const cupX = left ? o.x + 22.5 : o.x + o.sx - 22.5
+      for (const off of o.sz > 900 ? [-o.sz / 2 + 90, 0, o.sz / 2 - 90]
+        : [-o.sz / 2 + 90, o.sz / 2 - 90]) {
+        dot([cupX, y, cy + off], 2, '#7fb4df')
+      }
+    }
+  })
+}
+
 function draw(): void {
   if (!ctx) return
   const objectsList = objects()
@@ -362,6 +418,8 @@ function draw(): void {
     ctx.restore()
   }
 
+  drawHardware(proj)
+
   if (info && props.showDims) {
     drawDims(ctx, dimsFor(info, proj, sel), faces)
   }
@@ -408,6 +466,14 @@ function pick(e: PointerEvent): void {
   const r = c.getBoundingClientRect()
   const hit = pickPart(faces, e.clientX - r.left, e.clientY - r.top)
   emit('pick', hit ? hit.part : null)
+}
+
+function pickToggle(e: MouseEvent): void {
+  const c = canvasEl.value
+  if (!c) return
+  const r = c.getBoundingClientRect()
+  const hit = pickPart(faces, e.clientX - r.left, e.clientY - r.top)
+  if (hit) emit('toggle', hit.part)
 }
 
 function onDown(e: PointerEvent): void {
@@ -489,6 +555,15 @@ watch(
   },
 )
 
+watch(
+  () => [props.scene, props.drawerId, ui.facades, ui.hardware],
+  () => {
+    computeCorners()
+    if (!touched) fit()
+    invalidate()
+  },
+)
+
 onMounted(() => {
   ro = new ResizeObserver(resize)
   if (canvasEl.value) ro.observe(canvasEl.value)
@@ -509,6 +584,7 @@ onBeforeUnmount(() => {
       @pointerdown="onDown"
       @pointermove="onMove"
       @pointerup="onUp"
+      @dblclick="pickToggle"
       @wheel="onWheel"
     ></canvas>
     <div class="module-preview__views">
