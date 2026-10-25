@@ -12,8 +12,9 @@ import {
 } from '../render25d/canvas'
 import { clamp } from '../render25d/math'
 import type { Camera, Face, Materials, PlacedObject, Vec3 } from '../render25d/types'
-import { derived, partAnimValues, state } from '../state/project'
+import { derived, effectiveMaterials, partAnimValues, state } from '../state/project'
 import { moduleInfo, relationsFor, sizeLabel } from '../module/info'
+import { resolveObjectMaterial } from '../material/vars'
 
 const props = withDefaults(
   defineProps<{
@@ -71,9 +72,11 @@ function visible(i: number): boolean {
 }
 
 function sceneMaterials(): Materials {
-  if (!props.schematic) return state.project.materials
+  const inst = state.project.instances.find((i) => i.id === props.instanceId)
+  const base = effectiveMaterials(inst)
+  if (!props.schematic) return base
   const out: Materials = {}
-  for (const [key, m] of Object.entries(state.project.materials)) {
+  for (const [key, m] of Object.entries(base)) {
     const light =
       key === 'facade' ? '#c9c9c9' :
       key === 'drawer' ? '#bdbdbd' :
@@ -102,6 +105,14 @@ function objects(): PlacedObject[] {
     placement: { id: props.instanceId, x: 0, y: 0, rot: 0 },
     anim: partAnimValues(inst, index),
     part: index,
+    material: !props.schematic && inst
+      ? resolveObjectMaterial(
+          state.project.materials,
+          state.project.materialVars,
+          inst,
+          o,
+        )
+      : undefined,
   })).filter((p) => visible(p.part))
 }
 

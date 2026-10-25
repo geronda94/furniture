@@ -1,10 +1,13 @@
 import { computed, reactive } from 'vue'
 import {
   apiGetProject,
+  apiHandles,
   apiHardware,
   apiListProjects,
   apiPutProject,
+  apiRestoreVersion,
   apiSolve,
+  type HandleInfo,
   type RunnerInfo,
   type SolveResponse,
 } from '../api'
@@ -23,6 +26,9 @@ import {
 import type {
   Camera,
   Material,
+  MaterialPart,
+  MaterialScope,
+  MaterialVariable,
   Materials,
   Opening,
   OpeningKind,
@@ -80,9 +86,65 @@ export interface Params {
   plinthH: number
   /** толщина столешницы, мм (0 — без столешницы) */
   worktopT: number
+  /** зазоры фасадов, мм (наследуются из глобальных переменных проекта) */
+  gapSide: number
+  gapBetween: number
+  gapTop: number
+  gapBottom: number
   /** явные внутренние перегородки (0 — без перегородок) */
   dividers: number
+  /** id ручки из specs/hardware.yaml */
+  handle: string
 }
+
+/** Глобальные переменные проекта: значения по умолчанию для всех модулей. */
+export interface ProjectGlobals {
+  t: number
+  back: BackKind
+  backT: number
+  roof: boolean
+  reinforce: Reinforce
+  frame: Frame
+  hardware: Hardware
+  runners: string
+  plinthH: number
+  worktopT: number
+  gapSide: number
+  gapBetween: number
+  gapTop: number
+  gapBottom: number
+  /** применять изменения сразу ко всем модулям без собственных переопределений */
+  autoApply: boolean
+}
+
+export type ManagedParam =
+  | 't' | 'back' | 'backT' | 'roof' | 'reinforce' | 'frame'
+  | 'hardware' | 'runners' | 'plinthH' | 'worktopT'
+  | 'gapSide' | 'gapBetween' | 'gapTop' | 'gapBottom'
+
+export const MANAGED_PARAMS: ManagedParam[] = [
+  't', 'back', 'backT', 'roof', 'reinforce', 'frame',
+  'hardware', 'runners', 'plinthH', 'worktopT',
+  'gapSide', 'gapBetween', 'gapTop', 'gapBottom',
+]
+
+export const defaultGlobals = (): ProjectGlobals => ({
+  t: 16,
+  back: 'dvp',
+  backT: 4,
+  roof: true,
+  reinforce: 'auto',
+  frame: 'inset',
+  hardware: 'blum',
+  runners: 'tandem-21',
+  plinthH: 100,
+  worktopT: 38,
+  gapSide: 2,
+  gapBetween: 3,
+  gapTop: 2,
+  gapBottom: 2,
+  autoApply: true,
+})
 
 export interface Instance {
   id: string
@@ -96,6 +158,10 @@ export interface Instance {
   /** напольная мебель: Z залочен, пока не разлочат */
   zLocked: boolean
   params: Params
+  /** переопределения параметров относительно глобальных переменных проекта */
+  overrides?: ManagedParam[]
+  /** материалы только для этого модуля (перекрывают материалы проекта) */
+  materials?: Materials
   /** анимация субобъектов: ключ (door:N | drawer:N) → набор каналов */
   anim?: Record<string, ChannelSet>
   /** @deprecated миграция старых проектов */
@@ -371,7 +437,9 @@ export interface Project {
   room: RoomDims
   instances: Instance[]
   folders: Folder[]
+  globals: ProjectGlobals
   materials: Materials
+  materialVars: MaterialVariable[]
   views: SavedView[]
   log?: LogEntry[]
 }
@@ -449,6 +517,26 @@ export const MATERIAL_ROLES: { key: string; label: string }[] = [
   { key: 'ceiling', label: 'Потолок' },
 ]
 
+/** Параметры модуля, которые берутся из глобальных переменных проекта. */
+export function globalsToParams(g: ProjectGlobals): Pick<Params, ManagedParam> {
+  return {
+    t: g.t,
+    back: g.back,
+    backT: g.backT,
+    roof: g.roof,
+    reinforce: g.reinforce,
+    frame: g.frame,
+    hardware: g.hardware,
+    runners: g.runners,
+    plinthH: g.plinthH,
+    worktopT: g.worktopT,
+    gapSide: g.gapSide,
+    gapBetween: g.gapBetween,
+    gapTop: g.gapTop,
+    gapBottom: g.gapBottom,
+  }
+}
+
 export const defaultParams = (): Params => ({
   W: 600,
   H: 720,
@@ -467,7 +555,12 @@ export const defaultParams = (): Params => ({
   mount: 'floor',
   plinthH: 100,
   worktopT: 38,
+  gapSide: 2,
+  gapBetween: 3,
+  gapTop: 2,
+  gapBottom: 2,
   dividers: 0,
+  handle: 'bar-128',
 })
 
 /** Разумное число дверей по ширине (для новых модулей и смены ширины). */
@@ -526,7 +619,9 @@ export function defaultProject(): Project {
       },
     ],
     folders: [],
+    globals: defaultGlobals(),
     materials: JSON.parse(JSON.stringify(DEFAULT_MATERIALS)),
+    materialVars: [],
     views: [],
     log: [],
   }
@@ -574,6 +669,7 @@ function sanitizeParams(p: Params): Params {
     drawers: clamp(Math.round(p.drawers), 0, 6),
     shelves: clamp(Math.round(p.shelves), 0, 8),
     dividers: clamp(Math.round(Number(p.dividers) || 0), 0, 4),
+    handle: String(p.handle || 'bar-128'),
     frame: p.frame === 'overlay' ? 'overlay' : 'inset',
     hardware: (['blum', 'hettich', 'gtv'] as const).includes(p.hardware)
       ? p.hardware
@@ -587,6 +683,10 @@ function sanitizeParams(p: Params): Params {
     mount: p.mount === 'wall' ? 'wall' : 'floor',
     plinthH: clamp(Math.round(Number(p.plinthH ?? 100)), 0, 300),
     worktopT: clamp(Math.round(Number(p.worktopT ?? 38)), 0, 80),
+    gapSide: clamp(Number(p.gapSide ?? 2), 0, 10),
+    gapBetween: clamp(Number(p.gapBetween ?? 3), 1, 8),
+    gapTop: clamp(Number(p.gapTop ?? 2), 0, 10),
+    gapBottom: clamp(Number(p.gapBottom ?? 2), 0, 10),
     fronts: fronts.length ? fronts : undefined,
     cutouts: cutouts.length ? cutouts : undefined,
     drawerHeights:
@@ -596,6 +696,36 @@ function sanitizeParams(p: Params): Params {
             .filter((v) => v > 0)
         : undefined,
   }
+}
+
+function normalizeMaterialVars(raw: unknown): MaterialVariable[] {
+  if (!Array.isArray(raw)) return []
+  const parts = new Set<MaterialPart>([
+    'carcass', 'sides', 'shelf', 'divider', 'door', 'drawerFront',
+    'drawerBox', 'back', 'worktop', 'plinth', 'leg',
+  ])
+  return raw
+    .filter((v) => v && typeof v === 'object')
+    .slice(0, 60)
+    .map((v, i) => {
+      const r = v as Partial<MaterialVariable>
+      const material = sanitizeMaterial(r.material)
+      if (!material) return null
+      const scope: MaterialScope = r.scope === 'floor' || r.scope === 'wall'
+        ? r.scope : 'all'
+      const selected = Array.isArray(r.parts)
+        ? [...new Set(r.parts.filter((p): p is MaterialPart => parts.has(p as MaterialPart)))]
+        : []
+      return {
+        id: String(r.id || `mv${i + 1}`),
+        name: String(r.name || `Переменная ${i + 1}`),
+        enabled: r.enabled !== false,
+        scope,
+        parts: selected.length ? selected : ['carcass' as MaterialPart],
+        material,
+      }
+    })
+    .filter((v): v is MaterialVariable => !!v)
 }
 
 export function wallLength(wall: WallIndex, room: RoomDims): number {
@@ -637,9 +767,75 @@ function normalizeOpenings(
     )
 }
 
+function sanitizeMaterial(raw: unknown): Material | null {
+  if (!raw || typeof raw !== 'object') return null
+  const m = raw as Partial<Material>
+  const color = typeof m.color === 'string' && /^#[0-9a-f]{3,8}$/i.test(m.color)
+    ? m.color
+    : '#b9b7b1'
+  const pattern = (['solid', 'wood', 'stone', 'metal'] as const)
+    .includes(m.pattern as Material['pattern'])
+    ? (m.pattern as Material['pattern'])
+    : 'solid'
+  return {
+    name: String(m.name || 'Материал'),
+    color,
+    accent: typeof m.accent === 'string' ? m.accent : color,
+    pattern,
+    texture: typeof m.texture === 'string' && m.texture ? m.texture : undefined,
+    texScale: Number(m.texScale) > 0 ? Number(m.texScale) : undefined,
+  }
+}
+
+function normalizeMaterials(raw: unknown): Materials {
+  const out: Materials = { ...DEFAULT_MATERIALS }
+  if (!raw || typeof raw !== 'object') return out
+  for (const [role, value] of Object.entries(raw as Record<string, unknown>)) {
+    const m = sanitizeMaterial(value)
+    if (m) out[role] = m
+  }
+  return out
+}
+
+/** Переопределения материалов модуля: только заданные роли, без дефолтов. */
+function normalizeMaterialOverrides(raw: unknown): Materials | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const out: Materials = {}
+  for (const [role, value] of Object.entries(raw as Record<string, unknown>)) {
+    const m = sanitizeMaterial(value)
+    if (m) out[role] = m
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+function normalizeGlobals(raw: unknown): ProjectGlobals {
+  const g = { ...defaultGlobals(), ...((raw ?? {}) as Partial<ProjectGlobals>) }
+  return {
+    t: [10, 16, 18, 22].includes(Number(g.t)) ? Number(g.t) : 16,
+    back: (['dvp', 'same', 'cardboard', 'none'] as const).includes(g.back)
+      ? g.back : 'dvp',
+    backT: clamp(Math.round(Number(g.backT) || 4), 1, 18),
+    roof: g.roof !== false,
+    reinforce: (['auto', 'on', 'off'] as const).includes(g.reinforce)
+      ? g.reinforce : 'auto',
+    frame: g.frame === 'overlay' ? 'overlay' : 'inset',
+    hardware: (['blum', 'hettich', 'gtv'] as const).includes(g.hardware)
+      ? g.hardware : 'blum',
+    runners: String(g.runners || 'tandem-21'),
+    plinthH: clamp(Math.round(Number(g.plinthH ?? 100)), 0, 300),
+    worktopT: clamp(Math.round(Number(g.worktopT ?? 38)), 0, 80),
+    gapSide: clamp(Number(g.gapSide ?? 2), 0, 10),
+    gapBetween: clamp(Number(g.gapBetween ?? 3), 1, 8),
+    gapTop: clamp(Number(g.gapTop ?? 2), 0, 10),
+    gapBottom: clamp(Number(g.gapBottom ?? 2), 0, 10),
+    autoApply: g.autoApply !== false,
+  }
+}
+
 function normalizeProject(raw: unknown): Project {
   const d = (raw ?? {}) as Partial<Project>
   const base = defaultProject()
+  const globals = normalizeGlobals(d.globals)
   const instances = (d.instances?.length ? d.instances : base.instances).map(
     (i, idx) => ({
       id: i.id || `i${Math.random().toString(36).slice(2, 7)}`,
@@ -650,7 +846,25 @@ function normalizeProject(raw: unknown): Project {
       z: Math.round(Number(i.z) || 0),
       rot: Number(i.rot) || 0,
       zLocked: i.zLocked !== false,
-      params: sanitizeParams({ ...defaultParams(), ...(i.params || {}) }),
+      params: sanitizeParams({
+        ...defaultParams(),
+        ...globalsToParams(globals),
+        ...(i.params || {}),
+      }),
+      overrides: (() => {
+        if (Array.isArray(i.overrides)) {
+          return i.overrides.filter((k): k is ManagedParam =>
+            MANAGED_PARAMS.includes(k as ManagedParam))
+        }
+        // старые проекты: сохраняем отличие от глобальных как переопределение
+        const raw = (i.params ?? {}) as unknown as Record<string, unknown>
+        const base = globalsToParams(globals) as unknown as Record<string, unknown>
+        const diff = MANAGED_PARAMS.filter(
+          (k) => Object.prototype.hasOwnProperty.call(raw, k) && raw[k] !== base[k],
+        )
+        return diff.length ? diff : undefined
+      })(),
+      materials: normalizeMaterialOverrides(i.materials),
       anim: (i.anim as Record<string, ChannelSet> | undefined) ?? {},
       ...((i as Instance & { doorsOpen?: boolean }).doorsOpen
         ? { legacyDoorsOpen: true }
@@ -747,7 +961,9 @@ function normalizeProject(raw: unknown): Project {
             ),
           }))
       : [],
-    materials: { ...DEFAULT_MATERIALS, ...(d.materials ?? {}) },
+    globals,
+    materials: normalizeMaterials(d.materials),
+    materialVars: normalizeMaterialVars(d.materialVars),
     log: Array.isArray(d.log)
       ? d.log
           .filter((x) => x && typeof x.label === 'string')
@@ -833,6 +1049,9 @@ export const state = reactive({
   objectLeft: 0.38,
   busy: false,
   savedAt: '',
+  saveState: 'idle' as 'idle' | 'dirty' | 'saving' | 'saved' | 'error',
+  saveError: '',
+  dirty: false,
   error: '',
 })
 
@@ -851,6 +1070,29 @@ export const ui = reactive({
     open: false,
     mode: 'quick' as 'quick' | 'full',
   },
+  /** мобильная панель «Объекты» открыта */
+  panelOpen: false,
+  /** меню «Ещё» (файлы, версии, КП, экспорт) */
+  moreOpen: false,
+  /** модалка проектов на диске */
+  projectsOpen: false,
+  /** журнал изменений */
+  historyOpen: false,
+  /** короткое уведомление с действием «Отменить» */
+  toast: null as null | {
+    id: number
+    text: string
+    action: 'undo' | null
+    kind: 'info' | 'success' | 'error'
+  },
+  /** модалка настроек проекта */
+  settingsOpen: false,
+  /** вкладка настроек проекта */
+  settingsTab: 'globals' as 'globals' | 'materials' | 'vars',
+  /** модалка КП */
+  quoteOpen: false,
+  /** модалка версий проекта */
+  versionsOpen: false,
 })
 
 /** Последняя позиция курсора (clientX/clientY) — для привязки плавающих окон. */
@@ -981,11 +1223,18 @@ export function partAnimValues(
 
 /** Каталог направляющих (загружается один раз из /api/hardware). */
 export const runners = reactive<RunnerInfo[]>([])
+export const handles = reactive<HandleInfo[]>([])
 
 export async function loadHardware(): Promise<void> {
   try {
     const list = await apiHardware()
     runners.splice(0, runners.length, ...list)
+    try {
+      const h = await apiHandles()
+      handles.splice(0, handles.length, ...h)
+    } catch {
+      /* ручки не критичны */
+    }
     touch()
   } catch {
     /* каталог не критичен для рендера */
@@ -1496,6 +1745,7 @@ export function deleteFolder(folderId: string): void {
   )
   touch()
   scheduleSave()
+  notify('Папка удалена', 'undo')
 }
 
 export function folderOf(id: string): Folder | null {
@@ -1708,8 +1958,11 @@ export function deleteSelection(): void {
     : state.selection
       ? [state.selection]
       : []
-  for (const id of ids) deleteInstance(id)
+  if (!ids.length) return
+  pushHistory(`Удалено модулей: ${ids.length}`)
+  for (const id of ids) deleteInstance(id, false)
   state.selected = []
+  notify(`Удалено модулей: ${ids.length}`, 'undo')
 }
 
 export function duplicateSelection(): void {
@@ -1762,8 +2015,11 @@ function scheduleSolve(inst: Instance): void {
 }
 
 let saveTimer = 0
+let saveChain: Promise<boolean> = Promise.resolve(true)
 
 function scheduleSave(): void {
+  state.dirty = true
+  state.saveState = 'dirty'
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = window.setTimeout(() => {
     saveTimer = 0
@@ -1771,18 +2027,87 @@ function scheduleSave(): void {
   }, 900)
 }
 
-export async function saveProject(): Promise<void> {
-  try {
-    const doc = JSON.parse(JSON.stringify(state.project))
-    await apiPutProject(state.projectId, doc)
-    state.savedAt = new Date().toLocaleTimeString('ru-RU', {
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-    state.error = ''
-  } catch (e) {
-    state.error = e instanceof Error ? e.message : String(e)
+let toastSeq = 0
+let toastTimer = 0
+
+export function notify(
+  text: string,
+  action: 'undo' | null = null,
+  kind: 'info' | 'success' | 'error' = 'info',
+): void {
+  if (toastTimer) clearTimeout(toastTimer)
+  ui.toast = { id: ++toastSeq, text, action, kind }
+  toastTimer = window.setTimeout(() => {
+    toastTimer = 0
+    if (ui.toast?.id === toastSeq) ui.toast = null
+  }, 6500)
+}
+
+export function dismissToast(): void {
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = 0
+  ui.toast = null
+}
+
+/**
+ * Сохраняет проект в очередь: два одновременных PUT не могут обогнать друг
+ * друга, а новый снимок всегда уходит после предыдущего.
+ */
+export async function saveProject(): Promise<boolean> {
+  if (saveTimer) {
+    clearTimeout(saveTimer)
+    saveTimer = 0
   }
+  const id = state.projectId
+  const serialized = JSON.stringify(state.project)
+  state.dirty = false
+  state.saveState = 'saving'
+  const run = async (): Promise<boolean> => {
+    try {
+      await apiPutProject(id, JSON.parse(serialized))
+      if (state.projectId === id) {
+        state.savedAt = new Date().toLocaleTimeString('ru-RU', {
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+        state.saveError = ''
+        if (!state.dirty) state.saveState = 'saved'
+      }
+      return true
+    } catch (e) {
+      const raw = e instanceof Error ? e.message : String(e)
+      const msg = /failed to fetch|networkerror|load failed/i.test(raw)
+        ? 'Нет связи с сервером — изменения не сохранены'
+        : raw
+      if (state.projectId === id) {
+        state.dirty = true
+        state.saveError = msg
+        state.saveState = 'error'
+        state.error = msg
+      }
+      return false
+    }
+  }
+  const next = saveChain.then(run, run)
+  saveChain = next
+  return next
+}
+
+/** Дождаться сохранения перед сменой проекта/версии. */
+export async function flushSave(): Promise<boolean> {
+  if (saveTimer) {
+    clearTimeout(saveTimer)
+    saveTimer = 0
+  }
+  if (!state.dirty && state.saveState !== 'saving') return true
+  return saveProject()
+}
+
+/** Последний шанс сохранить при закрытии вкладки. */
+export function saveOnExit(): void {
+  if (!state.dirty) return
+  const doc = JSON.parse(JSON.stringify(state.project))
+  void apiPutProject(state.projectId, doc, true).catch(() => {})
 }
 
 export function setMount(id: string, mount: 'floor' | 'wall'): void {
@@ -1806,6 +2131,12 @@ export function updateParams(patch: Partial<Params>): void {
   const inst = selectedInstance.value
   if (!inst) return
   pushHistory('Параметры модуля')
+  const managed = MANAGED_PARAMS.filter((k) => k in patch)
+  if (managed.length) {
+    const set = new Set<ManagedParam>(inst.overrides ?? [])
+    for (const k of managed) set.add(k)
+    inst.overrides = [...set]
+  }
   const next = { ...inst.params, ...patch }
   // При смене ширины не оставляем «две двери на 400 мм»: число створок
   // подстраивается под стандарт, если компоновка не задана вручную.
@@ -1813,6 +2144,68 @@ export function updateParams(patch: Partial<Params>): void {
     next.doors = Math.min(next.doors, suggestDoors(Number(patch.W)))
   }
   inst.params = sanitizeParams(next)
+  touch()
+  scheduleSolve(inst)
+  scheduleSave()
+}
+
+/** Эффективные материалы модуля: проект + переопределения модуля. */
+export function effectiveMaterials(inst?: Instance | null): Materials {
+  return inst?.materials
+    ? { ...state.project.materials, ...inst.materials }
+    : state.project.materials
+}
+
+export function isParamOverridden(inst: Instance, key: ManagedParam): boolean {
+  return !!inst.overrides?.includes(key)
+}
+
+/** Изменить глобальные переменные проекта и (по флагу) применить к модулям. */
+export function setGlobals(patch: Partial<ProjectGlobals>): void {
+  pushHistory('Глобальные переменные')
+  const g = state.project.globals
+  Object.assign(g, normalizeGlobals({ ...g, ...patch }))
+  if (g.autoApply) {
+    for (const inst of state.project.instances) {
+      const params = globalsToParams(g)
+      for (const key of MANAGED_PARAMS) {
+        if (inst.overrides?.includes(key)) continue
+        ;(inst.params as unknown as Record<string, unknown>)[key] =
+          (params as unknown as Record<string, unknown>)[key]
+      }
+    }
+    void solveAll()
+  }
+  touch()
+  scheduleSave()
+}
+
+/** Принудительно применить глобальные значения ко всем модулям. */
+export function applyGlobalsToAll(): void {
+  pushHistory('Глобальные значения для всех модулей')
+  const params = globalsToParams(state.project.globals)
+  for (const inst of state.project.instances) {
+    inst.overrides = undefined
+    inst.params = sanitizeParams({ ...inst.params, ...params })
+  }
+  touch()
+  void solveAll()
+  scheduleSave()
+}
+
+/** Сбросить переопределения параметров модуля к глобальным значениям. */
+export function resetParamOverrides(id: string, keys?: ManagedParam[]): void {
+  const inst = state.project.instances.find((i) => i.id === id)
+  if (!inst) return
+  pushHistory('Сброс к глобальным значениям')
+  const reset = new Set<ManagedParam>(keys ?? MANAGED_PARAMS)
+  inst.overrides = (inst.overrides ?? []).filter((k) => !reset.has(k))
+  const params = globalsToParams(state.project.globals)
+  for (const key of reset) {
+    ;(inst.params as unknown as Record<string, unknown>)[key] =
+      (params as unknown as Record<string, unknown>)[key]
+  }
+  inst.params = sanitizeParams(inst.params)
   touch()
   scheduleSolve(inst)
   scheduleSave()
@@ -2249,9 +2642,12 @@ export function addInstance(
     MODULE_PRESETS.find((p) => p.key === presetKey) ?? MODULE_PRESETS[0]
   const merged = {
     ...defaultParams(),
+    ...globalsToParams(state.project.globals),
     ...preset.params,
     ...(override ?? {}),
   }
+  const explicit = { ...preset.params, ...(override ?? {}) }
+  const overrides = MANAGED_PARAMS.filter((k) => k in explicit)
   // Узкому корпусу — одна створка, если компоновка не задана явно.
   if (!merged.fronts?.length) {
     merged.doors = Math.min(
@@ -2279,6 +2675,7 @@ export function addInstance(
     rot: 0,
     zLocked: params.mount === 'wall' ? false : true,
     params,
+    overrides: overrides.length ? overrides : undefined,
   }
   const snapped = snapPlacement(inst, pos.x, pos.y, false)
   let fx = snapped.x
@@ -2332,11 +2729,11 @@ export function duplicateInstance(id: string): void {
   scheduleSave()
 }
 
-export function deleteInstance(id: string): void {
+export function deleteInstance(id: string, record = true): void {
   const i = state.project.instances.findIndex((x) => x.id === id)
   if (i < 0) return
   if (partSelection.instanceId === id) selectPart(id, null)
-  pushHistory('Удалён модуль')
+  if (record) pushHistory('Удалён модуль')
   state.project.instances.splice(i, 1)
   delete derived[id]
   state.selected = state.selected.filter((x) => x !== id)
@@ -2351,6 +2748,7 @@ export function deleteInstance(id: string): void {
   clearGuides()
   touch()
   scheduleSave()
+  if (record) notify('Модуль удалён', 'undo')
 }
 
 export function renameInstance(id: string, name: string): void {
@@ -2362,10 +2760,143 @@ export function renameInstance(id: string, name: string): void {
   scheduleSave()
 }
 
-export function setMaterial(role: string, patch: Partial<Material>): void {
-  pushHistory('Материал')
-  const cur = state.project.materials[role] ?? DEFAULT_MATERIALS[role]
-  state.project.materials[role] = { ...cur, ...patch }
+export function setMaterial(
+  role: string,
+  patch: Partial<Material>,
+  instanceId?: string,
+): void {
+  pushHistory(instanceId ? 'Материал модуля' : 'Материал проекта')
+  if (instanceId) {
+    const inst = state.project.instances.find((i) => i.id === instanceId)
+    if (!inst) return
+    const cur = effectiveMaterials(inst)[role] ?? DEFAULT_MATERIALS[role]
+    inst.materials = { ...(inst.materials ?? {}), [role]: { ...cur, ...patch } }
+  } else {
+    const cur = state.project.materials[role] ?? DEFAULT_MATERIALS[role]
+    state.project.materials[role] = { ...cur, ...patch }
+  }
+  touch()
+  scheduleSave()
+}
+
+/** Сбросить материал модуля к материалу проекта (role не задан — все). */
+export function resetInstanceMaterial(instanceId: string, role?: string): void {
+  const inst = state.project.instances.find((i) => i.id === instanceId)
+  if (!inst?.materials) return
+  pushHistory('Сброс материала модуля')
+  if (role) {
+    const next = { ...inst.materials }
+    delete next[role]
+    inst.materials = Object.keys(next).length ? next : undefined
+  } else {
+    inst.materials = undefined
+  }
+  touch()
+  scheduleSave()
+}
+
+export function instanceMaterialOverridden(
+  inst: Instance | null | undefined,
+  role: string,
+): boolean {
+  return !!inst?.materials?.[role]
+}
+
+export function addMaterialVar(
+  patch: Partial<Omit<MaterialVariable, 'material'>> & {
+    material?: Partial<Material>
+  } = {},
+): string {
+  pushHistory('Переменная материала')
+  const id = `mv${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`
+  const material = {
+    ...JSON.parse(JSON.stringify(DEFAULT_MATERIALS.corpus)) as Material,
+    ...(patch.material ?? {}),
+  }
+  state.project.materialVars.push({
+    id,
+    name: patch.name || `Переменная ${state.project.materialVars.length + 1}`,
+    enabled: patch.enabled !== false,
+    scope: patch.scope ?? 'all',
+    parts: patch.parts?.length ? [...patch.parts] : ['carcass'],
+    material,
+  })
+  touch()
+  scheduleSave()
+  return id
+}
+
+export function updateMaterialVar(
+  id: string,
+  patch: Partial<Omit<MaterialVariable, 'material'>> & {
+    material?: Partial<Material>
+  },
+): void {
+  const v = state.project.materialVars.find((x) => x.id === id)
+  if (!v) return
+  pushHistory('Переменная материала')
+  if (patch.name != null) v.name = patch.name
+  if (patch.enabled != null) v.enabled = patch.enabled
+  if (patch.scope) v.scope = patch.scope
+  if (patch.parts) v.parts = [...new Set(patch.parts)]
+  if (patch.material) v.material = { ...v.material, ...patch.material }
+  touch()
+  scheduleSave()
+}
+
+export function removeMaterialVar(id: string): void {
+  if (!state.project.materialVars.some((v) => v.id === id)) return
+  pushHistory('Удаление переменной')
+  state.project.materialVars = state.project.materialVars.filter((v) => v.id !== id)
+  touch()
+  scheduleSave()
+}
+
+export function moveMaterialVar(id: string, delta: number): void {
+  const list = state.project.materialVars
+  const i = list.findIndex((v) => v.id === id)
+  const j = i + delta
+  if (i < 0 || j < 0 || j >= list.length) return
+  pushHistory('Порядок переменных')
+  const [v] = list.splice(i, 1)
+  list.splice(j, 0, v)
+  touch()
+  scheduleSave()
+}
+
+/** Базовый набор: корпуса напольный/навесной, фасады, ящики, полки, и т.д. */
+export function createDefaultMaterialVars(replace = false): void {
+  if (state.project.materialVars.length && !replace) return
+  pushHistory('Базовые переменные материалов')
+  const m = state.project.materials
+  const clone = (x: Material | undefined): Material =>
+    JSON.parse(JSON.stringify(x ?? DEFAULT_MATERIALS.corpus)) as Material
+  const stamp = Date.now().toString(36)
+  let seq = 0
+  const mk = (
+    name: string,
+    scope: MaterialScope,
+    parts: MaterialPart[],
+    material: Material,
+  ): MaterialVariable => ({
+    id: `mv${stamp}${++seq}`,
+    name,
+    enabled: true,
+    scope,
+    parts,
+    material: clone(material),
+  })
+  state.project.materialVars = [
+    mk('Напольный корпус', 'floor', ['carcass', 'sides', 'divider'], m.corpus),
+    mk('Навесной корпус', 'wall', ['carcass', 'sides', 'divider'], m.corpus),
+    mk('Фасады', 'all', ['door', 'drawerFront'], m.facade),
+    mk('Ящики', 'all', ['drawerBox'], m.drawer),
+    mk('Полки', 'all', ['shelf'], m.corpus),
+    mk('Задняя стенка', 'all', ['back'], m.back),
+    mk('Столешница', 'all', ['worktop'], m.worktop),
+    mk('Цоколь', 'all', ['plinth'], m.plinth),
+    mk('Опоры', 'all', ['leg'], m.leg),
+  ]
   touch()
   scheduleSave()
 }
@@ -2439,13 +2970,31 @@ export function deleteView(id: string): void {
   scheduleSave()
 }
 
-export function setTexture(role: string, texture: string | null): void {
-  pushHistory()
-  const cur = state.project.materials[role] ?? DEFAULT_MATERIALS[role]
-  state.project.materials[role] = {
-    ...cur,
-    texture: texture || undefined,
-    pattern: texture ? 'solid' : cur.pattern,
+export function setTexture(
+  role: string,
+  texture: string | null,
+  instanceId?: string,
+): void {
+  pushHistory(instanceId ? 'Текстура модуля' : 'Текстура проекта')
+  if (instanceId) {
+    const inst = state.project.instances.find((i) => i.id === instanceId)
+    if (!inst) return
+    const cur = effectiveMaterials(inst)[role] ?? DEFAULT_MATERIALS[role]
+    inst.materials = {
+      ...(inst.materials ?? {}),
+      [role]: {
+        ...cur,
+        texture: texture || undefined,
+        pattern: texture ? 'solid' : cur.pattern,
+      },
+    }
+  } else {
+    const cur = state.project.materials[role] ?? DEFAULT_MATERIALS[role]
+    state.project.materials[role] = {
+      ...cur,
+      texture: texture || undefined,
+      pattern: texture ? 'solid' : cur.pattern,
+    }
   }
   touch()
   scheduleSave()
@@ -2542,6 +3091,7 @@ export function removeWall(index: number): void {
   room.openings = room.openings.map((o) => clampOpening(o, room))
   touch()
   scheduleSave()
+  notify('Стена удалена', 'undo')
 }
 
 export function addPartition(): void {
@@ -2607,6 +3157,7 @@ export function removeWallItem(id: string): void {
   room.wallItems = room.wallItems.filter((w) => w.id !== id)
   touch()
   scheduleSave()
+  notify('Предмет со стены удалён', 'undo')
 }
 
 export function setSurface(
@@ -2680,6 +3231,7 @@ export function removeOpening(id: string): void {
   room.openings = room.openings.filter((o) => o.id !== id)
   touch()
   scheduleSave()
+  notify('Проём удалён', 'undo')
 }
 
 export function toggleDoors(id: string): void {
@@ -2768,7 +3320,30 @@ export async function listProjects() {
   return apiListProjects()
 }
 
+export async function restoreProjectVersion(vid: string): Promise<void> {
+  if (!(await flushSave())) {
+    throw new Error('Не удалось сохранить текущий проект перед восстановлением')
+  }
+  const { project } = await apiRestoreVersion(state.projectId, vid)
+  state.project = normalizeProject(project)
+  state.selection = state.project.instances[0]?.id ?? null
+  state.selected = state.selection ? [state.selection] : []
+  state.openingId = null
+  state.folderId = null
+  state.roomSelected = false
+  state.wallIndex = null
+  state.fitToken++
+  state.dirty = false
+  state.saveState = 'saved'
+  await solveAll()
+  applyLegacyOpenFlags()
+  touch()
+}
+
 export async function openProject(id: string): Promise<void> {
+  if (!(await flushSave())) {
+    throw new Error('Не удалось сохранить текущий проект перед открытием другого')
+  }
   const raw = await apiGetProject(id)
   state.project = normalizeProject(raw)
   state.projectId = id
@@ -2784,12 +3359,17 @@ export async function openProject(id: string): Promise<void> {
   } catch {
     /* ignore */
   }
+  state.dirty = false
+  state.saveState = 'saved'
   await solveAll()
   applyLegacyOpenFlags()
   touch()
 }
 
 export async function createProject(name: string): Promise<void> {
+  if (!(await flushSave())) {
+    throw new Error('Не удалось сохранить текущий проект перед созданием нового')
+  }
   const base = defaultProject()
   base.name = name.trim() || 'Новый проект'
   base.instances = []
@@ -2809,6 +3389,8 @@ export async function createProject(name: string): Promise<void> {
     /* ignore */
   }
   await saveProject()
+  state.dirty = false
+  state.saveState = 'saved'
   state.fitToken++
   touch()
 }

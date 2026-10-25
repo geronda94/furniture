@@ -24,6 +24,14 @@ export interface RunnerInfo {
   note: string
 }
 
+export interface HandleInfo {
+  id: string
+  name: string
+  brand: string
+  price: number
+  centers: number
+}
+
 export interface DrawerDims {
   id: number
   box_w: number
@@ -64,6 +72,49 @@ export interface CostInfo {
   total: number
 }
 
+export interface AssemblyOperation {
+  id: string
+  part: string
+  face: string
+  x: number
+  y: number
+  dia: number
+  depth: number
+  kind: string
+  hardware: string
+  section: number
+  qty: number
+  visibility: 'hidden' | 'visible'
+  requires_pattern: boolean
+  note: string
+  coord: string
+}
+
+export interface HardwarePlan {
+  hinge_model: string
+  handle_model: string
+  runner_model: string
+  hinges: number
+  hinge_plates: number
+  handles: number
+  confirmats: number
+  shelf_pins: number
+  system32_holes: number
+  slide_mounts: number
+  requires_pattern: number
+}
+
+export interface EdgePlanRow {
+  part: string
+  qty: number
+  material: string
+  w: number
+  h: number
+  front: string
+  summary: string
+  sides: Record<string, { thickness: number; label: string }>
+}
+
 export interface SolveResponse {
   schema: string
   product: string
@@ -71,6 +122,9 @@ export interface SolveResponse {
   objects: SceneObject[]
   bom: BomRow[]
   drilling: unknown[]
+  operations?: AssemblyOperation[]
+  hardware_plan?: HardwarePlan
+  edge_plan?: EdgePlanRow[]
   sheets: {
     material: string
     count: number
@@ -134,6 +188,13 @@ export async function apiHardware(): Promise<RunnerInfo[]> {
   return hardwareCache
 }
 
+export async function apiHandles(): Promise<HandleInfo[]> {
+  const r = await fetch('/api/hardware')
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  const data = (await r.json()) as { handles?: HandleInfo[] }
+  return data.handles ?? []
+}
+
 export async function apiSolve(product: unknown): Promise<SolveResponse> {
   const r = await fetch('/api/solve', {
     method: 'POST',
@@ -172,14 +233,89 @@ export async function apiListProjects(): Promise<ProjectRow[]> {
   return data.projects ?? []
 }
 
-export async function apiPutProject(id: string, doc: unknown): Promise<void> {
+export async function apiPutProject(
+  id: string,
+  doc: unknown,
+  keepalive = false,
+): Promise<void> {
   const r = await fetch(`/api/projects/${id}`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(doc),
+    keepalive,
   })
   if (!r.ok) {
     const text = await r.text().catch(() => '')
     throw new Error(text || `HTTP ${r.status}`)
   }
+}
+
+export interface ProjectVersion {
+  id: string
+  name: string
+  created: string
+  instances: number
+}
+
+export interface ProjectVersionDoc {
+  id: string
+  name: string
+  created: string
+  doc: unknown
+}
+
+export async function apiListVersions(pid: string): Promise<ProjectVersion[]> {
+  const r = await fetch(`/api/projects/${pid}/versions`)
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  const data = (await r.json()) as { versions: ProjectVersion[] }
+  return data.versions ?? []
+}
+
+export async function apiCreateVersion(
+  pid: string,
+  name?: string,
+): Promise<ProjectVersion> {
+  const r = await fetch(`/api/projects/${pid}/versions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  if (!r.ok) {
+    const text = await r.text().catch(() => '')
+    throw new Error(text || `HTTP ${r.status}`)
+  }
+  const data = (await r.json()) as { version: ProjectVersion }
+  return data.version
+}
+
+export async function apiGetVersion(
+  pid: string,
+  vid: string,
+): Promise<ProjectVersionDoc> {
+  const r = await fetch(`/api/projects/${pid}/versions/${vid}`)
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  return r.json()
+}
+
+export async function apiRestoreVersion(
+  pid: string,
+  vid: string,
+): Promise<{ project: unknown }> {
+  const r = await fetch(`/api/projects/${pid}/versions/${vid}/restore`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ backup: true }),
+  })
+  if (!r.ok) {
+    const text = await r.text().catch(() => '')
+    throw new Error(text || `HTTP ${r.status}`)
+  }
+  return r.json()
+}
+
+export async function apiDeleteVersion(pid: string, vid: string): Promise<void> {
+  const r = await fetch(`/api/projects/${pid}/versions/${vid}`, {
+    method: 'DELETE',
+  })
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
 }

@@ -16,7 +16,7 @@ function time(iso: string): string {
 <template>
   <Teleport to="body">
     <div class="modal" @click.self="emit('close')">
-      <section class="modal__win history">
+      <section class="modal__win history" role="dialog" aria-modal="true" aria-label="Журнал изменений">
         <header class="modal__head">
           <span class="modal__title">Журнал изменений</span>
           <span class="modal__sub">Ctrl+Z / Ctrl+Shift+Z</span>

@@ -97,6 +97,32 @@ export interface Opening {
 
 export type Materials = Record<string, Material>
 
+/** Гранулярная часть изделия, к которой применяется материал. */
+export type MaterialPart =
+  | 'carcass'
+  | 'sides'
+  | 'shelf'
+  | 'divider'
+  | 'door'
+  | 'drawerFront'
+  | 'drawerBox'
+  | 'back'
+  | 'worktop'
+  | 'plinth'
+  | 'leg'
+
+export type MaterialScope = 'all' | 'floor' | 'wall'
+
+/** Глобальная переменная материала (декор + к чему применяется). */
+export interface MaterialVariable {
+  id: string
+  name: string
+  enabled: boolean
+  scope: MaterialScope
+  parts: MaterialPart[]
+  material: Material
+}
+
 export interface Camera {
   yaw: number
   pitch: number
@@ -126,6 +152,10 @@ export interface PlacedObject {
   anim?: Record<string, number>
   /** индекс детали внутри модуля (для выделения элементов) */
   part?: number
+  /** материалы конкретного модуля (переопределения проекта) */
+  materials?: Materials
+  /** итоговый материал конкретной детали (после глобальных переменных) */
+  material?: Material
 }
 
 export interface Face {

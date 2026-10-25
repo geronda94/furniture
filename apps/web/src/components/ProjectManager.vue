@@ -58,7 +58,7 @@ onMounted(refresh)
 <template>
   <Teleport to="body">
     <div class="modal modal--projects" @click.self="emit('close')">
-      <section class="modal__win pm" ref="winEl" :style="dragStyle">
+      <section class="modal__win pm" ref="winEl" :style="dragStyle" role="dialog" aria-modal="true" aria-label="Проекты">
         <header class="modal__head" @pointerdown="onDragStart">
           <span class="modal__title">Проекты</span>
           <span class="modal__sub">файлы на диске</span>

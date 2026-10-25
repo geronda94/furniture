@@ -129,6 +129,27 @@ def gen_drilling(W, H, D, n_shelves, n_doors, roof, parts, cfg: Config):
     return holes
 
 
+def merge_parts(parts: list[Part]) -> list[Part]:
+    """Свести одинаковые детали (имя, размер, материал, кромка, текстура)."""
+    out: list[Part] = []
+    index: dict[tuple, Part] = {}
+    for p in parts:
+        key = (
+            p.name, p.material, round(p.w, 1), round(p.h, 1),
+            tuple(sorted((k, round(v, 2)) for k, v in p.edges.items())),
+            p.grain, round(p.grain_len, 1), p.front_key,
+        )
+        found = index.get(key)
+        if found is not None:
+            found.qty += p.qty
+            continue
+        copy = Part(p.name, p.qty, p.w, p.h, p.material, dict(p.edges),
+                    p.grain, p.grain_len, p.front_key)
+        index[key] = copy
+        out.append(copy)
+    return out
+
+
 def segment(name, length, height, cfg: Config, front_key="", edges=None,
             material="ЛДСП", max_len=None):
     """Длинную деталь (цоколь, столешница) режем сегментами по формату листа."""

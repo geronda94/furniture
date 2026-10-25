@@ -2,12 +2,51 @@
 <html lang="ru">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="dark" />
+    <link rel="icon" href="data:," />
     <title>Furniture — конструктор</title>
+    <style>
+      html, body { margin: 0; background: #101215; color: #e7e9ec; }
+      .boot {
+        position: fixed; inset: 0; z-index: 9999;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: 14px; background: #101215;
+        font: 13px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif;
+      }
+      .boot__mark {
+        width: 34px; height: 34px; border: 2px solid #e0a33e;
+        border-radius: 8px; transform: rotate(45deg); animation: boot-pulse 1.4s ease-in-out infinite;
+      }
+      .boot__title { font-size: 15px; font-weight: 650; letter-spacing: .04em; }
+      .boot__text { color: #8b929c; max-width: 320px; text-align: center; padding: 0 20px; }
+      .boot__retry {
+        display: none; margin-top: 6px; padding: 9px 16px; cursor: pointer;
+        color: #1b1305; background: #e0a33e; border: 0; border-radius: 6px;
+        font: inherit; font-weight: 650;
+      }
+      .boot--slow .boot__text::after { content: ' Похоже, загрузка затянулась.'; }
+      .boot--slow .boot__retry { display: inline-block; }
+      @keyframes boot-pulse { 50% { opacity: .35; transform: rotate(45deg) scale(.9); } }
+      @media (prefers-reduced-motion: reduce) { .boot__mark { animation: none; } }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div class="boot" id="boot">
+        <div class="boot__mark" aria-hidden="true"></div>
+        <div class="boot__title">FURNITURE</div>
+        <div class="boot__text">Загружаем конструктор и 3D-сцену…</div>
+        <button class="boot__retry" type="button" onclick="location.reload()">Повторить</button>
+      </div>
+    </div>
+    <noscript>Для работы конструктора нужен JavaScript.</noscript>
+    <script>
+      window.setTimeout(function () {
+        var b = document.getElementById('boot')
+        if (b) b.classList.add('boot--slow')
+      }, 15000)
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -872,7 +872,9 @@ export function buildScene(input: SceneInput): SceneResult {
   const moduleParts = new Map<string, Face[]>()
 
   for (const placed of objects) {
-    const mat = materials[placed.object.role] ?? materials.corpus ?? FALLBACK
+    const mats = placed.materials ?? materials
+    const mat = placed.material
+      ?? mats[placed.object.role] ?? mats.corpus ?? FALLBACK
     const info = boxInfo(placed, proj)
     infos.push(info)
 

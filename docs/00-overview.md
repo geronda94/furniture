@@ -11,8 +11,10 @@
 | Компонент | Где | Назначение |
 |---|---|---|
 | Правила проектирования | `docs/01…05` | Как правильно считать мебель |
-| Движок | `tools/engine.py`, `tools/kitchen.py` | Расчёт: деталировка, раскрой, DXF, 3D-данные |
-| 3D | `tools/blender_build.py` | Сборка сцены, анимация, рендер |
+| Движок | `tools/engine.py`, `tools/kitchen.py`, `tools/furniture_core/` | Расчёт: деталировка, раскрой, DXF, 3D-данные |
+| API | `apps/api/` | FastAPI: solve, проекты, материалы, фурнитура, действия ИИ |
+| Веб-конструктор | `apps/web/` | Vue 3 + Babylon.js + Canvas 2D (план/превью), мобильная раскладка |
+| 3D / видео | `tools/blender_build.py` | Сборка сцены, анимация, рендер |
 | Скилл агента | `skills/furniture-design/` | Правила в формате opencode-скилла |
 | Изделия | `projects/` | Конкретные заказы/модели |
 | Контент | `projects/<имя>/{renders,video,previews,cards}/` | Рендеры, видео, превью, карточки |

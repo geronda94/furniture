@@ -29,12 +29,16 @@ if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
 from furniture_core import load_config, solve  # noqa: E402
-from furniture_core.hardware import load_runners  # noqa: E402
+from furniture_core.hardware import load_handles, load_hinges, load_runners  # noqa: E402
 from .storage import (  # noqa: E402
     delete_project as repo_delete,
+    delete_version as repo_delete_version,
     get_project as repo_get,
+    get_version as repo_get_version,
     list_projects as repo_list,
+    list_versions as repo_list_versions,
     put_project as repo_put,
+    put_version as repo_put_version,
     using_db,
 )
 
@@ -59,11 +63,21 @@ class ActionIn(BaseModel):
     commit: bool = False
 
 
+class VersionIn(BaseModel):
+    name: str | None = None
+
+
+class RestoreIn(BaseModel):
+    backup: bool = True
+
+
 DEFAULT_PARAMS = {
     "W": 800, "H": 720, "D": 560, "doors": 2, "drawers": 0, "shelves": 2,
     "frame": "inset", "hardware": "blum", "runners": "tandem-21",
     "t": 16, "back": "dvp", "backT": 4, "roof": True, "reinforce": "auto",
     "mount": "floor", "plinthH": 100, "worktopT": 38,
+    "gapSide": 2, "gapBetween": 3, "gapTop": 2, "gapBottom": 2,
+    "handle": "bar-128",
 }
 
 MODULE_PRESETS = [
@@ -114,8 +128,10 @@ def _apply_action(doc: dict, act: dict) -> dict:
     if op == "add_instance":
         preset = next((p for p in MODULE_PRESETS
                        if p["key"] == act.get("preset")), MODULE_PRESETS[0])
-        params = {**DEFAULT_PARAMS, **preset["params"],
-                  **(act.get("params") or {})}
+        globals_ = {k: v for k, v in (doc.get("globals") or {}).items()
+                    if k != "autoApply"}
+        params = {**DEFAULT_PARAMS, **globals_,
+                  **preset["params"], **(act.get("params") or {})}
         inst = {
             "id": _new_id("i"), "product": "base-cabinet",
             "name": act.get("name") or f"Модуль {len(doc.get('instances', [])) + 1}",
@@ -161,6 +177,17 @@ def _apply_action(doc: dict, act: dict) -> dict:
     if op == "set_room":
         room = doc.setdefault("room", {})
         room.update(act.get("patch") or {})
+        return {"op": op}
+    if op == "set_globals":
+        globals_ = doc.setdefault("globals", {})
+        patch = act.get("patch") or {}
+        globals_.update(patch)
+        for inst in doc.get("instances", []):
+            params = inst.setdefault("params", {})
+            overrides = inst.get("overrides") or []
+            for key, value in patch.items():
+                if key in DEFAULT_PARAMS and key not in overrides:
+                    params[key] = value
         return {"op": op}
     raise ValueError(f"неизвестная операция: {op}")
 
@@ -215,7 +242,13 @@ def shop_config(shop: str | None = None):
 def hardware():
     """Каталог фурнитуры из specs/hardware.yaml (для выбора в UI)."""
     runners = load_runners(ROOT / "specs" / "hardware.yaml")
-    return {"drawer_runners": [r.as_dict() for r in runners]}
+    hinges = load_hinges(ROOT / "specs" / "hardware.yaml")
+    handles = load_handles(ROOT / "specs" / "hardware.yaml")
+    return {
+        "drawer_runners": [r.as_dict() for r in runners],
+        "hinges": [h.as_dict() for h in hinges],
+        "handles": [h.as_dict() for h in handles],
+    }
 
 
 @app.post("/api/solve")
@@ -265,6 +298,9 @@ def ai_guide():
             "PUT /api/projects/{id}": "заменить проект целиком",
             "POST /api/projects/{id}/actions": "пакет правок; commit=false — предпросмотр",
             "GET /api/projects/{id}/summary": "сводка проекта для ИИ",
+            "GET /api/projects/{id}/versions": "снимки проекта",
+            "POST /api/projects/{id}/versions": "сделать снимок",
+            "POST /api/projects/{id}/versions/{vid}/restore": "откатить к снимку",
         },
         "actions": [
             "add_instance {preset?, params?, x?, y?, z?, rot?, name?}",
@@ -272,6 +308,7 @@ def ai_guide():
             "delete_instance {id}",
             "add_opening {kind, wall, x?, w?, z0?, z1?}",
             "set_room {patch}",
+            "set_globals {patch}",
         ],
         "rules": [
             "Размеры только из задания; не выдумывать.",
@@ -310,6 +347,8 @@ def project_summary(pid: str):
         "id": pid, "name": doc.get("name"), "schema": doc.get("schema"),
         "room": {k: room.get(k) for k in
                  ("w", "d", "h", "wallT", "outline", "partitions")},
+        "globals": doc.get("globals", {}),
+        "materialVars": doc.get("materialVars", []),
         "openings": room.get("openings", []),
         "instances": [],
         "folders": doc.get("folders", []),
@@ -319,7 +358,12 @@ def project_summary(pid: str):
         row = {k: inst.get(k) for k in
                ("id", "name", "x", "y", "z", "rot", "params")}
         try:
-            res = solve(inst, cfg)
+            globals_ = {k: v for k, v in (doc.get('globals') or {}).items()
+                        if k != 'autoApply'}
+            product = {**inst,
+                       'params': {**globals_,
+                                  **(inst.get('params') or {})}}
+            res = solve(product, cfg)
             row["dims"] = res["dims"]
             row["validation"] = res["validation"]
             row["totals"] = res["totals"]
@@ -353,6 +397,82 @@ def put_project(pid: str, doc: dict[str, Any]):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True, "id": pid, "storage": path}
+
+
+def _version_id() -> str:
+    import random
+    import time
+    return f"v{int(time.time() * 1000):x}{random.randint(0, 999):03x}"
+
+
+@app.get("/api/projects/{pid}/versions")
+def list_versions(pid: str):
+    if repo_get(pid) is None:
+        raise HTTPException(404, "проект не найден")
+    try:
+        return {"versions": repo_list_versions(pid)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/projects/{pid}/versions")
+def create_version(pid: str, body: VersionIn | None = None):
+    doc = repo_get(pid)
+    if doc is None:
+        raise HTTPException(404, "проект не найден")
+    name = (body.name if body else None) or "Снимок"
+    vid = _version_id()
+    try:
+        return {"version": repo_put_version(pid, vid, doc, name)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/projects/{pid}/versions/{vid}")
+def get_version(pid: str, vid: str):
+    try:
+        ver = repo_get_version(pid, vid)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if ver is None:
+        raise HTTPException(404, "версия не найдена")
+    return ver
+
+
+@app.post("/api/projects/{pid}/versions/{vid}/restore")
+def restore_version(pid: str, vid: str, body: RestoreIn | None = None):
+    try:
+        ver = repo_get_version(pid, vid)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if ver is None:
+        raise HTTPException(404, "версия не найдена")
+    doc = ver.get("doc")
+    if not isinstance(doc, dict):
+        raise HTTPException(422, "в версии нет документа проекта")
+    if body is None or body.backup:
+        current = repo_get(pid)
+        if current is not None:
+            repo_put_version(
+                pid, _version_id(), current,
+                f"Перед восстановлением: {ver.get('name') or vid}",
+            )
+    try:
+        path = repo_put(pid, doc)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "restored": vid, "storage": path, "project": doc}
+
+
+@app.delete("/api/projects/{pid}/versions/{vid}")
+def delete_version(pid: str, vid: str):
+    try:
+        ok = repo_delete_version(pid, vid)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not ok:
+        raise HTTPException(404, "версия не найдена")
+    return {"ok": True, "id": vid}
 
 
 @app.delete("/api/projects/{pid}")

@@ -4,8 +4,17 @@ import { apiMaterials, type CatalogMaterial, type MaterialCategory } from '../ap
 import { setMaterial, setTexture } from '../state/project'
 import type { Material } from '../render25d/types'
 
-const props = defineProps<{ role: string; label: string }>()
-const emit = defineEmits<{ (e: 'close'): void }>()
+const props = defineProps<{
+  role: string
+  label: string
+  instanceId?: string
+  /** pick — вернуть выбранный материал наружу, не применяя */
+  mode?: 'apply' | 'pick'
+}>()
+const emit = defineEmits<{
+  (e: 'close'): void
+  (e: 'pick', payload: { material?: Material; texture?: string }): void
+}>()
 
 const categories = ref<MaterialCategory[]>([])
 const active = ref('Все')
@@ -38,21 +47,32 @@ onMounted(async () => {
 })
 
 function apply(item: CatalogMaterial): void {
-  setMaterial(props.role, {
+  const material: Material = {
     name: item.name,
     color: item.color,
     accent: item.accent || item.color,
     pattern: (item.pattern || 'solid') as Material['pattern'],
     texScale: item.texScale,
-  })
-  setTexture(props.role, item.texture_url || null)
+  }
+  if (props.mode === 'pick') {
+    emit('pick', { material, texture: item.texture_url })
+    emit('close')
+    return
+  }
+  setMaterial(props.role, material, props.instanceId)
+  setTexture(props.role, item.texture_url || null, props.instanceId)
   emit('close')
 }
 
 function applyUrl(): void {
   const u = url.value.trim()
   if (!u) return
-  setTexture(props.role, u)
+  if (props.mode === 'pick') {
+    emit('pick', { texture: u })
+    emit('close')
+    return
+  }
+  setTexture(props.role, u, props.instanceId)
   emit('close')
 }
 </script>
@@ -60,7 +80,7 @@ function applyUrl(): void {
 <template>
   <Teleport to="body">
     <div class="modal" @click.self="emit('close')">
-      <section class="modal__win matlib">
+      <section class="modal__win matlib" role="dialog" aria-modal="true" aria-label="Библиотека материалов">
         <header class="modal__head">
           <span class="modal__title">Библиотека материалов</span>
           <span class="modal__sub">{{ label }}</span>

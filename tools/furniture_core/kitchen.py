@@ -4,8 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .config import Config, HINGE_CUP_DIA, HINGE_CUP_OFFSET
-from .hardware import DEFAULT_RUNNER, Runner
-from .parts import Part, hinge_count, segment
+from .hardware import DEFAULT_RUNNER, Hinge, Runner
+from .parts import Part, hinge_count, merge_parts, segment
 
 RAIL_GAP = 21.0          # зазор по умолчанию (Blum Tandem)
 RAIL_LEN = 500.0
@@ -260,7 +260,7 @@ def _split_count(W, requested, cfg, maxw):
 
 
 def gen_kitchen(sections, cfg: Config, open_sections=(),
-                runner: Runner | None = None):
+                runner: Runner | None = None, hinge: Hinge | None = None):
     t = cfg.t
     parts = []
     holes = []
@@ -273,9 +273,9 @@ def gen_kitchen(sections, cfg: Config, open_sections=(),
             parts += segment("Цоколь", total_w - 2 * t, cfg.plinth_h, cfg,
                              front_key="bottom", edges={"bottom": EI})
         if cfg.worktop_t > 0:
-            # столешница (постформинг): сегментируем, передний торец 2 мм
+            # столешница-постформинг: сегментируем; передний торец без кромки
             parts += segment("Столешница", total_w, cfg.worktop_t, cfg,
-                             front_key="bottom", edges={"bottom": EF},
+                             front_key="bottom", edges={},
                              material="Столешница")
 
     for i, s in enumerate(sections):
@@ -348,7 +348,7 @@ def gen_kitchen(sections, cfg: Config, open_sections=(),
             for block in _custom_blocks(s, cfg, fh_total):
                 if block["type"] == "doors":
                     _doors(parts, holes, s, W, block["h"],
-                           cfg, count=block["count"])
+                           cfg, count=block["count"], hinge=hinge)
                 else:
                     for _, dh in _drawer_rows(block, cfg):
                         _drawer_front(parts, s, W, dh, cfg)
@@ -365,14 +365,14 @@ def gen_kitchen(sections, cfg: Config, open_sections=(),
             if s.drawers and s.doors:
                 top_dr_h = 200.0
                 door_h = fh_total - top_dr_h - cfg.gap_between
-                _doors(parts, holes, s, W, door_h, cfg)
+                _doors(parts, holes, s, W, door_h, cfg, hinge=hinge)
                 _drawer_front(parts, s, W, top_dr_h, cfg)
             elif s.drawers:
                 hs = _drawer_heights(s, cfg, fh_total)
                 for dh in hs:
                     _drawer_front(parts, s, W, dh, cfg)
             else:
-                _doors(parts, holes, s, W, fh_total, cfg)
+                _doors(parts, holes, s, W, fh_total, cfg, hinge=hinge)
 
             # --- ящики (коробки на скрытых направляющих) ---
             if s.drawers:
@@ -391,10 +391,11 @@ def gen_kitchen(sections, cfg: Config, open_sections=(),
     if legs_n:
         holes.append({"part": "Ножка", "face": "-", "dia": 0, "depth": 0,
                       "note": f"опоры регулируемые: {legs_n} шт"})
-    return parts, total_w, holes
+    return merge_parts(parts), total_w, holes
 
 
-def _doors(parts, holes, s, W, door_h, cfg, count=None):
+def _doors(parts, holes, s, W, door_h, cfg, count=None,
+           hinge: Hinge | None = None):
     n = _split_count(W, count if count is not None else s.doors, cfg,
                      MAX_DOOR_W)
     fw = (W - 2 * cfg.gap_side - (n - 1) * cfg.gap_between) / n
@@ -402,10 +403,13 @@ def _doors(parts, holes, s, W, door_h, cfg, count=None):
                       round(door_h, 1), "ЛДСП",
                       {"left": EF, "right": EF, "top": EF, "bottom": EF}))
     nh = hinge_count(door_h)
+    off = hinge.cup_offset if hinge else HINGE_CUP_OFFSET.get(cfg.hardware, 22.5)
+    name = hinge.name if hinge else cfg.hardware
+    cup = hinge.cup_dia if hinge else HINGE_CUP_DIA
     holes.append({"part": f"Фасад дверь ({s.label()})", "face": "внутр. пласть",
-                  "dia": HINGE_CUP_DIA, "depth": 12.5, "hinges": nh * n,
-                  "note": f"петли {nh} шт/дверь × {n} двери (отступ "
-                          f"{HINGE_CUP_OFFSET['blum']} мм от торца)"})
+                  "dia": cup, "depth": 12.5, "hinges": nh * n,
+                  "note": f"петли {name}: {nh} шт/дверь × {n} двери, "
+                          f"отступ {off:g} мм от торца"})
 
 
 def _drawer_front(parts, s, W, dh, cfg):

@@ -22,6 +22,10 @@ def check(name: str, cond: bool, detail: str = "") -> bool:
     return cond
 
 
+def qty_of(bom: list[dict], name: str) -> int:
+    return sum(int(b.get("qty", 0)) for b in bom if b.get("name") == name)
+
+
 def main() -> int:
     ok = True
 
@@ -35,8 +39,9 @@ def main() -> int:
         ],
     }}, CFG)
     names = [b["name"] for b in r["bom"]]
-    ok &= check("микс: 2 фасада ящиков", names.count("Фасад ящик (Модуль)") == 2,
-                str(names.count("Фасад ящик (Модуль)")))
+    ok &= check("микс: 2 фасада ящиков",
+                qty_of(r["bom"], "Фасад ящик (Модуль)") == 2,
+                str(qty_of(r["bom"], "Фасад ящик (Модуль)")))
     ok &= check("микс: фасад дверей", names.count("Фасад дверь (Модуль)") == 1)
     ok &= check("микс: без ошибок", not r["validation"]["errors"],
                 str(r["validation"]["errors"]))
@@ -99,7 +104,7 @@ def main() -> int:
     names = [b["name"] for b in r["bom"]]
     ok &= check("ящик: передняя стенка", "Ящик передняя стенка" in names)
     ok &= check("ящик: передняя стенка x3",
-                names.count("Ящик передняя стенка") == 3)
+                qty_of(r["bom"], "Ящик передняя стенка") == 3)
     ok &= check("ящик: размеры короба",
                 all(d["inner_w"] > 0 and d["panel_w"] > 0
                     for d in r["drawers"]))
@@ -110,7 +115,53 @@ def main() -> int:
                 any("направляющие" in h.get("note", "") for h in r["drilling"]))
     ok &= check("ящик: без ошибок", not r["validation"]["errors"])
 
-    # 8. Толщина 18 мм
+    # 8. Постформинг: столешница без кромки 2 мм
+    r = solve({"product": "base-cabinet", "params": {
+        "W": 800, "H": 720, "D": 560, "doors": 2,
+    }}, CFG)
+    top = next((b for b in r["bom"] if b["name"] == "Столешница"), None)
+    ok &= check("столешница: постформинг без кромки",
+                top is not None and top["edge"].count("2") == 0,
+                top["edge"] if top else "нет")
+
+    # 9. Одинаковые детали сводятся в позицию с количеством
+    r = solve({"product": "base-cabinet", "params": {
+        "W": 800, "H": 720, "D": 560, "doors": 2, "shelves": 2,
+    }}, CFG)
+    shelf = next((b for b in r["bom"] if b["name"] == "Полка"), None)
+    ok &= check("одинаковые детали: количество",
+                shelf is not None and shelf["qty"] >= 2,
+                str(shelf["qty"]) if shelf else "нет")
+
+    # 10. Зазоры фасадов из параметров изделия
+    r = solve({"product": "base-cabinet", "params": {
+        "W": 800, "H": 720, "D": 560, "doors": 2,
+        "gapSide": 0, "gapBetween": 0,
+    }}, CFG)
+    fasad = next((b for b in r["bom"] if b["name"].startswith("Фасад дверь")), None)
+    ok &= check("зазоры: фасад во всю ширину",
+                fasad is not None and abs(fasad["w"] - 400) < 0.1,
+                str(fasad["w"]) if fasad else "нет")
+
+    # 11. Петли: отступ по бренду из каталога
+    r = solve({"product": "base-cabinet", "params": {
+        "W": 800, "H": 720, "D": 560, "doors": 2, "hardware": "hettich",
+    }}, CFG)
+    note = " ".join(str(h.get("note", "")) for h in r["drilling"])
+    ok &= check("петли Hettich: отступ 22 мм",
+                "Intermat" in note and "22 мм" in note, note[:60])
+
+    # 12. Ручки из каталога
+    r = solve({"product": "base-cabinet", "params": {
+        "W": 800, "H": 720, "D": 560, "doors": 2, "handle": "knob-30",
+    }}, CFG)
+    handle_line = next((x for x in r["cost"]["lines"]
+                        if x["key"] == "handles"), None)
+    ok &= check("ручки: цена из каталога",
+                handle_line is not None and handle_line["unit_price"] == 90,
+                str(handle_line["unit_price"]) if handle_line else "нет")
+
+    # 13. Толщина 18 мм
     r = solve({"product": "base-cabinet", "params": {
         "W": 800, "H": 720, "D": 560, "doors": 2, "t": 18,
         "back": "same",

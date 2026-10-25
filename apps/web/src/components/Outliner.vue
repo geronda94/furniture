@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { roomWalls } from '../render25d/room'
 import InstanceNode from './InstanceNode.vue'
 import WallThumb from './WallThumb.vue'
@@ -30,10 +30,19 @@ import {
 } from '../state/project'
 
 const expanded = ref<Record<string, boolean>>({})
+const outlinerTab = ref<'furniture' | 'room'>('furniture')
 
 function toggleExpand(id: string): void {
   expanded.value = { ...expanded.value, [id]: !expanded.value[id] }
 }
+
+watch(
+  () => [state.selection, state.roomSelected, state.wallIndex] as const,
+  () => {
+    if (state.roomSelected || state.wallIndex != null) outlinerTab.value = 'room'
+    else if (state.selection) outlinerTab.value = 'furniture'
+  },
+)
 
 const room = computed(() => state.project.room)
 const folders = computed(() => state.project.folders)
@@ -75,7 +84,7 @@ function onFolderAdd(folderId: string): void {
 
 <template>
   <section class="panel outliner">
-    <div class="panel__head">
+    <div class="panel__head outliner__panel-head">
       <span>Объекты</span>
       <span class="dim">{{ state.project.instances.length }}</span>
       <button
@@ -87,8 +96,30 @@ function onFolderAdd(folderId: string): void {
       <button class="tree__act tree__act--add" title="Добавить объект" @click="openAddModal">
         ＋ объект
       </button>
+      <button
+        class="tree__act outliner__close"
+        title="Закрыть панель"
+        @click="ui.panelOpen = false"
+      >×</button>
+    </div>
+    <div class="outliner__tabs" role="tablist" aria-label="Разделы объектов">
+      <button
+        class="tab"
+        role="tab"
+        :class="{ 'tab--active': outlinerTab === 'furniture' }"
+        :aria-selected="outlinerTab === 'furniture'"
+        @click="outlinerTab = 'furniture'"
+      >Мебель ({{ state.project.instances.length }})</button>
+      <button
+        class="tab"
+        role="tab"
+        :class="{ 'tab--active': outlinerTab === 'room' }"
+        :aria-selected="outlinerTab === 'room'"
+        @click="outlinerTab = 'room'"
+      >Комната</button>
     </div>
     <div class="panel__body outliner__body">
+      <template v-if="outlinerTab === 'room'">
       <!-- КОМНАТА -->
       <div class="tree__row tree__row--root">
         <button class="tree__twist" @click="toggleExpand('room')">
@@ -241,7 +272,9 @@ function onFolderAdd(folderId: string): void {
         </template>
 
       </template>
+      </template>
 
+      <template v-else>
       <!-- ГРУППЫ И КОМНАТЫ -->
       <div class="tree__row tree__row--group">
           <button class="tree__twist" @click="toggleExpand('groups')">
@@ -300,6 +333,7 @@ function onFolderAdd(folderId: string): void {
         <div v-if="!loose.length" class="tree__row tree__row--nested dim">
           Свободных модулей нет
         </div>
+      </template>
       </template>
     </div>
   </section>

@@ -4,22 +4,37 @@ import MaterialLibrary from './MaterialLibrary.vue'
 import type { Material } from '../render25d/types'
 import {
   MATERIAL_ROLES,
+  effectiveMaterials,
+  instanceMaterialOverridden,
+  resetInstanceMaterial,
   setMaterial,
   setTexture,
   state,
 } from '../state/project'
 
 const props = withDefaults(
-  defineProps<{ roles?: { key: string; label: string }[] }>(),
+  defineProps<{
+    roles?: { key: string; label: string }[]
+    /** если задан — правки применяются только к этому модулю */
+    instanceId?: string
+  }>(),
   { roles: () => MATERIAL_ROLES },
 )
+
+const inst = () =>
+  props.instanceId
+    ? state.project.instances.find((i) => i.id === props.instanceId) ?? null
+    : null
+const scoped = () => !!props.instanceId
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const libRole = ref<string | null>(null)
 let texRole = ''
 
 function m(role: string): Material {
-  return state.project.materials[role]
+  const i = inst()
+  const mats = i ? effectiveMaterials(i) : state.project.materials
+  return mats[role]
 }
 
 function swatchStyle(role: string) {
@@ -35,12 +50,12 @@ function swatchStyle(role: string) {
 }
 
 function onColor(role: string, e: Event) {
-  setMaterial(role, { color: (e.target as HTMLInputElement).value })
+  setMaterial(role, { color: (e.target as HTMLInputElement).value }, props.instanceId)
 }
 
 function onPattern(role: string, e: Event) {
   const pattern = (e.target as HTMLSelectElement).value as Material['pattern']
-  setMaterial(role, { pattern })
+  setMaterial(role, { pattern }, props.instanceId)
 }
 
 function pickTexture(role: string) {
@@ -49,7 +64,15 @@ function pickTexture(role: string) {
 }
 
 function clearTexture(role: string) {
-  setTexture(role, null)
+  setTexture(role, null, props.instanceId)
+}
+
+function resetRole(role: string) {
+  if (props.instanceId) resetInstanceMaterial(props.instanceId, role)
+}
+
+function resetAll() {
+  if (props.instanceId) resetInstanceMaterial(props.instanceId)
 }
 
 async function fileToTexture(file: File): Promise<string> {
@@ -89,7 +112,7 @@ async function onFile(e: Event) {
   if (!file || !texRole) return
   try {
     const data = await fileToTexture(file)
-    setTexture(texRole, data)
+    setTexture(texRole, data, props.instanceId)
   } catch {
     /* ignore */
   }
@@ -100,7 +123,13 @@ async function onFile(e: Event) {
   <section class="panel">
     <div class="panel__head">
       <span>Материалы</span>
-      <span class="dim">декор / текстура</span>
+      <span class="dim">{{ scoped() ? 'только этот модуль' : 'весь проект' }}</span>
+      <button
+        v-if="scoped() && inst()?.materials"
+        class="link"
+        title="Вернуть все материалы проекта"
+        @click="resetAll"
+      >сбросить все</button>
     </div>
     <div class="panel__body">
       <input
@@ -145,7 +174,15 @@ async function onFile(e: Event) {
             class="link"
             @click="clearTexture(r.key)"
           >
-            сбросить
+            без текстуры
+          </button>
+          <button
+            v-if="scoped() && instanceMaterialOverridden(inst(), r.key)"
+            class="link"
+            title="Вернуть материал проекта"
+            @click="resetRole(r.key)"
+          >
+            к проекту
           </button>
           <span v-if="m(r.key).texture" class="mat-dot"></span>
           <span v-else class="dim">процедурная</span>
@@ -155,6 +192,7 @@ async function onFile(e: Event) {
     <MaterialLibrary
       v-if="libRole"
       :role="libRole"
+      :instance-id="props.instanceId"
       :label="props.roles.find((r) => r.key === libRole)?.label || libRole"
       @close="libRole = null"
     />

@@ -187,6 +187,8 @@ watch(() => ui.object.mode, () => nextTick(syncPlacement))
       <section
         ref="winEl"
         class="modal__win object-modal"
+        role="dialog"
+        aria-modal="true"
         :class="{ 'object-modal--full': full }"
         :style="[dragStyle, full
           ? {
@@ -221,7 +223,7 @@ watch(() => ui.object.mode, () => nextTick(syncPlacement))
               @click="ui.dims3d = !ui.dims3d"
             >Размеры</button>
             <button
-              v-if="inst"
+              v-if="inst && !full"
               class="tab"
               :class="{ 'tab--active': ui.facades }"
               title="Показывать или скрыть фасады"
@@ -300,7 +302,7 @@ watch(() => ui.object.mode, () => nextTick(syncPlacement))
             Детали и конструктор · раскрой
           </button>
           <p class="dim om__hint">
-            Движение мышью по 3D выключено — включить можно кнопкой «Двигать» в шапке 3D.
+            Перетаскивание модулей выключено. Включите «Двигать» в панели вида на сцене.
           </p>
         </div>
         <!-- ГРУППА -->

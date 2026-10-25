@@ -6,9 +6,13 @@ from collections import Counter
 
 from .config import Config
 from .cutting import pack, validate
-from .hardware import find_runner, load_runners
+from .hardware import (
+    find_handle, find_hinge, find_runner, load_handles, load_hinges,
+    load_runners,
+)
 from .pricing import load_pricing
 from .kitchen import Section, gen_kitchen, scene3d
+from .assembly import build_operations, summarize
 
 SCHEMA = "furniture/product@0"
 
@@ -119,6 +123,10 @@ def solve(product: dict, cfg: Config | None = None) -> dict:
         ("mount", "mount", str),
         ("plinthH", "plinth_h", float),
         ("worktopT", "worktop_t", float),
+        ("gapSide", "gap_side", float),
+        ("gapBetween", "gap_between", float),
+        ("gapTop", "gap_top", float),
+        ("gapBottom", "gap_bottom", float),
     ):
         if key in params:
             setattr(cfg, attr, cast(params[key]))
@@ -134,12 +142,16 @@ def solve(product: dict, cfg: Config | None = None) -> dict:
     runners = load_runners(cfg.hardware_file if hasattr(cfg, "hardware_file")
                            else None)
     runner = find_runner(runners, cfg.runners)
+    hinge = find_hinge(load_hinges(), cfg.hardware)
+    handles = load_handles()
+    handle = find_handle(handles, params.get("handle") or "bar-128")
 
     sections = _sections(product, cfg)
     if not sections:
         raise ValueError("нет секций: product.sections пуст")
 
-    parts, total_w, holes = gen_kitchen(sections, cfg, runner=runner)
+    parts, total_w, holes = gen_kitchen(sections, cfg, runner=runner,
+                                        hinge=hinge)
     sheets, usable_w, usable_h = pack(parts, cfg)
     errs, warns = validate(total_w, cfg.corpus_h, cfg.corpus_d, parts, cfg,
                            sheets, usable_w, usable_h)
@@ -151,6 +163,28 @@ def solve(product: dict, cfg: Config | None = None) -> dict:
         warns.append("Вырезы заданы, но столешница отключена (worktopT=0)")
     cutouts = params.get("cutouts") or []
     objects = scene3d(sections, cfg, runner=runner, cutouts=cutouts)
+    operations = build_operations(
+        objects, cfg, runner=runner, hinge=hinge, handle=handle,
+    )
+    hardware_plan = summarize(operations, runner, handle, hinge)
+    edge_names = {2.0: "ПВХ 2 мм", 0.4: "ПВХ 0.4 мм", 0.0: "без кромки"}
+    edge_plan = [{
+        "part": p.name,
+        "qty": p.qty,
+        "material": p.material,
+        "w": p.w,
+        "h": p.h,
+        "front": p.front_key,
+        "summary": p.edge_summary(),
+        "sides": {
+            side: {
+                "thickness": thickness,
+                "label": edge_names.get(float(thickness),
+                                        f"кромка {thickness:g} мм"),
+            }
+            for side, thickness in p.edges.items() if thickness
+        },
+    } for p in parts]
     for c in cutouts if isinstance(cutouts, list) else []:
         if not isinstance(c, dict):
             continue
@@ -366,10 +400,12 @@ def solve(product: dict, cfg: Config | None = None) -> dict:
         })
     fronts = sum(1 for o in objects if o["kind"] in ("door", "drawerfront"))
     if fronts:
+        price = handle.price or pr.handle
         cost_lines.append({
-            "key": "handles", "label": "Ручки",
+            "key": "handles", "label": f"Ручки: {handle.name}",
             "qty": fronts, "unit": "шт",
-            "unit_price": pr.handle, "total": round(pr.handle * fronts, 2),
+            "unit_price": round(price, 2),
+            "total": round(price * fronts, 2),
         })
     doors_n = sum(1 for o in objects if o["kind"] == "door")
     drawers_n = len(drawers)
@@ -404,6 +440,9 @@ def solve(product: dict, cfg: Config | None = None) -> dict:
         "objects": objects,
         "bom": bom,
         "drilling": holes,
+        "operations": operations,
+        "hardware_plan": hardware_plan,
+        "edge_plan": edge_plan,
         "sheets": [{
             "material": s["material"],
             "count": len(s["placements"]),
@@ -417,7 +456,11 @@ def solve(product: dict, cfg: Config | None = None) -> dict:
         },
         "validation": {"errors": errs, "warnings": warns},
         "materials": materials,
-        "hardware": {**runner.as_dict(), "runners_all": [
+        "hardware": {**runner.as_dict(), "hinge": hinge.as_dict(),
+                     "handles": [h.as_dict() for h in handles],
+                     "handle": handle.as_dict(),
+                     "hinges_all": [h.as_dict() for h in load_hinges()],
+                     "runners_all": [
             {"id": r.id, "name": r.name, "brand": r.brand,
              "side_gap": r.side_gap, "lengths": r.lengths}
             for r in runners

@@ -10,7 +10,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:5438:5432"
+      - "127.0.0.1:5441:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-furniture} -d ${POSTGRES_DB:-furniture}"]
       interval: 3s
@@ -29,7 +29,7 @@ services:
     volumes:
       - .:/app
     ports:
-      - "8000:8000"
+      - "8003:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -38,17 +38,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.web
-    command: npm run dev -- --host 0.0.0.0 --port 5173
-    environment:
-      VITE_API_PROXY_TARGET: http://api:8000
-    volumes:
-      - .:/app
-      - web_node_modules:/app/apps/web/node_modules
     ports:
-      - "5173:5173"
+      - "5176:80"
     depends_on:
       - api
 
 volumes:
   pgdata:
-  web_node_modules:
