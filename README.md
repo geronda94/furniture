@@ -99,6 +99,7 @@ blender -b -P blender_build.py -- ../projects/kitchen-10m/scene3d.json ../projec
 | `business/FAST_MONEY_PLAN.md` | 30-дневный спринт до первых заказов |
 | `business/ECONOMIC_MODEL.md` | экономическая модель и P&L |
 | `business/STRATEGY_EXPANSION.md` | форки: застройщики, BIM, оцифровка, white-label |
+| `business/WIDGET_MARKET_ANALYSIS.md` | рынки и цены для модулей/виджетов (RO/MD/KZ/GE) |
 | `business/MARKET_RESEARCH.md` | конкуренты, YouTube, Россия/СНГ/Казахстан/Грузия |
 | `business/GTM_PLAYBOOK.md` | запуск с низкими трудозатратами |
 | `business/CONTENT_ENGINE.md` | мультиязычный контент-конвейер |
@@ -129,4 +130,5 @@ blender -b -P blender_build.py -- ../projects/kitchen-10m/scene3d.json ../projec
 | `docs/15-roadmap.md` | Роадмап и ресёрч SketchUp-плагинов |
 | `docs/16-materials-pricing.md` | Материалы, цены, смета, партнёры |
 | `docs/17-session-handoff.md` | Итоги сессии и перенос на сервер |
+| `docs/18-house-fork.md` | Форк «Дом»: слои, системы, API, MVP, роадмап |
 | `docs/glossary.md` | Глоссарий терминов |
