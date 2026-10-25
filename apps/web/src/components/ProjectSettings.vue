@@ -237,11 +237,11 @@ function setSupplier(e: Event): void {
           </p>
         </div>
 
-        <div v-else class="settings__body">
+        <div v-else-if="tab === 'vars'" class="settings__body">
           <MaterialVarsPanel />
         </div>
 
-        <div v-if="tab === 'pricing'" class="settings__body">
+        <div v-else-if="tab === 'pricing'" class="settings__body">
           <p class="settings__lead">
             Рынок задаёт валюту и НДС, цех — формат листа, раскрой, кромку и
             сборку, поставщик — цены фурнитуры. Сметы всех модулей
