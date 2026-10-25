@@ -1925,6 +1925,7 @@
 
 .modal--hardware .hwlib {
   width: min(860px, calc(100vw - 24px));
+  height: auto;
   max-height: min(86dvh, 720px);
   display: flex;
   flex-direction: column;
@@ -1939,6 +1940,7 @@
 }
 
 .hwlib__body {
+  flex: 1 1 auto;
   padding: 10px;
   overflow-y: auto;
   min-height: 0;
