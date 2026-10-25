@@ -17,6 +17,7 @@ import {
   selectPart,
   selectWall,
   selectWallItem,
+  setViewMode,
   state,
   togglePart,
   toggleSelection,
@@ -33,6 +34,13 @@ const viewName = ref('iso')
 const camMode = ref<'orbit' | 'first' | 'fly'>('orbit')
 const fitTarget = ref<'module' | 'room'>('room')
 const planOpen = ref(false)
+const viewMore = ref(false)
+const viewNameLabel = computed(() => {
+  const labels: Record<string, string> = {
+    iso: 'Изо', front: 'Фасад', side: 'Бок', top: 'Сверху',
+  }
+  return labels[viewName.value] ?? 'Вид'
+})
 const dimLines = ref<{
   x1: number; y1: number; x2: number; y2: number
   tx: number; ty: number; label: string
@@ -45,7 +53,12 @@ let dimLast = 0
 function sync(): void {
   if (!renderer) return
   renderer.syncRoom(state.project.room, state.project.materials)
-  renderer.syncInstances(state.project.instances, derived, state.project.materials)
+  renderer.syncInstances(
+    state.project.instances,
+    derived,
+    state.project.materials,
+    state.project.materialVars,
+  )
   renderer.setSelected(state.selected.length ? [...state.selected]
     : state.selection ? [state.selection] : [])
 }
@@ -245,6 +258,8 @@ function exportPng(): void {
 }
 
 /* ---------- pointer ---------- */
+const activePointers = new Set<number>()
+
 let down: {
   x: number
   y: number
@@ -268,6 +283,13 @@ function canvasPoint(e: PointerEvent): { x: number; y: number } {
 
 function onDown(e: PointerEvent): void {
   if (!renderer || !canvasEl.value) return
+  activePointers.add(e.pointerId)
+  // Второй палец — жест камеры, а не перетаскивание модуля.
+  if (e.pointerType === 'touch' && activePointers.size > 1) {
+    down = null
+    renderer.orbit.attachControl(canvasEl.value, true)
+    return
+  }
   partPill.value = null
   const p = canvasPoint(e)
   const hit = renderer.pick(p.x, p.y)
@@ -325,6 +347,7 @@ function onMove(e: PointerEvent): void {
 }
 
 function onUp(e: PointerEvent): void {
+  activePointers.delete(e.pointerId)
   if (!down || !renderer) return
   const wasMove = down.move
   const moved = down.moved
@@ -367,6 +390,7 @@ function onUp(e: PointerEvent): void {
       selectPart(inst.id, d.part, false)
     }
   }
+  if (!ui.object.open) openObjectModal('quick')
 }
 
 function togglePill(): void {
@@ -594,6 +618,74 @@ onBeforeUnmount(() => {
           <button class="minimap__btn minimap__btn--wide" title="Добавить комнату" @click="addRoom">＋комната</button>
         </div>
         <button class="minimap__toggle" @click="planOpen = !planOpen">{{ planOpen ? '×' : '⤢' }}</button>
+      </div>
+      <div v-if="!state.presentation" class="view__dock" aria-label="Вид и камера">
+        <button class="tab" @click="viewMore = true">Вид · {{ viewNameLabel }}</button>
+        <button class="tab" @click="fit('room')">Вписать</button>
+        <button class="tab" :class="{ 'tab--active': ui.dragMove }" @click="ui.dragMove = !ui.dragMove">
+          Двигать
+        </button>
+        <button class="tab tab--primary" @click="viewMore = true">Ещё</button>
+      </div>
+      <div v-if="viewMore" class="view__sheet" @click.self="viewMore = false">
+        <section class="view__sheet-card" role="dialog" aria-modal="true" aria-label="Вид и камера">
+          <span class="view__sheet-grip" aria-hidden="true"></span>
+          <header class="view__sheet-head">
+            <span>Вид и камера</span>
+            <button class="btn btn--ghost btn--sm" title="Закрыть" @click="viewMore = false">×</button>
+          </header>
+
+          <div class="view__sheet-section">
+            <span class="view__sheet-label">Отображение</span>
+            <div class="view__sheet-row">
+              <button class="tab" :class="{ 'tab--active': state.viewMode === 'schematic' }" @click="setViewMode('schematic')">Каркас</button>
+              <button class="tab" :class="{ 'tab--active': state.viewMode === 'realistic' }" @click="setViewMode('realistic')">Полный</button>
+            </div>
+          </div>
+
+          <div class="view__sheet-section">
+            <span class="view__sheet-label">Ракурс</span>
+            <div class="view__sheet-row">
+              <button class="tab" :class="{ 'tab--active': viewName === 'iso' }" @click="setView('iso')">Изо</button>
+              <button class="tab" :class="{ 'tab--active': viewName === 'front' }" @click="setView('front')">Фасад</button>
+              <button class="tab" :class="{ 'tab--active': viewName === 'side' }" @click="setView('side')">Бок</button>
+              <button class="tab" :class="{ 'tab--active': viewName === 'top' }" @click="setView('top')">Сверху</button>
+            </div>
+          </div>
+
+          <div class="view__sheet-section">
+            <span class="view__sheet-label">Проекция и камера</span>
+            <div class="view__sheet-row">
+              <button class="tab" @click="setProjection('persp')">Перспектива</button>
+              <button class="tab" @click="setProjection('ortho')">Ортокамера</button>
+            </div>
+            <div class="view__sheet-row">
+              <button class="tab" :class="{ 'tab--active': camMode === 'orbit' }" @click="setCamMode('orbit')">Обзор</button>
+              <button class="tab" :class="{ 'tab--active': camMode === 'first' }" @click="setCamMode('first')">От лица</button>
+              <button class="tab" :class="{ 'tab--active': camMode === 'fly' }" @click="setCamMode('fly')">Полёт</button>
+              <button class="tab" @click="centerRoom">Центр</button>
+            </div>
+          </div>
+
+          <div class="view__sheet-section">
+            <span class="view__sheet-label">Сцена</span>
+            <div class="view__sheet-row">
+              <button class="tab" :class="{ 'tab--active': fitTarget === 'module' }" @click="fit('module')">Вписать модуль</button>
+              <button class="tab" :class="{ 'tab--active': fitTarget === 'room' }" @click="fit('room')">Вписать комнату</button>
+            </div>
+            <div class="view__sheet-row">
+              <button class="tab" :class="{ 'tab--active': ui.dims3d }" @click="ui.dims3d = !ui.dims3d">Размеры</button>
+              <button class="tab" :class="{ 'tab--active': ui.facades }" @click="ui.facades = !ui.facades">Фасады</button>
+              <button class="tab" :class="{ 'tab--active': ui.dragMove }" @click="ui.dragMove = !ui.dragMove">Двигать модули</button>
+              <button class="tab" :class="{ 'tab--active': planOpen }" @click="planOpen = !planOpen">План</button>
+            </div>
+            <div class="view__sheet-row">
+              <button class="tab" :class="{ 'tab--active': state.wallMode === 'cutaway' }" @click="setWallMode('cutaway')">Срез стен</button>
+              <button class="tab" :class="{ 'tab--active': state.wallMode === 'low' }" @click="setWallMode('low')">Низкие стены</button>
+              <button class="btn btn--sm" @click="exportPng">PNG</button>
+            </div>
+          </div>
+        </section>
       </div>
       <span v-if="!state.presentation" class="view__hint view__hint--right">
         {{ camMode === 'orbit'

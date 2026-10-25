@@ -7,14 +7,18 @@ import AddObjectModal from './components/AddObjectModal.vue'
 import StatusBar from './components/StatusBar.vue'
 import PresentationBar from './components/PresentationBar.vue'
 import ObjectModal from './components/ObjectModal.vue'
+import Toast from './components/Toast.vue'
 import {
   clearGuides,
+  closeObjectModal,
   deleteSelection,
   init,
   moveSelection,
+  openAddModal,
   pointer,
   redo,
   rotateSelection,
+  saveOnExit,
   selectAll,
   selectedInstance,
   state,
@@ -22,7 +26,27 @@ import {
   undo,
 } from './state/project'
 
+function closeTopLayer(): boolean {
+  if (ui.moreOpen) { ui.moreOpen = false; return true }
+  if (ui.addOpen) { ui.addOpen = false; return true }
+  if (ui.quoteOpen) { ui.quoteOpen = false; return true }
+  if (ui.versionsOpen) { ui.versionsOpen = false; return true }
+  if (ui.settingsOpen) { ui.settingsOpen = false; return true }
+  if (ui.projectsOpen) { ui.projectsOpen = false; return true }
+  if (ui.historyOpen) { ui.historyOpen = false; return true }
+  if (ui.object.open) { closeObjectModal(); return true }
+  if (ui.panelOpen) { ui.panelOpen = false; return true }
+  return false
+}
+
 function onKey(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    if (closeTopLayer()) {
+      e.preventDefault()
+      return
+    }
+  }
+
   const t = e.target as HTMLElement | null
   if (
     t &&
@@ -30,6 +54,14 @@ function onKey(e: KeyboardEvent) {
       t.tagName === 'SELECT' ||
       t.tagName === 'TEXTAREA' ||
       t.isContentEditable)
+  ) {
+    return
+  }
+
+  // Пока открыта модалка, фоновые Delete/R/стрелки не должны менять проект.
+  if (
+    ui.addOpen || ui.object.open || ui.settingsOpen || ui.quoteOpen ||
+    ui.versionsOpen || ui.moreOpen || ui.projectsOpen || ui.historyOpen
   ) {
     return
   }
@@ -87,20 +119,42 @@ function trackPointer(e: PointerEvent): void {
   pointer.y = e.clientY
 }
 
+function onPageHide(): void {
+  saveOnExit()
+}
+
+function onBeforeUnload(e: BeforeUnloadEvent): void {
+  if (state.dirty || state.saveState === 'error') {
+    e.preventDefault()
+    e.returnValue = ''
+  }
+}
+
 onMounted(() => {
   window.addEventListener('keydown', onKey)
   window.addEventListener('pointerdown', trackPointer, true)
+  window.addEventListener('pagehide', onPageHide)
+  window.addEventListener('beforeunload', onBeforeUnload)
   void init()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('pointerdown', trackPointer, true)
+  window.removeEventListener('pagehide', onPageHide)
+  window.removeEventListener('beforeunload', onBeforeUnload)
 })
 </script>
 
 <template>
-  <div class="app" :class="{ 'app--presentation': state.presentation }">
+  <div
+    class="app"
+    :class="{
+      'app--presentation': state.presentation,
+      'app--panel-open': ui.panelOpen,
+      'app--object-open': ui.object.open,
+    }"
+  >
     <TopBar />
     <main class="workspace">
       <View3D />
@@ -111,8 +165,42 @@ onBeforeUnmount(() => {
       </aside>
     </main>
     <StatusBar />
+    <nav v-if="!state.presentation" class="mobilebar" aria-label="Мобильная навигация">
+      <button
+        class="mobilebar__btn"
+        :class="{ 'mobilebar__btn--on': !ui.panelOpen }"
+        @click="ui.panelOpen = false"
+      >3D</button>
+      <button
+        class="mobilebar__btn"
+        :class="{ 'mobilebar__btn--on': ui.panelOpen }"
+        :aria-expanded="ui.panelOpen"
+        @click="ui.panelOpen = !ui.panelOpen"
+      >Объекты</button>
+      <button
+        class="mobilebar__btn mobilebar__btn--accent"
+        title="Добавить объект"
+        @click="openAddModal"
+      >＋</button>
+      <button
+        class="mobilebar__btn"
+        @click="ui.settingsTab = 'globals'; ui.settingsOpen = true"
+      >Проект</button>
+      <button
+        class="mobilebar__btn"
+        :class="{ 'mobilebar__btn--on': ui.moreOpen }"
+        @click="ui.moreOpen = true"
+      >Ещё</button>
+    </nav>
+    <div
+      v-if="ui.panelOpen"
+      class="mobile-scrim"
+      aria-hidden="true"
+      @click="ui.panelOpen = false"
+    ></div>
     <PresentationBar v-if="state.presentation" />
     <AddObjectModal v-if="ui.addOpen" @close="ui.addOpen = false" />
     <ObjectModal v-if="ui.object.open" />
+    <Toast />
   </div>
 </template>

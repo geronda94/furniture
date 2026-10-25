@@ -16,6 +16,7 @@ import {
   clearGuides,
   derived,
   MODULE_PRESETS,
+  effectiveMaterials,
   partAnimValues,
   resizeInstance,
   select,
@@ -30,6 +31,7 @@ import {
   updateOpening,
 } from '../state/project'
 import type { Projector } from '../render25d/camera'
+import { resolveObjectMaterial } from '../material/vars'
 
 const props = defineProps<{ compact?: boolean }>()
 
@@ -69,6 +71,17 @@ let drag: {
 let panning = false
 let lastX = 0
 let lastY = 0
+
+/* Мультитач и плавный зум */
+const pointers = new Map<number, { x: number; y: number }>()
+let pinch: {
+  dist: number
+  zoom: number
+  world: [number, number] | null
+} | null = null
+let zoomTarget = state.cameraPlan.zoom
+let zoomRaf = 0
+let zoomTs = 0
 let handles: { kind: 'w' | 'd'; x: number; y: number }[] = []
 let resizing: {
   kind: 'w' | 'd'
@@ -84,6 +97,8 @@ function placedObjects(): PlacedObject[] {
   for (const inst of state.project.instances) {
     const d = derived[inst.id]
     if (!d) continue
+    const mats = effectiveMaterials(inst)
+    const realistic = state.viewMode !== 'schematic'
     d.objects.forEach((o, part) => {
       out.push({
         object: o,
@@ -96,6 +111,15 @@ function placedObjects(): PlacedObject[] {
         },
         anim: partAnimValues(inst, part),
         part,
+        materials: mats,
+        material: realistic
+          ? resolveObjectMaterial(
+              state.project.materials,
+              state.project.materialVars,
+              inst,
+              o,
+            )
+          : undefined,
       })
     })
   }
@@ -113,6 +137,7 @@ function fit() {
     h,
     props.compact ? 0.08 : 0.2,
   )
+  zoomTarget = state.cameraPlan.zoom
   fitW = w
   fitH = h
   fitted = true
@@ -365,6 +390,12 @@ function onDown(e: PointerEvent) {
   if (!c) return
   touched = true
   c.setPointerCapture(e.pointerId)
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+  if (e.pointerType === 'touch' && pointers.size === 2) {
+    startPinch()
+    return
+  }
+  if (pointers.size > 1) return
   const r = c.getBoundingClientRect()
   const x = e.clientX - r.left
   const y = e.clientY - r.top
@@ -444,6 +475,13 @@ function onDown(e: PointerEvent) {
 }
 
 function onMove(e: PointerEvent) {
+  if (pointers.has(e.pointerId)) {
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+  }
+  if (pinch) {
+    movePinch()
+    return
+  }
   if (wallDrag) {
     const r = canvasEl.value?.getBoundingClientRect()
     if (!r || !planProj) return
@@ -548,7 +586,19 @@ function onMove(e: PointerEvent) {
   invalidate()
 }
 
-function onUp() {
+function onUp(e?: PointerEvent) {
+  if (e) pointers.delete(e.pointerId)
+  if (pinch) {
+    if (pointers.size < 2) {
+      pinch = null
+      const rest = pointers.values().next().value
+      if (rest) {
+        lastX = rest.x
+        lastY = rest.y
+      }
+    }
+    return
+  }
   if (drag) state.followToken++
   if (wallDrag && !wallDrag.moved) {
     if (wallDrag.kind === 'opening') selectOpening(wallDrag.id)
@@ -561,14 +611,77 @@ function onUp() {
   clearGuides()
 }
 
+function startPinch(): void {
+  const a = [...pointers.values()]
+  if (a.length < 2) return
+  const r = canvasEl.value?.getBoundingClientRect()
+  if (!r) return
+  drag = null
+  panning = false
+  resizing = null
+  wallDrag = null
+  cancelAnimationFrame(zoomRaf)
+  zoomRaf = 0
+  zoomTarget = state.cameraPlan.zoom
+  const [p1, p2] = a
+  const mx = (p1.x + p2.x) / 2 - r.left
+  const my = (p1.y + p2.y) / 2 - r.top
+  const world = screenToFloor(mx, my, state.cameraPlan, w, h)
+  pinch = {
+    dist: Math.max(1, Math.hypot(p2.x - p1.x, p2.y - p1.y)),
+    zoom: state.cameraPlan.zoom,
+    world: world ? [world[0], world[1]] : null,
+  }
+  clearGuides()
+}
+
+function movePinch(): void {
+  const a = [...pointers.values()]
+  const r = canvasEl.value?.getBoundingClientRect()
+  if (!pinch || a.length < 2 || !r) return
+  const [p1, p2] = a
+  const dist = Math.max(1, Math.hypot(p2.x - p1.x, p2.y - p1.y))
+  const mx = (p1.x + p2.x) / 2 - r.left
+  const my = (p1.y + p2.y) / 2 - r.top
+  touched = true
+  state.cameraPlan.zoom = clamp(pinch.zoom * (dist / pinch.dist), 0.02, 3)
+  const cur = screenToFloor(mx, my, state.cameraPlan, w, h)
+  if (pinch.world && cur) {
+    state.cameraPlan.target[0] += pinch.world[0] - cur[0]
+    state.cameraPlan.target[1] += pinch.world[1] - cur[1]
+  }
+  invalidate()
+}
+
+function zoomFrame(ts: number): void {
+  const dt = Math.max(1, ts - zoomTs)
+  zoomTs = ts
+  const k = 1 - Math.exp(-dt / 90)
+  const next = state.cameraPlan.zoom +
+    (zoomTarget - state.cameraPlan.zoom) * k
+  if (Math.abs(next - zoomTarget) < 0.0004) {
+    state.cameraPlan.zoom = zoomTarget
+    zoomRaf = 0
+    invalidate()
+    return
+  }
+  state.cameraPlan.zoom = next
+  invalidate()
+  zoomRaf = requestAnimationFrame(zoomFrame)
+}
+
 function onWheel(e: WheelEvent) {
   touched = true
   let delta = e.deltaY
   if (e.deltaMode === 1) delta *= 16
   else if (e.deltaMode === 2) delta *= 400
-  const k = Math.exp(-delta * 0.0011)
-  state.cameraPlan.zoom = clamp(state.cameraPlan.zoom * k, 0.02, 3)
-  invalidate()
+  // трекпад/пинч-жест в браузере приходит с ctrlKey — чуть чувствительнее
+  const k = Math.exp(-delta * (e.ctrlKey ? 0.004 : 0.0014))
+  zoomTarget = clamp(zoomTarget * k, 0.02, 3)
+  if (!zoomRaf) {
+    zoomTs = performance.now()
+    zoomRaf = requestAnimationFrame(zoomFrame)
+  }
 }
 
 watch(
@@ -581,7 +694,14 @@ watch(
   },
 )
 watch(() => state.rev, invalidate)
-watch(() => state.cameraPlan, invalidate, { deep: true })
+watch(
+  () => state.cameraPlan,
+  () => {
+    if (!zoomRaf) zoomTarget = state.cameraPlan.zoom
+    invalidate()
+  },
+  { deep: true },
+)
 watch(
   () => state.fitToken,
   () => {
@@ -606,6 +726,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('furniture:texture', onTexture)
   ro?.disconnect()
   cancelAnimationFrame(raf)
+  cancelAnimationFrame(zoomRaf)
 })
 </script>
 

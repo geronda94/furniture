@@ -1,35 +1,43 @@
-import {
-  ArcRotateCamera,
-  Camera,
-  Color3,
-  Color4,
-  DirectionalLight,
-  Engine,
-  HemisphericLight,
-  Matrix,
-  Mesh,
-  MeshBuilder,
-  RenderTargetTexture,
-  Scene,
-  ShadowGenerator,
-  StandardMaterial,
-  TransformNode,
-  UniversalCamera,
-  Vector3,
-  VertexData,
-} from '@babylonjs/core'
+import { Engine } from '@babylonjs/core/Engines/engine'
+import { Scene } from '@babylonjs/core/scene'
+import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera'
+import { UniversalCamera } from '@babylonjs/core/Cameras/universalCamera'
+import { Camera } from '@babylonjs/core/Cameras/camera'
+import { Color3, Color4 } from '@babylonjs/core/Maths/math.color'
+import { Matrix, Vector3 } from '@babylonjs/core/Maths/math.vector'
+import { DirectionalLight } from '@babylonjs/core/Lights/directionalLight'
+import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight'
+import { ShadowGenerator } from '@babylonjs/core/Lights/Shadows/shadowGenerator'
+import '@babylonjs/core/Lights/Shadows/shadowGeneratorSceneComponent'
+import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial'
+import { Texture } from '@babylonjs/core/Materials/Textures/texture'
+import { RenderTargetTexture } from '@babylonjs/core/Materials/Textures/renderTargetTexture'
+import { Mesh } from '@babylonjs/core/Meshes/mesh'
+import { TransformNode } from '@babylonjs/core/Meshes/transformNode'
+import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData'
+import { CreateBox } from '@babylonjs/core/Meshes/Builders/boxBuilder'
+import '@babylonjs/core/Rendering/edgesRenderer'
+import '@babylonjs/core/Culling/ray'
 import type { Instance } from '../state/project'
 import { derived, partAnimValues, state, ui } from '../state/project'
 import type { SolveResponse } from '../api'
 import type {
+  MaterialVariable,
   Materials,
   Opening,
   Room,
   SceneObject,
 } from '../render25d/types'
+import { resolveObjectMaterial } from '../material/vars'
 import { outlinePoints, roomWalls, triangulate, type WallSeg } from '../render25d/room'
 
 const MM = 0.001
+
+const ROLE_MAT: Record<string, string> = {
+  corpus: 'corpus', facade: 'facade', door: 'facade',
+  drawerfront: 'facade', drawerbox: 'drawer', worktop: 'worktop',
+  plinth: 'plinth', back: 'back', leg: 'leg',
+}
 
 interface PartMeta {
   instanceId: string
@@ -76,6 +84,7 @@ export class BabylonRenderer {
   private roomRoot: TransformNode
   private furniture: TransformNode
   private materials = new Map<string, StandardMaterial>()
+  private textures = new Map<string, Texture>()
   private parts = new Map<string, Mesh>()
   private partMeta = new Map<string, PartMeta>()
   private walls: WallMeta[] = []
@@ -132,9 +141,31 @@ export class BabylonRenderer {
     )
     this.orbit.lowerRadiusLimit = 0.25
     this.orbit.upperRadiusLimit = 40
-    this.orbit.wheelDeltaPercentage = 0.02
-    this.orbit.panningSensibility = 120
+    this.orbit.wheelDeltaPercentage = 0.01
+    this.orbit.zoomToMouseLocation = true
+    this.orbit.useNaturalPinchZoom = true
+    this.orbit.panningSensibility = 480
+    this.orbit.angularSensibilityX = 1200
+    this.orbit.angularSensibilityY = 1200
+    this.orbit.inertia = 0.82
     this.orbit.attachControl(canvas, true)
+
+    // Мультитач: два пальца — панорама + плавный пинч-зум
+    const pointers = (this.orbit.inputs.attached as unknown as Record<
+      string,
+      {
+        pinchDeltaPercentage?: number
+        pinchPrecision?: number
+        multiTouchPanning?: boolean
+        multiTouchPanAndZoom?: boolean
+      }
+    >).pointers
+    if (pointers) {
+      pointers.pinchDeltaPercentage = 0.008
+      pointers.pinchPrecision = 2
+      pointers.multiTouchPanning = true
+      pointers.multiTouchPanAndZoom = true
+    }
 
     this.walk = new UniversalCamera('walk', new Vector3(0, 1.6, -2), this.scene)
     this.walk.speed = 3.2
@@ -171,7 +202,7 @@ export class BabylonRenderer {
     selMat.wireframe = true
     selMat.emissiveColor = matColor('#e0a33e')
     selMat.disableLighting = true
-    this.selectionBox = MeshBuilder.CreateBox('selection', { size: 1 }, this.scene)
+    this.selectionBox = CreateBox('selection', { size: 1 }, this.scene)
     this.selectionBox.material = selMat
     this.selectionBox.isPickable = false
     this.selectionBox.setEnabled(false)
@@ -223,10 +254,15 @@ export class BabylonRenderer {
     instances: Instance[],
     derived: Record<string, SolveResponse>,
     materials: Materials,
+    materialVars: MaterialVariable[] = [],
   ): void {
     const alive = new Set<string>()
     let rebuilt = false
-    const matsSig = JSON.stringify(materials)
+    const matsSig = JSON.stringify({
+      project: materials,
+      vars: materialVars,
+      instances: instances.map((i) => [i.id, i.materials ?? null]),
+    })
     for (const inst of instances) {
       alive.add(inst.id)
       let root = this.roots.get(inst.id)
@@ -265,7 +301,7 @@ export class BabylonRenderer {
     }
     if (rebuilt || matsSig !== this.matsSig) {
       this.matsSig = matsSig
-      this.applyMaterials(instances, derived, materials)
+      this.applyMaterials(instances, derived, materials, materialVars)
     }
     if (rebuilt) {
       this.applyQualityToMeshes()
@@ -294,9 +330,14 @@ export class BabylonRenderer {
       this.partMeta.delete(k)
     }
     root.getChildMeshes().forEach((m) => m.dispose())
+    for (const k of [...this.materials.keys()]) {
+      if (!k.startsWith(`${inst.id}:`)) continue
+      this.materials.get(k)?.dispose()
+      this.materials.delete(k)
+    }
     objs.forEach((o, part) => {
       const key = `${inst.id}:${part}`
-      const mesh = MeshBuilder.CreateBox(
+      const mesh = CreateBox(
         key,
         { width: o.sx * MM, height: o.sz * MM, depth: o.sy * MM },
         this.scene,
@@ -304,7 +345,7 @@ export class BabylonRenderer {
       mesh.isPickable = true
       mesh.receiveShadows = true
       mesh.metadata = { instanceId: inst.id, part }
-      const mat = this.materialFor(o.role || 'corpus')
+      const mat = this.materialFor(`${inst.id}:${ROLE_MAT[o.role || 'corpus'] || o.role || 'corpus'}`)
       mesh.material = mat
       if (o.role !== 'drawer' && o.role !== 'leg') {
         mesh.enableEdgesRendering(0.999)
@@ -364,16 +405,26 @@ export class BabylonRenderer {
     return m
   }
 
+  private textureFor(url: string, repeat: number): Texture {
+    const rep = Math.max(0.25, Math.round(repeat * 4) / 4)
+    const key = `${url}|${rep}`
+    let tex = this.textures.get(key)
+    if (tex) return tex
+    tex = new Texture(url, this.scene)
+    tex.wrapU = Texture.WRAP_ADDRESSMODE
+    tex.wrapV = Texture.WRAP_ADDRESSMODE
+    tex.uScale = rep
+    tex.vScale = rep
+    this.textures.set(key, tex)
+    return tex
+  }
+
   private applyMaterials(
     instances: Instance[],
     derived: Record<string, SolveResponse>,
     materials: Materials,
+    materialVars: MaterialVariable[],
   ): void {
-    const roleMat: Record<string, string> = {
-      corpus: 'corpus', facade: 'facade', door: 'facade',
-      drawerfront: 'facade', drawerbox: 'drawer', worktop: 'worktop',
-      plinth: 'plinth', back: 'back', leg: 'leg',
-    }
     for (const inst of instances) {
       for (const [key, mesh] of this.parts) {
         if (!key.startsWith(`${inst.id}:`)) continue
@@ -381,10 +432,18 @@ export class BabylonRenderer {
         if (!meta) continue
         const obj = derived[inst.id]?.objects[meta.part]
         const role = obj?.role || 'corpus'
-        const mk = roleMat[role] || role
-        const src = materials[mk] ?? materials.corpus
-        const fa = this.materialFor(mk)
-        if (this.quality === 'schematic') {
+        const mk = ROLE_MAT[role] || role
+        const src = obj
+          ? resolveObjectMaterial(materials, materialVars, inst, obj)
+          : materials.corpus
+        const schematic = this.quality === 'schematic'
+        const textured = !schematic && !!src?.texture
+        // Ключ включает деталь: у корпуса, полок и боковин могут быть
+        // разные глобальные переменные при одной роли материала.
+        const matKey = `${inst.id}:${meta.part}:${mk}`
+        const fa = this.materialFor(matKey)
+        fa.unfreeze()
+        if (schematic) {
           const grey: Record<string, string> = {
             corpus: '#b8bcc1', facade: '#8f969d', worktop: '#7d848b',
             plinth: '#6e757c', back: '#d3d7db', drawer: '#9aa0a6',
@@ -392,9 +451,19 @@ export class BabylonRenderer {
           }
           fa.diffuseColor = matColor(grey[mk] || '#a9aeb3')
           fa.emissiveColor = new Color3(0.06, 0.06, 0.06)
+          fa.diffuseTexture = null
         } else {
           fa.diffuseColor = matColor(src?.color || '#999999')
           fa.emissiveColor = matColor(src?.accent || src?.color || '#222222').scale(0.08)
+          if (textured) {
+            const face = Math.max(meta.base.sx, meta.base.sz, meta.base.sy)
+            fa.diffuseTexture = this.textureFor(
+              src.texture as string,
+              face / (src.texScale || 600),
+            )
+          } else {
+            fa.diffuseTexture = null
+          }
         }
         mesh.material = fa
         fa.freeze()
@@ -513,7 +582,7 @@ export class BabylonRenderer {
     const addPiece = (s0: number, s1: number, z0: number, z1: number) => {
       if (s1 - s0 < 1 || z1 - z0 < 1) return
       const len = s1 - s0
-      const piece = MeshBuilder.CreateBox(
+      const piece = CreateBox(
         'wall',
         { width: len * MM, height: (z1 - z0) * MM, depth: wallT * MM },
         this.scene,
@@ -595,7 +664,7 @@ export class BabylonRenderer {
       mat: StandardMaterial,
       rotY = 0,
     ) => {
-      const m = MeshBuilder.CreateBox(
+      const m = CreateBox(
         name,
         { width: w * MM, height: h * MM, depth: d * MM },
         this.scene,
@@ -620,7 +689,7 @@ export class BabylonRenderer {
     const sMid = (x0 + x1) / 2
     // невидимый «паспорт» проёма: по нему удобно попадать мышью даже если
     // стекло/створка перекрыты геометрией стены
-    const hit = MeshBuilder.CreateBox(
+    const hit = CreateBox(
       'opening-hit',
       { width: Math.max(20, w - 20) * MM, height: Math.max(20, h - 20) * MM,
         depth: 10 * MM },
@@ -652,7 +721,7 @@ export class BabylonRenderer {
         const freeS = hingeS + sign * w * Math.cos(ang)
         const freeI = mid + w * Math.sin(ang)
         const pivotS = hingeS
-        const pivot = MeshBuilder.CreateBox(
+        const pivot = CreateBox(
           'doorpivot',
           { width: 0.01, height: 0.01, depth: 0.01 },
           this.scene,
@@ -661,7 +730,7 @@ export class BabylonRenderer {
         pivot.position = place(pivotS, 0, 2)
         pivot.rotation.y = -angle
         pivot.parent = this.roomRoot
-        const leaf = MeshBuilder.CreateBox(
+        const leaf = CreateBox(
           'doorleaf',
           { width: w * MM, height: h * MM, depth: 40 * MM },
           this.scene,
@@ -697,7 +766,7 @@ export class BabylonRenderer {
       const s = item.x + item.w / 2
       const x = seg.a.x + seg.dx * s + seg.nx * (item.depth / 2)
       const y = seg.a.y + seg.dy * s + seg.ny * (item.depth / 2)
-      const m = MeshBuilder.CreateBox(
+      const m = CreateBox(
         `wallitem:${item.kind}`,
         { width: item.w * MM, height: item.h * MM, depth: item.depth * MM },
         this.scene,
@@ -887,7 +956,7 @@ export class BabylonRenderer {
   setQuality(mode: 'realistic' | 'schematic'): void {
     this.quality = mode
     const schematic = mode === 'schematic'
-    this.engine.setHardwareScalingLevel(schematic ? 2.0 : 1.5)
+    this.engine.setHardwareScalingLevel(schematic ? 1.25 : 1)
     this.scene.shadowsEnabled = !schematic
     this.scene.imageProcessingConfiguration.contrast = schematic ? 1.0 : 1.12
     this.scene.imageProcessingConfiguration.exposure = schematic ? 1.0 : 1.05
@@ -896,7 +965,12 @@ export class BabylonRenderer {
       : new Color4(0.055, 0.066, 0.08, 1)
     const hadRoom = !!this.roomSig
     this.roomSig = ''
-    this.applyMaterials(state.project.instances, derived, state.project.materials)
+    this.applyMaterials(
+      state.project.instances,
+      derived,
+      state.project.materials,
+      state.project.materialVars,
+    )
     if (hadRoom) this.syncRoom(state.project.room, state.project.materials)
     for (const m of this.parts.values()) {
       m.receiveShadows = !schematic

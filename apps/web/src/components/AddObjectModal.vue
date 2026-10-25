@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useModalDrag } from '../composables/useModalDrag'
 import {
   addInstance,
@@ -24,6 +24,31 @@ const tab = ref<Tab>('furniture')
 const query = ref('')
 const group = ref('Все')
 const selectedKey = ref(MODULE_PRESETS[0]?.key ?? '')
+const mobileSettings = ref(false)
+const mobile = ref(false)
+const bodyEl = ref<HTMLElement | null>(null)
+let mobileQuery: MediaQueryList | null = null
+
+function syncMobile(e?: MediaQueryListEvent): void {
+  mobile.value = e ? e.matches : !!mobileQuery?.matches
+  if (!mobile.value) mobileSettings.value = false
+}
+
+function showStep(settings: boolean): void {
+  mobileSettings.value = settings
+  nextTick(() => {
+    if (bodyEl.value) bodyEl.value.scrollTop = 0
+  })
+}
+
+function selectCard(key: string): void {
+  selectedKey.value = key
+  if (mobile.value) showStep(true)
+}
+
+function backToCatalog(): void {
+  showStep(false)
+}
 
 const groups = computed(() => [
   'Все',
@@ -118,7 +143,9 @@ function applyOpeningPreset(p: (typeof OPENING_PRESETS)[number]): void {
 pickOpening('window')
 
 const canAdd = computed(() => {
-  if (tab.value === 'furniture') return !!selected.value
+  if (tab.value === 'furniture') {
+    return !!selected.value && (!mobile.value || mobileSettings.value)
+  }
   return opening.w >= 200 && opening.z1 > opening.z0
 })
 
@@ -145,13 +172,21 @@ function add(): void {
 function onKey(e: KeyboardEvent): void {
   if (e.key === 'Escape') emit('close')
 }
-onMounted(() => window.addEventListener('keydown', onKey))
-onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
+onMounted(() => {
+  window.addEventListener('keydown', onKey)
+  mobileQuery = window.matchMedia('(max-width: 760px)')
+  syncMobile()
+  mobileQuery.addEventListener('change', syncMobile)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKey)
+  mobileQuery?.removeEventListener('change', syncMobile)
+})
 </script>
 
 <template>
   <div class="modal modal--add" @click.self="emit('close')">
-    <section class="modal__win add" ref="winEl" :style="dragStyle">
+    <section class="modal__win add" ref="winEl" :style="dragStyle" role="dialog" aria-modal="true" aria-label="Добавить объект">
       <header class="modal__head" @pointerdown="onDragStart">
         <span class="modal__title">Добавить объект</span>
         <span class="modal__sub">{{ state.project.name }}</span>
@@ -162,8 +197,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
         </div>
       </header>
 
-      <div class="add__body">
-        <div class="add__catalog">
+      <div class="add__body" ref="bodyEl">
+        <div
+          class="add__catalog"
+          :class="{ 'add__step-hidden': tab === 'furniture' && mobileSettings }"
+        >
           <div class="add__tabs">
             <button
               class="add__tab"
@@ -205,7 +243,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
                 :key="p.key"
                 class="cat-card"
                 :class="{ 'cat-card--on': p.key === selectedKey }"
-                @click="selectedKey = p.key"
+                @click="selectCard(p.key)"
                 @dblclick="selectedKey = p.key; add()"
               >
                 <span class="cat-card__mark">{{ p.group.slice(0, 1) }}</span>
@@ -263,7 +301,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           </template>
         </div>
 
-        <aside class="add__settings">
+        <aside
+          class="add__settings"
+          :class="{ 'add__step-hidden': tab === 'furniture' && !mobileSettings }"
+        >
+          <button
+            class="btn btn--ghost btn--sm add__back"
+            @click="backToCatalog"
+          >← К каталогу</button>
           <div v-if="tab === 'furniture' && selected" class="add__settings-head">
             <b>{{ selected.label }}</b>
             <span class="dim">{{ selected.group }}</span>
@@ -418,13 +463,21 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
         <span class="dim">
           {{
             tab === 'furniture'
-              ? 'Модуль встанет в свободное место у дальней стены'
+              ? (mobileSettings
+                ? 'Проверьте размеры и добавьте модуль'
+                : 'Выберите модуль из каталога')
               : 'Проём закрепляется за выбранной стеной'
           }}
         </span>
         <span class="spacer"></span>
         <button class="btn" @click="emit('close')">Отмена</button>
-        <button class="btn btn--primary" :disabled="!canAdd" @click="add">
+        <button
+          v-if="tab === 'furniture' && mobile && !mobileSettings"
+          class="btn btn--primary"
+          :disabled="!selected"
+          @click="showStep(true)"
+        >Настроить</button>
+        <button v-else class="btn btn--primary" :disabled="!canAdd" @click="add">
           {{ tab === 'furniture' ? 'Добавить модуль' : 'Добавить проём' }}
         </button>
       </footer>

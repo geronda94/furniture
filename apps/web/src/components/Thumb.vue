@@ -3,7 +3,8 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { buildScene } from '../render25d/scene'
 import { fitCamera } from '../render25d/camera'
 import { renderView } from '../render25d/canvas'
-import { derived, state } from '../state/project'
+import { derived, effectiveMaterials, state } from '../state/project'
+import { resolveObjectMaterial } from '../material/vars'
 import type { Camera, PlacedObject, Vec3 } from '../render25d/types'
 
 const props = withDefaults(
@@ -25,7 +26,7 @@ const signature = computed(() => {
           .join(',')}`,
     )
     .join(';')
-  return `${JSON.stringify(inst.params)}|${d.objects.length}|${anim}`
+  return `${JSON.stringify(inst.params)}|${JSON.stringify(effectiveMaterials(inst))}|${JSON.stringify(state.project.materialVars)}|${d.objects.length}|${anim}`
 })
 
 function draw(): void {
@@ -48,6 +49,12 @@ function draw(): void {
     object: o,
     placement: { id: inst.id, x: 0, y: 0, rot: 0, z: 0 },
     part,
+    material: resolveObjectMaterial(
+      state.project.materials,
+      state.project.materialVars,
+      inst,
+      o,
+    ),
     anim: Object.fromEntries(
       Object.entries(
         inst.anim?.[
@@ -84,7 +91,7 @@ function draw(): void {
   const scene = buildScene({
     objects,
     camera: cam,
-    materials: state.project.materials,
+    materials: effectiveMaterials(inst),
     width: w,
     height: h,
     style: 'realistic',

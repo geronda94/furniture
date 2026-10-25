@@ -2,6 +2,11 @@
 
 > Дата: 2026-10-24. Кратко: что сделано, где лежит, что проверять, что дальше.
 > Эту сессию вели на локальной машине, дальнейшая работа — на сервере.
+>
+> **Обновление 2026-10-25:** мобильная раскладка, глобальные переменные проекта,
+> материалы/текстуры на уровне модуля, КП с печатью, версии проекта (снимки и
+> откат), чистка мёртвого кода, постформинг, сведение деталей, каталог петель, CI. Подробности — `docs/13` §8,
+> `docs/14` §M, `docs/10`. Порты compose: web `5176`, api `8003`.
 
 ## 1. Где что лежит
 
@@ -85,7 +90,7 @@ cd apps/web && npx tsc --noEmit && npm run build
 cp .env.example .env
 # задать POSTGRES_PASSWORD
 docker compose up -d --build
-# web http://localhost:5173, api http://localhost:8000/api/health
+# web http://localhost:5176, api http://localhost:8003/api/health
 ```
 
 Без Docker:
@@ -99,7 +104,9 @@ cd apps/web && npm run dev
 
 - Код — через GitHub (`git@github.com:geronda94/furniture.git`).
 - `.env` — **не через GitHub**: скопировать вручную (`scp`) в `~/projects/furniture/.env`.
-- На сервере: `docker compose up -d --build`, проверить `/api/health` и `:5173`.
+- На сервере: `docker compose up -d --build`, проверить `/api/health` и `:5176`.
+- Vite-хост: `5176.it2b.top` и поддомены `.it2b.top` разрешены в
+  `apps/web/vite.config.ts`; дополнительные — через `VITE_ALLOWED_HOSTS=host1,host2`.
 - Пароль БД в `compose.yaml` берётся из `.env`; в репозитории только `.env.example`.
 
 ## 6. Подводные камни / известные ограничения

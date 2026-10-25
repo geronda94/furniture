@@ -55,3 +55,68 @@ drawer_runners:
     box_height: 150.0
     side_extra: 0.0
     note: "Бюджетный вариант, частичное выдвижение"
+
+# Петли: присадка по бренду (используется движком в деталировке/присадке)
+hinges:
+  - id: blum-clip-top
+    brand: Blum
+    brand_key: blum
+    name: CLIP top BLUMOTION 110°
+    cup_dia: 35.0
+    cup_depth: 12.5
+    cup_offset: 22.5
+    plate_offset: 21.0
+    edge_margin: 90.0
+    max_pitch: 600.0
+
+  - id: hettich-intermat
+    brand: Hettich
+    brand_key: hettich
+    name: Intermat 9936
+    cup_dia: 35.0
+    cup_depth: 12.5
+    cup_offset: 22.0
+    plate_offset: 21.0
+    edge_margin: 90.0
+    max_pitch: 600.0
+
+  - id: gtv-110
+    brand: GTV
+    brand_key: gtv
+    name: Петля 110° с доводчиком
+    cup_dia: 35.0
+    cup_depth: 12.5
+    cup_offset: 22.0
+    plate_offset: 21.0
+    edge_margin: 90.0
+    max_pitch: 600.0
+
+# Ручки: каталожная позиция и цена за штуку (для сметы)
+handles:
+  - id: bar-128
+    brand: generic
+    name: Ручка-скоба 128 мм
+    price: 150
+    centers: 128
+  - id: bar-160
+    brand: generic
+    name: Ручка-скоба 160 мм
+    price: 170
+    centers: 160
+  - id: rail-192
+    brand: generic
+    name: Рейлинг 192 мм
+    price: 210
+    centers: 192
+  - id: knob-30
+    brand: generic
+    name: Ручка-кнопка 30 мм
+    price: 90
+    centers: 0
+  - id: profile-04
+    brand: generic
+    name: Профиль-ручка 4 м
+    price: 780
+    centers: 0
+    mount: profile
+    kind: profile

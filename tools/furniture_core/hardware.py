@@ -43,6 +43,144 @@ class Runner:
         }
 
 
+@dataclass
+class Hinge:
+    id: str
+    name: str
+    brand: str = ""
+    brand_key: str = "blum"
+    cup_dia: float = 35.0
+    cup_depth: float = 12.5
+    cup_offset: float = 22.5
+    plate_offset: float = 21.0
+    edge_margin: float = 90.0
+    max_pitch: float = 600.0
+
+    def as_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "brand": self.brand,
+            "brand_key": self.brand_key,
+            "cup_dia": self.cup_dia,
+            "cup_depth": self.cup_depth,
+            "cup_offset": self.cup_offset,
+            "plate_offset": self.plate_offset,
+            "edge_margin": self.edge_margin,
+            "max_pitch": self.max_pitch,
+        }
+
+
+@dataclass
+class Handle:
+    id: str
+    name: str
+    brand: str = ""
+    price: float = 150.0
+    centers: float = 128.0
+    mount: str = "through"       # through | from_inside | profile
+    hole_dia: float = 5.0
+    hole_depth: float = 13.0
+    kind: str = "bar"
+
+    def as_dict(self) -> dict:
+        return {
+            "id": self.id, "name": self.name, "brand": self.brand,
+            "price": self.price, "centers": self.centers,
+            "mount": self.mount, "hole_dia": self.hole_dia,
+            "hole_depth": self.hole_depth, "kind": self.kind,
+        }
+
+
+DEFAULT_HANDLES = [
+    Handle("bar-128", "Ручка-скоба 128 мм", "generic", 150.0, 128.0),
+    Handle("bar-160", "Ручка-скоба 160 мм", "generic", 170.0, 160.0),
+    Handle("rail-192", "Рейлинг 192 мм", "generic", 210.0, 192.0),
+    Handle("knob-30", "Ручка-кнопка 30 мм", "generic", 90.0, 0.0),
+    Handle("profile-04", "Профиль-ручка 4 м", "generic", 780.0, 0.0,
+           mount="profile", kind="profile"),
+]
+
+
+def load_handles(path: str | Path | None = None) -> list[Handle]:
+    data = _read_hardware(path)
+    rows = data.get("handles") if isinstance(data, dict) else None
+    out: list[Handle] = []
+    for row in rows or []:
+        if not isinstance(row, dict) or not row.get("id"):
+            continue
+        out.append(Handle(
+            id=str(row["id"]),
+            name=str(row.get("name", row["id"])),
+            brand=str(row.get("brand", "")),
+            price=float(row.get("price", 150.0)),
+            centers=float(row.get("centers", 0.0)),
+            mount=str(row.get("mount", "through")),
+            hole_dia=float(row.get("hole_dia", 5.0)),
+            hole_depth=float(row.get("hole_depth", 13.0)),
+            kind=str(row.get("kind", "bar")),
+        ))
+    return out or DEFAULT_HANDLES
+
+
+def find_handle(handles: list[Handle], handle_id: str | None) -> Handle:
+    for h in handles:
+        if h.id == handle_id:
+            return h
+    return handles[0] if handles else DEFAULT_HANDLES[0]
+
+
+DEFAULT_HINGES = [
+    Hinge("blum-clip-top", "CLIP top BLUMOTION 110°", "Blum", "blum"),
+    Hinge("hettich-intermat", "Intermat 9936", "Hettich", "hettich", cup_offset=22.0),
+    Hinge("gtv-110", "Петля 110° с доводчиком", "GTV", "gtv", cup_offset=22.0),
+]
+
+
+def _read_hardware(path: str | Path | None = None) -> dict:
+    p = Path(path) if path else DEFAULT_PATH
+    if not p.exists():
+        return {}
+    try:
+        text = p.read_text(encoding="utf-8")
+        try:
+            import yaml
+            return yaml.safe_load(text) or {}
+        except Exception:
+            return json.loads(text) or {}
+    except Exception:
+        return {}
+
+
+def load_hinges(path: str | Path | None = None) -> list[Hinge]:
+    data = _read_hardware(path)
+    rows = data.get("hinges") if isinstance(data, dict) else None
+    out: list[Hinge] = []
+    for row in rows or []:
+        if not isinstance(row, dict) or not row.get("id"):
+            continue
+        out.append(Hinge(
+            id=str(row["id"]),
+            name=str(row.get("name", row["id"])),
+            brand=str(row.get("brand", "")),
+            brand_key=str(row.get("brand_key", "blum")),
+            cup_dia=float(row.get("cup_dia", 35.0)),
+            cup_depth=float(row.get("cup_depth", 12.5)),
+            cup_offset=float(row.get("cup_offset", 22.5)),
+            plate_offset=float(row.get("plate_offset", 21.0)),
+            edge_margin=float(row.get("edge_margin", 90.0)),
+            max_pitch=float(row.get("max_pitch", 600.0)),
+        ))
+    return out or DEFAULT_HINGES
+
+
+def find_hinge(hinges: list[Hinge], brand: str | None) -> Hinge:
+    for h in hinges:
+        if h.brand_key == brand or h.id == brand:
+            return h
+    return hinges[0] if hinges else DEFAULT_HINGES[0]
+
+
 DEFAULT_RUNNER = Runner(
     id="tandem-21",
     name="Скрытые TANDEM plus BLUMOTION 560H",

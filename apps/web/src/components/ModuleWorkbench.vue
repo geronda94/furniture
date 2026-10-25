@@ -7,10 +7,10 @@ import MaterialPanel from './MaterialPanel.vue'
 import {
   addKey,
   channelsOf,
-  defaultParams,
   deleteInstance,
   derived,
   duplicateInstance,
+  handles,
   kindIsOpen,
   partIsOpen,
   partSelection,
@@ -18,9 +18,13 @@ import {
   pushSelection,
   renameInstance,
   removeKey,
+  isParamOverridden,
   resetKeys,
+  resetParamOverrides,
   rotateInstance,
   runners,
+  MANAGED_PARAMS,
+  type ManagedParam,
   selectPart,
   setDrawerHeight,
   setInstancePosition,
@@ -61,6 +65,19 @@ const p = computed<Params | null>(() => inst.value?.params ?? null)
 const dims = computed(() => calc.value?.dims ?? null)
 const drawers = computed(() => calc.value?.drawers ?? [])
 const cost = computed(() => calc.value?.cost ?? null)
+const PARAM_LABELS: Record<ManagedParam, string> = {
+  t: 'толщина ЛДСП', back: 'задняя стенка', backT: 'толщина задней',
+  roof: 'крыша', reinforce: 'царги', frame: 'каркас',
+  hardware: 'петли', runners: 'направляющие', plinthH: 'цоколь',
+  worktopT: 'столешница', gapSide: 'зазор сбоку',
+  gapBetween: 'зазор между', gapTop: 'зазор сверху',
+  gapBottom: 'зазор снизу',
+}
+const overridden = computed<ManagedParam[]>(() =>
+  inst.value
+    ? MANAGED_PARAMS.filter((k) => isParamOverridden(inst.value!, k))
+    : [],
+)
 const money = (v: number) =>
   new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(v) + ' ₽'
 
@@ -211,8 +228,9 @@ function update(patch: Partial<Params>): void {
   updateParams(patch)
 }
 function resetBody(): void {
-  if (inst.value) setMount(inst.value.id, 'floor')
-  update(defaultParams())
+  if (!inst.value) return
+  setMount(inst.value.id, 'floor')
+  resetParamOverrides(inst.value.id)
 }
 
 const cutouts = computed(() => p.value?.cutouts ?? [])
@@ -343,7 +361,7 @@ const tabs: { id: Tab; label: string }[] = [
       </div>
 
       <!-- МЕНЮ И ВАЖНЫЕ ФУНКЦИИ -->
-      <div class="wb__side">
+      <div class="wb__side" :class="`wb__side--${tab}`">
         <header class="wb__head">
           <input
             class="input wb__name"
@@ -577,6 +595,11 @@ const tabs: { id: Tab; label: string }[] = [
             <option v-for="r in runners" :key="r.id" :value="r.id">{{ r.name }} · зазор {{ r.side_gap }} мм</option>
           </select>
         </label>
+        <label class="field"><span class="field__label">Ручки фасадов</span>
+          <select class="select" :value="p.handle" @change="update({ handle: ($event.target as HTMLSelectElement).value })">
+            <option v-for="h in handles" :key="h.id" :value="h.id">{{ h.name }} · {{ h.price }} ₽</option>
+          </select>
+        </label>
         <div class="wb__cutouts">
           <div class="wb__label">Вырезы в столешнице <button class="btn btn--sm" @click="addCutout">＋ вырез</button></div>
           <div v-for="(c, i) in cutouts" :key="i" class="fc__cutout">
@@ -592,6 +615,17 @@ const tabs: { id: Tab; label: string }[] = [
               <label class="coord"><span>Г</span><input type="number" :value="c.h" step="10" @change="setCutout(i, 'h', $event)" /></label>
             </div>
           </div>
+        </div>
+        <div v-if="overridden.length" class="wb__overrides">
+          <span class="dim">Свои значения:</span>
+          <span class="wb__overrides-list">
+            <span v-for="k in overridden" :key="k" class="wb__override-chip">
+              {{ PARAM_LABELS[k] }}
+            </span>
+          </span>
+          <button class="btn btn--sm" @click="resetParamOverrides(inst.id, overridden)">
+            К глобальным
+          </button>
         </div>
         <div class="wb__actions"><button class="btn btn--sm" @click="resetBody">Сбросить корпус</button></div>
         <ul v-if="warnings.length" class="issues"><li v-for="w in warnings" :key="w" class="is-warn">{{ w }}</li></ul>
@@ -675,6 +709,7 @@ const tabs: { id: Tab; label: string }[] = [
 
       <template v-else-if="tab === 'materials'">
         <MaterialPanel
+          :instance-id="inst.id"
           :roles="[
             { key: 'corpus', label: 'Корпус' },
             { key: 'facade', label: 'Фасады' },
@@ -684,9 +719,14 @@ const tabs: { id: Tab; label: string }[] = [
             { key: 'drawer', label: 'Ящики' },
           ]"
         />
+        <button
+          class="btn btn--sm"
+          @click="ui.settingsTab = 'vars'; ui.settingsOpen = true"
+        >Глобальные переменные…</button>
         <p class="dim wb__note">
-          Цвет и текстура применяются ко всем модулям проекта. Библиотека —
-          декоры ЛДСП, штукатурка, паркет/ламинат, столешницы.
+          Правки относятся к этому модулю. Материалы остальных модулей и
+          комнаты — в «Проект → Материалы». Библиотека: декоры ЛДСП,
+          штукатурка, паркет/ламинат, столешницы.
         </p>
       </template>
 

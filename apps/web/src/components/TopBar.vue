@@ -1,7 +1,11 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed } from 'vue'
 import ProjectManager from './ProjectManager.vue'
 import HistoryPanel from './HistoryPanel.vue'
+import ProjectSettings from './ProjectSettings.vue'
+import QuotePanel from './QuotePanel.vue'
+import VersionsPanel from './VersionsPanel.vue'
+import TopBarMenu from './TopBarMenu.vue'
 import {
   canRedo,
   canUndo,
@@ -11,14 +15,26 @@ import {
   setPresentation,
   setViewMode,
   state,
+  ui,
   undo,
 } from '../state/project'
 
 function onRename(e: Event) {
   rename((e.target as HTMLInputElement).value)
 }
-const projectsOpen = ref(false)
-const historyOpen = ref(false)
+const saveText = computed(() => {
+  if (state.saveState === 'saving') return 'Сохраняем…'
+  if (state.saveState === 'error') return 'Не сохранено'
+  if (state.dirty) return 'Есть изменения'
+  return state.savedAt ? `Сохранено ${state.savedAt}` : 'Готово'
+})
+
+const saveTitle = computed(() => {
+  if (state.saveState === 'error') return state.saveError || 'Ошибка сохранения'
+  if (state.saveState === 'saving') return 'Идёт сохранение проекта'
+  if (state.dirty) return 'Изменения ещё не отправлены на сервер'
+  return 'Проект сохранён'
+})
 
 function exportJson(): void {
   const blob = new Blob([JSON.stringify(state.project, null, 2)], {
@@ -68,9 +84,17 @@ function exportJson(): void {
     <span class="spacer"></span>
 
     <span v-if="state.busy" class="badge badge--warn">расчёт…</span>
-    <span v-else-if="state.savedAt" class="save-hint">
-      сохранено {{ state.savedAt }}
-    </span>
+
+    <button
+      class="save-state"
+      :class="`save-state--${state.saveState}`"
+      :title="saveTitle"
+      :aria-label="saveTitle"
+      @click="ui.moreOpen = true"
+    >
+      <span class="save-state__dot"></span>
+      <span class="save-state__text">{{ saveText }}</span>
+    </button>
 
     <button
       class="btn btn--ghost btn--icon"
@@ -88,12 +112,22 @@ function exportJson(): void {
     >
       ↷
     </button>
-    <button class="btn btn--ghost" @click="historyOpen = true">Журнал</button>
-    <button class="btn btn--ghost" @click="projectsOpen = true">Проекты</button>
-    <button class="btn btn--ghost" @click="exportJson">JSON</button>
-    <button class="btn" @click="setPresentation(true)">Показ</button>
-    <button class="btn btn--primary" @click="saveProject">Сохранить</button>
-    <ProjectManager v-if="projectsOpen" @close="projectsOpen = false" />
-    <HistoryPanel v-if="historyOpen" @close="historyOpen = false" />
+    <button class="btn btn--primary topbar__save" @click="saveProject">Сохранить</button>
+    <button class="btn btn--ghost topbar__more" title="Ещё" @click="ui.moreOpen = true">
+      Ещё
+    </button>
+    <ProjectManager v-if="ui.projectsOpen" @close="ui.projectsOpen = false" />
+    <HistoryPanel v-if="ui.historyOpen" @close="ui.historyOpen = false" />
+    <ProjectSettings v-if="ui.settingsOpen" @close="ui.settingsOpen = false" />
+    <QuotePanel v-if="ui.quoteOpen" @close="ui.quoteOpen = false" />
+    <VersionsPanel v-if="ui.versionsOpen" @close="ui.versionsOpen = false" />
+    <TopBarMenu
+      v-if="ui.moreOpen"
+      @close="ui.moreOpen = false"
+      @files="ui.projectsOpen = true"
+      @history="ui.historyOpen = true"
+      @json="exportJson"
+      @present="setPresentation(true)"
+    />
   </header>
 </template>
