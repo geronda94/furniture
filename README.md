@@ -101,6 +101,8 @@ blender -b -P blender_build.py -- ../projects/kitchen-10m/scene3d.json ../projec
 | `business/STRATEGY_EXPANSION.md` | форки: застройщики, BIM, оцифровка, white-label |
 | `business/WIDGET_MARKET_ANALYSIS.md` | рынки и цены для модулей/виджетов (RO/MD/KZ/GE) |
 | `business/GLOBAL_MARKET_ANALYSIS.md` | 14 стран: приоритеты по всем направлениям |
+| `business/ARCHED_MODULAR_HOUSES.md` | арочные модульные дома: рынки, экономика, пилот |
+| `business/UKRAINE_OPPORTUNITY.md` | Украина после войны: направления и роли |
 | `business/MARKET_RESEARCH.md` | конкуренты, YouTube, Россия/СНГ/Казахстан/Грузия |
 | `business/GTM_PLAYBOOK.md` | запуск с низкими трудозатратами |
 | `business/CONTENT_ENGINE.md` | мультиязычный контент-конвейер |
