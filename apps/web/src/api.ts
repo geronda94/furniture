@@ -362,10 +362,70 @@ export async function apiGetProject(id: string): Promise<unknown> {
   return r.json()
 }
 
+export interface AuthUser {
+  id: string
+  name: string
+  email?: string
+  role: 'user' | 'guest' | string
+  demo: boolean
+}
+
+export interface AuthResult {
+  user: AuthUser
+  project_id?: string
+}
+
 export interface ProjectRow {
   id: string
   name: string
   updated: string
+  public?: boolean
+}
+
+export async function apiMe(): Promise<AuthUser | null> {
+  const r = await fetch('/api/auth/me')
+  if (!r.ok) return null
+  const data = (await r.json()) as { user?: AuthUser | null }
+  return data.user ?? null
+}
+
+async function authPost(path: string, body?: unknown): Promise<AuthResult> {
+  const r = await fetch(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  if (!r.ok) {
+    const text = await r.text().catch(() => '')
+    throw new Error(text || `HTTP ${r.status}`)
+  }
+  return (await r.json()) as AuthResult
+}
+
+export async function apiLogin(email: string, password: string): Promise<AuthResult> {
+  return authPost('/api/auth/login', { email, password })
+}
+
+export async function apiRegister(
+  email: string, password: string, name: string,
+): Promise<AuthResult> {
+  return authPost('/api/auth/register', { email, password, name })
+}
+
+export async function apiDemo(): Promise<AuthResult> {
+  return authPost('/api/auth/demo')
+}
+
+export async function apiLogout(): Promise<void> {
+  await fetch('/api/auth/logout', { method: 'POST' })
+}
+
+export async function apiDeleteProject(id: string): Promise<void> {
+  const r = await fetch(`/api/projects/${id}`, { method: 'DELETE' })
+  if (!r.ok) {
+    const text = await r.text().catch(() => '')
+    throw new Error(text || `HTTP ${r.status}`)
+  }
 }
 
 export async function apiListProjects(): Promise<ProjectRow[]> {

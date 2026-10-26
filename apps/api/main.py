@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from dataclasses import asdict
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -43,13 +43,25 @@ from furniture_core.pricing import (  # noqa: E402
     load_options as load_pricing_options,
     load_pricing,
 )
+from .auth import (  # noqa: E402
+    clear_session,
+    current_user,
+    hash_password,
+    public_user,
+    set_session,
+    verify_password,
+)
 from .storage import (  # noqa: E402
+    create_guest,
+    create_user,
     delete_project as repo_delete,
     delete_version as repo_delete_version,
+    find_user_by_email,
     get_project as repo_get,
     get_version as repo_get_version,
     list_projects as repo_list,
     list_versions as repo_list_versions,
+    project_owner,
     put_project as repo_put,
     put_version as repo_put_version,
     using_db,
@@ -84,6 +96,16 @@ class VersionIn(BaseModel):
 
 class RestoreIn(BaseModel):
     backup: bool = True
+
+
+class AuthIn(BaseModel):
+    email: str = ""
+    password: str = ""
+    name: str = ""
+
+
+class DemoIn(BaseModel):
+    pass
 
 
 DEFAULT_PARAMS = {
@@ -215,6 +237,87 @@ def _apply_action(doc: dict, act: dict) -> dict:
                     params[key] = value
         return {"op": op}
     raise ValueError(f"неизвестная операция: {op}")
+
+
+def _user_or_401(request: Request) -> dict[str, Any]:
+    user = current_user(request)
+    if not user:
+        raise HTTPException(401, "нужно войти в аккаунт")
+    return user
+
+
+def _check_project_access(pid: str, user: dict[str, Any]) -> None:
+    owner = project_owner(pid)
+    if owner is not None and owner != user.get("id"):
+        raise HTTPException(403, "проект принадлежит другому пользователю")
+
+
+def _project_for(request: Request, pid: str) -> dict[str, Any]:
+    user = _user_or_401(request)
+    _check_project_access(pid, user)
+    return user
+
+
+@app.post("/api/auth/register")
+def register(body: AuthIn, response: Response):
+    email = body.email.strip().lower()
+    if "@" not in email or len(email) < 5:
+        raise HTTPException(422, "укажите корректный e-mail")
+    if len(body.password) < 8:
+        raise HTTPException(422, "пароль должен быть не короче 8 символов")
+    if find_user_by_email(email):
+        raise HTTPException(409, "пользователь с таким e-mail уже есть")
+    user = create_user(email, body.name.strip() or email.split("@")[0],
+                       hash_password(body.password))
+    set_session(response, user["id"])
+    return {"user": public_user(user)}
+
+
+@app.post("/api/auth/login")
+def login(body: AuthIn, response: Response):
+    user = find_user_by_email(body.email)
+    if not user or not verify_password(body.password, user.get("password_hash")):
+        raise HTTPException(401, "неверный e-mail или пароль")
+    set_session(response, user["id"])
+    return {"user": public_user(user)}
+
+
+@app.post("/api/auth/demo")
+def demo_login(response: Response):
+    """Гостевая сессия с личной копией демо-кухни.
+
+    Гость может свободно двигать мебель и смотреть присадку, но его правки
+    не попадают в публичный демо-проект.
+    """
+    seed = repo_get("demo")
+    if seed is None:
+        demo_file = PROJECTS / "demo" / "project.json"
+        if demo_file.exists():
+            try:
+                seed = json.loads(demo_file.read_text(encoding="utf-8"))
+            except Exception:
+                seed = None
+    if seed is None:
+        raise HTTPException(503, "демо-проект не найден")
+    user = create_guest()
+    pid = _new_id("demo-")
+    doc = json.loads(json.dumps(seed))
+    doc["name"] = "Демо — Кухня"
+    doc.pop("_owner", None)
+    repo_put(pid, doc, owner=user["id"])
+    set_session(response, user["id"])
+    return {"user": public_user(user), "project_id": pid}
+
+
+@app.post("/api/auth/logout")
+def logout(response: Response):
+    clear_session(response)
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+def me(request: Request):
+    return {"user": public_user(current_user(request))}
 
 
 @app.get("/api/health")
@@ -416,15 +519,18 @@ def ai_guide():
 
 
 @app.get("/api/projects")
-def list_projects():
+def list_projects(request: Request):
+    user = _user_or_401(request)
     try:
-        return {"projects": repo_list()}
+        rows = repo_list(owner=user.get("id"), include_public=False)
+        return {"projects": rows, "user": public_user(user)}
     except Exception as exc:
         raise HTTPException(500, str(exc)) from exc
 
 
 @app.get("/api/projects/{pid}")
-def get_project(pid: str):
+def get_project(pid: str, request: Request):
+    _project_for(request, pid)
     try:
         doc = repo_get(pid)
     except ValueError as exc:
@@ -435,8 +541,9 @@ def get_project(pid: str):
 
 
 @app.get("/api/projects/{pid}/summary")
-def project_summary(pid: str):
-    doc = get_project(pid)
+def project_summary(pid: str, request: Request):
+    _project_for(request, pid)
+    doc = repo_get(pid)
     room = doc.get("room", {})
     out = {
         "id": pid, "name": doc.get("name"), "schema": doc.get("schema"),
@@ -474,8 +581,9 @@ def project_summary(pid: str):
 
 
 @app.post("/api/projects/{pid}/actions")
-def project_actions(pid: str, body: ActionIn):
-    doc = get_project(pid)
+def project_actions(pid: str, body: ActionIn, request: Request):
+    user = _project_for(request, pid)
+    doc = repo_get(pid)
     results = []
     try:
         for act in body.actions:
@@ -483,17 +591,21 @@ def project_actions(pid: str, body: ActionIn):
     except Exception as exc:
         raise HTTPException(422, str(exc)) from exc
     if body.commit:
-        put_project(pid, doc)
+        try:
+            repo_put(pid, doc, owner=user.get("id"))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
     return {"ok": True, "committed": body.commit, "results": results,
             "project": doc if not body.commit else None}
 
 
 @app.put("/api/projects/{pid}")
-def put_project(pid: str, doc: dict[str, Any]):
+def put_project(pid: str, doc: dict[str, Any], request: Request):
     if not isinstance(doc, dict):
         raise HTTPException(400, "ожидается JSON-объект")
+    user = _project_for(request, pid)
     try:
-        path = repo_put(pid, doc)
+        path = repo_put(pid, doc, owner=user.get("id"))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True, "id": pid, "storage": path}
@@ -506,7 +618,8 @@ def _version_id() -> str:
 
 
 @app.get("/api/projects/{pid}/versions")
-def list_versions(pid: str):
+def list_versions(pid: str, request: Request):
+    _project_for(request, pid)
     if repo_get(pid) is None:
         raise HTTPException(404, "проект не найден")
     try:
@@ -516,7 +629,8 @@ def list_versions(pid: str):
 
 
 @app.post("/api/projects/{pid}/versions")
-def create_version(pid: str, body: VersionIn | None = None):
+def create_version(pid: str, request: Request, body: VersionIn | None = None):
+    _project_for(request, pid)
     doc = repo_get(pid)
     if doc is None:
         raise HTTPException(404, "проект не найден")
@@ -529,7 +643,8 @@ def create_version(pid: str, body: VersionIn | None = None):
 
 
 @app.get("/api/projects/{pid}/versions/{vid}")
-def get_version(pid: str, vid: str):
+def get_version(pid: str, vid: str, request: Request):
+    _project_for(request, pid)
     try:
         ver = repo_get_version(pid, vid)
     except ValueError as exc:
@@ -540,7 +655,9 @@ def get_version(pid: str, vid: str):
 
 
 @app.post("/api/projects/{pid}/versions/{vid}/restore")
-def restore_version(pid: str, vid: str, body: RestoreIn | None = None):
+def restore_version(pid: str, vid: str, request: Request,
+                    body: RestoreIn | None = None):
+    user = _project_for(request, pid)
     try:
         ver = repo_get_version(pid, vid)
     except ValueError as exc:
@@ -558,14 +675,15 @@ def restore_version(pid: str, vid: str, body: RestoreIn | None = None):
                 f"Перед восстановлением: {ver.get('name') or vid}",
             )
     try:
-        path = repo_put(pid, doc)
+        path = repo_put(pid, doc, owner=user.get("id"))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True, "restored": vid, "storage": path, "project": doc}
 
 
 @app.delete("/api/projects/{pid}/versions/{vid}")
-def delete_version(pid: str, vid: str):
+def delete_version(pid: str, vid: str, request: Request):
+    _project_for(request, pid)
     try:
         ok = repo_delete_version(pid, vid)
     except ValueError as exc:
@@ -576,7 +694,8 @@ def delete_version(pid: str, vid: str):
 
 
 @app.delete("/api/projects/{pid}")
-def delete_project(pid: str):
+def delete_project(pid: str, request: Request):
+    _project_for(request, pid)
     try:
         ok = repo_delete(pid)
     except ValueError as exc:

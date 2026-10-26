@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useModalDrag } from '../composables/useModalDrag'
+import { apiDeleteProject } from '../api'
+import { auth, logout } from '../state/auth'
 import {
   createProject,
   listProjects,
@@ -52,6 +54,30 @@ async function create(): Promise<void> {
   }
 }
 
+async function remove(id: string, name: string): Promise<void> {
+  if (!window.confirm(`Удалить проект «${name}»? Это действие нельзя отменить.`)) return
+  busy.value = true
+  try {
+    await apiDeleteProject(id)
+    if (id === state.projectId) {
+      // Перезагрузка: новый проект создастся при старте, без повторного
+      // сохранения уже удалённого документа.
+      window.location.reload()
+      return
+    }
+    await refresh()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    busy.value = false
+  }
+}
+
+async function signOut(): Promise<void> {
+  await logout()
+  window.location.reload()
+}
+
 onMounted(refresh)
 </script>
 
@@ -69,18 +95,32 @@ onMounted(refresh)
 
         <div class="pm__body">
           <aside class="pm__list">
-            <button
+            <div
               v-for="r in rows"
               :key="r.id"
               class="pm__row"
               :class="{ 'pm__row--on': r.id === state.projectId }"
-              :disabled="busy"
-              @click="open(r.id)"
             >
-              <span class="pm__name">{{ r.name }}</span>
-              <span class="pm__id">{{ r.id }}</span>
-            </button>
-            <div v-if="!rows.length" class="dim pm__empty">Проектов пока нет</div>
+              <button
+                class="pm__open"
+                :disabled="busy"
+                @click="open(r.id)"
+              >
+                <span class="pm__name">{{ r.name }}</span>
+                <span class="pm__id">{{ r.updated ? new Date(r.updated).toLocaleDateString('ru-RU') : r.id }}</span>
+              </button>
+              <button
+                class="pm__delete"
+                :disabled="busy"
+                title="Удалить проект"
+                @click="remove(r.id, r.name)"
+              >×</button>
+            </div>
+            <div v-if="!rows.length" class="dim pm__empty">Проектов пока нет — создайте первый.</div>
+            <div class="pm__account">
+              <span class="dim">Вы вошли как <b>{{ auth.user?.name }}</b></span>
+              <button class="link" @click="signOut">Выйти</button>
+            </div>
           </aside>
 
           <div class="pm__new">
@@ -102,7 +142,7 @@ onMounted(refresh)
             </button>
             <p v-if="error" class="pm__error">{{ error }}</p>
             <p class="dim pm__hint">
-              Текущий: <b>{{ state.project.name }}</b> ({{ state.projectId }})
+              Текущий: <b>{{ state.project.name }}</b>
             </p>
           </div>
         </div>

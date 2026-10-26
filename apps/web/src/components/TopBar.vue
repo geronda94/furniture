@@ -113,7 +113,7 @@ function exportJson(): void {
       ↷
     </button>
     <button class="btn btn--primary topbar__save" @click="saveProject">Сохранить</button>
-    <button class="btn btn--ghost topbar__more" title="Ещё" @click="ui.moreOpen = true">
+    <button class="btn btn--ghost topbar__more" title="Ещё" data-tour="more" @click="ui.moreOpen = true">
       Ещё
     </button>
     <ProjectManager v-if="ui.projectsOpen" @close="ui.projectsOpen = false" />

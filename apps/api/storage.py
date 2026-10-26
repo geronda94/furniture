@@ -17,6 +17,7 @@ PROJECTS = ROOT / "projects"
 PID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 VID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 SCHEMA = "furniture/project@0"
+AUTH_FILE = ROOT / ".auth" / "users.json"
 
 _dsn = os.getenv("DATABASE_URL", "").strip()
 _ready = False
@@ -59,6 +60,24 @@ def _init() -> None:
                 )
                 """
             )
+            # Мультипроектность: у проекта может быть владелец. Старые
+            # проекты остаются публичными (owner IS NULL), пока их не откроют
+            # и не сохранят под своим аккаунтом.
+            cur.execute(
+                "ALTER TABLE projects ADD COLUMN IF NOT EXISTS owner text"
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                  id text PRIMARY KEY,
+                  email text UNIQUE,
+                  name text NOT NULL DEFAULT '',
+                  password_hash text,
+                  role text NOT NULL DEFAULT 'user',
+                  created timestamptz NOT NULL DEFAULT now()
+                )
+                """
+            )
     _ready = True
 
 
@@ -82,18 +101,161 @@ def _check_vid(vid: str) -> None:
         raise ValueError("недопустимый id версии")
 
 
-def list_projects() -> list[dict[str, Any]]:
+def _load_file_users() -> dict[str, dict[str, Any]]:
+    if not AUTH_FILE.exists():
+        return {}
+    try:
+        data = json.loads(AUTH_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_file_users(users: dict[str, dict[str, Any]]) -> None:
+    AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = AUTH_FILE.with_suffix(".json.tmp")
+    tmp.write_text(
+        json.dumps(users, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    tmp.replace(AUTH_FILE)
+
+
+def create_user(email: str | None, name: str, password_hash: str,
+                role: str = "user") -> dict[str, Any]:
+    uid = f"u{os.urandom(8).hex()}"
     if _dsn:
         _init()
         with _conn() as con:
             with con.cursor() as cur:
                 cur.execute(
-                    "SELECT id, name, updated FROM projects ORDER BY updated DESC"
+                    """
+                    INSERT INTO users (id, email, name, password_hash, role)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id, email, name, role, created
+                    """,
+                    (uid, email, name, password_hash, role),
                 )
+                row = cur.fetchone()
+        return {
+            "id": row[0], "email": row[1], "name": row[2],
+            "role": row[3], "created": row[4].astimezone(timezone.utc).isoformat(),
+            "password_hash": password_hash,
+        }
+    users = _load_file_users()
+    row = {
+        "id": uid, "email": email, "name": name,
+        "password_hash": password_hash, "role": role,
+        "created": datetime.now(timezone.utc).isoformat(),
+    }
+    users[uid] = row
+    _save_file_users(users)
+    return row
+
+
+def create_guest() -> dict[str, Any]:
+    name = f"Демо-гость {os.urandom(2).hex()}"
+    row = create_user(None, name, "", role="guest")
+    return row
+
+
+def get_user(uid: str) -> dict[str, Any] | None:
+    if not uid:
+        return None
+    if _dsn:
+        _init()
+        with _conn() as con:
+            with con.cursor() as cur:
+                cur.execute(
+                    "SELECT id, email, name, role, password_hash, created "
+                    "FROM users WHERE id = %s",
+                    (uid,),
+                )
+                row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0], "email": row[1], "name": row[2],
+            "role": row[3], "password_hash": row[4],
+            "created": row[5].astimezone(timezone.utc).isoformat(),
+        }
+    return _load_file_users().get(uid)
+
+
+def find_user_by_email(email: str) -> dict[str, Any] | None:
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+    if _dsn:
+        _init()
+        with _conn() as con:
+            with con.cursor() as cur:
+                cur.execute(
+                    "SELECT id, email, name, role, password_hash, created "
+                    "FROM users WHERE lower(email) = %s",
+                    (email,),
+                )
+                row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0], "email": row[1], "name": row[2],
+            "role": row[3], "password_hash": row[4],
+            "created": row[5].astimezone(timezone.utc).isoformat(),
+        }
+    for row in _load_file_users().values():
+        if str(row.get("email") or "").lower() == email:
+            return row
+    return None
+
+
+def project_owner(pid: str) -> str | None:
+    if _dsn:
+        _init()
+        with _conn() as con:
+            with con.cursor() as cur:
+                cur.execute("SELECT owner FROM projects WHERE id = %s", (pid,))
+                row = cur.fetchone()
+        return row[0] if row else None
+    f = _file_path(pid)
+    if not f.exists():
+        return None
+    try:
+        doc = json.loads(f.read_text(encoding="utf-8"))
+        return doc.get("_owner")
+    except Exception:
+        return None
+
+
+def list_projects(owner: str | None = None,
+                  include_public: bool = True) -> list[dict[str, Any]]:
+    if _dsn:
+        _init()
+        with _conn() as con:
+            with con.cursor() as cur:
+                if owner and include_public:
+                    cur.execute(
+                        "SELECT id, name, updated, owner FROM projects "
+                        "WHERE owner = %s OR owner IS NULL "
+                        "ORDER BY updated DESC",
+                        (owner,),
+                    )
+                elif owner:
+                    cur.execute(
+                        "SELECT id, name, updated, owner FROM projects "
+                        "WHERE owner = %s ORDER BY updated DESC",
+                        (owner,),
+                    )
+                else:
+                    cur.execute(
+                        "SELECT id, name, updated, owner FROM projects "
+                        "WHERE owner IS NULL ORDER BY updated DESC"
+                    )
                 rows = cur.fetchall()
         return [
             {"id": r[0], "name": r[1] or r[0],
-             "updated": r[2].astimezone(timezone.utc).isoformat()}
+             "updated": r[2].astimezone(timezone.utc).isoformat(),
+             "public": r[3] is None}
             for r in rows
         ]
     out: list[dict[str, Any]] = []
@@ -106,11 +268,20 @@ def list_projects() -> list[dict[str, Any]]:
                 doc = json.loads(f.read_text(encoding="utf-8"))
             except Exception:
                 continue
+            project_owner_id = doc.get("_owner")
+            if owner:
+                if project_owner_id != owner and not (
+                    include_public and project_owner_id in (None, "")
+                ):
+                    continue
+            elif project_owner_id not in (None, ""):
+                continue
             out.append({
                 "id": d.name,
                 "name": doc.get("name", d.name),
                 "updated": datetime.fromtimestamp(
                     f.stat().st_mtime, timezone.utc).isoformat(),
+                "public": project_owner_id in (None, ""),
             })
     return out
 
@@ -129,7 +300,8 @@ def get_project(pid: str) -> dict[str, Any] | None:
     return json.loads(f.read_text(encoding="utf-8"))
 
 
-def put_project(pid: str, doc: dict[str, Any]) -> str:
+def put_project(pid: str, doc: dict[str, Any],
+                owner: str | None = None) -> str:
     if doc.get("schema") != SCHEMA:
         raise ValueError(f"schema должна быть {SCHEMA}")
     if _dsn:
@@ -138,17 +310,31 @@ def put_project(pid: str, doc: dict[str, Any]) -> str:
             with con.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO projects (id, name, doc, updated)
-                    VALUES (%s, %s, %s::jsonb, now())
+                    INSERT INTO projects (id, name, doc, owner, updated)
+                    VALUES (%s, %s, %s::jsonb, %s, now())
                     ON CONFLICT (id) DO UPDATE
                       SET name = EXCLUDED.name, doc = EXCLUDED.doc,
+                          owner = COALESCE(projects.owner, EXCLUDED.owner),
                           updated = now()
                     """,
                     (pid, str(doc.get("name", "")),
-                     json.dumps(doc, ensure_ascii=False)),
+                     json.dumps(doc, ensure_ascii=False), owner),
                 )
         return f"db:{pid}"
     f = _file_path(pid)
+    if f.exists() and owner:
+        try:
+            existing = json.loads(f.read_text(encoding="utf-8"))
+            existing_owner = existing.get("_owner")
+            if existing_owner and existing_owner != owner:
+                raise PermissionError("проект принадлежит другому пользователю")
+            doc = {**doc, "_owner": existing_owner or owner}
+        except PermissionError:
+            raise
+        except Exception:
+            doc = {**doc, "_owner": owner}
+    elif owner:
+        doc = {**doc, "_owner": owner}
     f.parent.mkdir(parents=True, exist_ok=True)
     tmp = f.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n",

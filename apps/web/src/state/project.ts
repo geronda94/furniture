@@ -1295,6 +1295,9 @@ export const ui = reactive({
   projectsOpen: false,
   /** журнал изменений */
   historyOpen: false,
+  /** демо-тур по интерфейсу */
+  tourOpen: false,
+  tourStep: 0,
   /** короткое уведомление с действием «Отменить» */
   toast: null as null | {
     id: number
@@ -3896,26 +3899,51 @@ export async function init(): Promise<void> {
       return null
     }
   })()
-  state.projectId = saved || 'demo'
+
+  let rows: { id: string }[] = []
   try {
-    const raw = await apiGetProject(state.projectId)
-    state.project = normalizeProject(raw)
+    rows = await apiListProjects()
   } catch {
-    if (state.projectId !== 'demo') {
-      try {
-        const raw = await apiGetProject('demo')
-        state.projectId = 'demo'
-        state.project = normalizeProject(raw)
-      } catch {
-        state.project = defaultProject()
-        await saveProject()
-      }
-    } else {
+    rows = []
+  }
+
+  let pid = saved && rows.some((r) => r.id === saved) ? saved : rows[0]?.id
+  if (!pid) {
+    state.project = defaultProject()
+    state.projectId = `p${Date.now().toString(36)}`
+    state.selection = null
+    state.selected = []
+    state.openingId = null
+    state.folderId = null
+    state.roomSelected = true
+    state.wallIndex = null
+    try {
+      localStorage.setItem('furniture.project', state.projectId)
+    } catch {
+      /* ignore */
+    }
+    await saveProject()
+  } else {
+    state.projectId = pid
+    try {
+      const raw = await apiGetProject(pid)
+      state.project = normalizeProject(raw)
+    } catch {
       state.project = defaultProject()
+      state.projectId = `p${Date.now().toString(36)}`
       await saveProject()
     }
+    try {
+      localStorage.setItem('furniture.project', state.projectId)
+    } catch {
+      /* ignore */
+    }
   }
+
+  state.dirty = false
+  state.saveState = 'saved'
   state.selection = state.project.instances[0]?.id ?? null
+  state.selected = state.selection ? [state.selection] : []
   state.fitToken++
   await solveAll()
   applyLegacyOpenFlags()

@@ -44,6 +44,19 @@ def main() -> int:
     c = TestClient(app)
     ok = True
 
+    # Без сессии проекты закрыты.
+    anon = TestClient(app)
+    ok &= check("auth: анонимный список проектов закрыт",
+                anon.get("/api/projects").status_code == 401)
+
+    email = f"api-{int(time.time() * 1000)}@example.test"
+    r = c.post("/api/auth/register", json={
+        "email": email, "password": "test-pass-123", "name": "API Тест",
+    })
+    ok &= check("auth: регистрация", r.status_code == 200
+                and r.json().get("user", {}).get("email") == email)
+    ok &= check("auth: сессия", c.get("/api/auth/me").json().get("user") is not None)
+
     r = c.get("/api/health")
     ok &= check("health", r.status_code == 200 and r.json().get("ok") is True)
 
@@ -134,6 +147,19 @@ def main() -> int:
     try:
         r = c.put(f"/api/projects/{pid}", json=project("API тест"))
         ok &= check("project: create", r.status_code == 200)
+
+        # Второй пользователь не видит и не меняет чужой проект.
+        other = TestClient(app)
+        other_email = f"other-{int(time.time() * 1000)}@example.test"
+        r2 = other.post("/api/auth/register", json={
+            "email": other_email, "password": "test-pass-123", "name": "Другой",
+        })
+        ok &= check("auth: второй пользователь", r2.status_code == 200)
+        ok &= check("auth: чужой проект закрыт",
+                    other.get(f"/api/projects/{pid}").status_code == 403)
+        ok &= check("auth: чужой PUT закрыт",
+                    other.put(f"/api/projects/{pid}",
+                              json=project("Чужой")).status_code == 403)
 
         r = c.post(f"/api/projects/{pid}/actions", json={
             "actions": [{"op": "add_instance", "preset": "base800"}],

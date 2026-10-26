@@ -567,7 +567,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </header>
-    <div class="view__body">
+    <div class="view__body" data-tour="scene">
       <canvas
         ref="canvasEl"
         class="view__canvas"

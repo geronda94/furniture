@@ -27,3 +27,4 @@ projects/*/renders/
 projects/*/video/
 projects/*/previews/
 projects/*/cards/
+.auth/

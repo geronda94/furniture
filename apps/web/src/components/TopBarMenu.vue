@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { saveProject, state, ui } from '../state/project'
+import { auth, logout } from '../state/auth'
 
 const emit = defineEmits<{
   (e: 'close'): void
@@ -17,8 +18,17 @@ const status = computed(() => {
   return state.savedAt ? `Сохранено в ${state.savedAt}` : 'Проект загружен'
 })
 
-function act(action: 'files' | 'history' | 'json' | 'present' | 'settings' | 'versions' | 'quote' | 'save'): void {
-  if (action === 'settings') {
+async function signOut(): Promise<void> {
+  await saveProject().catch(() => {})
+  await logout()
+  window.location.reload()
+}
+
+function act(action: 'files' | 'history' | 'json' | 'present' | 'settings' | 'versions' | 'quote' | 'save' | 'tour'): void {
+  if (action === 'tour') {
+    ui.tourStep = 0
+    ui.tourOpen = true
+  } else if (action === 'settings') {
     ui.settingsTab = 'globals'
     ui.settingsOpen = true
   } else if (action === 'versions') {
@@ -46,7 +56,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
       <section class="appmenu" role="dialog" aria-modal="true" aria-label="Меню проекта">
         <header class="appmenu__head">
           <div>
-            <b>Меню</b>
+            <b>{{ auth.user?.name || 'Меню' }}</b>
             <span class="dim">{{ status }}</span>
           </div>
           <button class="btn btn--ghost btn--sm" title="Закрыть" @click="emit('close')">×</button>
@@ -90,8 +100,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
             <b>Экспорт JSON</b>
             <span>Скачать проект файлом</span>
           </button>
+          <button class="appmenu__item" @click="act('tour')">
+            <b>Обучение</b>
+            <span>Короткий тур по интерфейсу</span>
+          </button>
         </div>
 
+        <div class="appmenu__foot">
+          <span class="dim">{{ auth.user?.demo ? 'Гостевой демо-доступ' : auth.user?.email }}</span>
+          <button class="link" @click="signOut">Выйти</button>
+        </div>
         <p class="dim appmenu__hint">
           Проект сохраняется автоматически. Индикатор в шапке показывает
           состояние связи с сервером.

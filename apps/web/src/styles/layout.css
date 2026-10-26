@@ -245,7 +245,8 @@
     position: relative;
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
-    overflow: hidden;
+    /* clip запрещает scrollIntoView из дерева сдвигать всю 3D-сцену */
+    overflow: clip;
   }
 
   .view {

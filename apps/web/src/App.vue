@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from 'vue'
+import { onBeforeUnmount, onMounted, watch } from 'vue'
 import TopBar from './components/TopBar.vue'
 import Outliner from './components/Outliner.vue'
 import View3D from './components/View3D.vue'
@@ -9,6 +9,9 @@ import PresentationBar from './components/PresentationBar.vue'
 import ObjectModal from './components/ObjectModal.vue'
 import FinishModal from './components/FinishModal.vue'
 import Toast from './components/Toast.vue'
+import AuthScreen from './components/AuthScreen.vue'
+import DemoTour from './components/DemoTour.vue'
+import { auth, initAuth } from './state/auth'
 import {
   clearGuides,
   closeObjectModal,
@@ -131,12 +134,44 @@ function onBeforeUnload(e: BeforeUnloadEvent): void {
   }
 }
 
+let appStarted = false
+
+async function startApp(): Promise<void> {
+  if (appStarted || !auth.user) return
+  appStarted = true
+  await init()
+  if (auth.user.demo) {
+    let seen = ''
+    try { seen = localStorage.getItem('furniture.tour.done') || '' } catch { /* ignore */ }
+    if (!seen) {
+      ui.tourStep = 0
+      ui.tourOpen = true
+    }
+  }
+}
+
+async function boot(): Promise<void> {
+  await initAuth()
+  await startApp()
+}
+
+watch(
+  () => auth.user,
+  (user) => {
+    if (user) {
+      void startApp()
+    } else {
+      appStarted = false
+    }
+  },
+)
+
 onMounted(() => {
   window.addEventListener('keydown', onKey)
   window.addEventListener('pointerdown', trackPointer, true)
   window.addEventListener('pagehide', onPageHide)
   window.addEventListener('beforeunload', onBeforeUnload)
-  void init()
+  void boot()
 })
 
 onBeforeUnmount(() => {
@@ -148,7 +183,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <AuthScreen v-if="auth.ready && !auth.user" />
   <div
+    v-else-if="auth.ready && auth.user"
     class="app"
     :class="{
       'app--presentation': state.presentation,
@@ -181,6 +218,7 @@ onBeforeUnmount(() => {
       <button
         class="mobilebar__btn mobilebar__btn--accent"
         title="Добавить объект"
+        data-tour="add-mobile"
         @click="openAddModal"
       >＋</button>
       <button
@@ -203,6 +241,11 @@ onBeforeUnmount(() => {
     <AddObjectModal v-if="ui.addOpen" @close="ui.addOpen = false" />
     <ObjectModal v-if="ui.object.open" />
     <FinishModal v-if="ui.finishOpen" @close="ui.finishOpen = false" />
+    <DemoTour v-if="ui.tourOpen" />
     <Toast />
+  </div>
+  <div v-else class="auth-loading">
+    <div class="boot__mark" aria-hidden="true"></div>
+    <span>Проверяем сессию…</span>
   </div>
 </template>

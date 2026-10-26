@@ -124,7 +124,7 @@ function floorSelected(): boolean {
       >×</button>
     </div>
 
-    <div class="outliner__tabs" role="tablist" aria-label="Разделы объектов">
+    <div class="outliner__tabs" role="tablist" aria-label="Разделы объектов" data-tour="objects">
       <button
         class="tab" role="tab"
         :class="{ 'tab--active': outlinerTab === 'furniture' }"
