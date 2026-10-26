@@ -317,6 +317,22 @@ function floorSelected(): boolean {
           <div v-if="!loose.length" class="tree__row tree__row--nested dim">
             Свободных модулей нет
           </div>
+          <template v-if="state.project.props?.length">
+            <div class="tree__row tree__row--group">
+              <span class="tree__twist"></span>
+              <span class="tree__name">Декор демо</span>
+              <span class="tree__meta">{{ state.project.props.length }}</span>
+            </div>
+            <div
+              v-for="pr in state.project.props"
+              :key="pr.id"
+              class="tree__row tree__row--item tree__row--nested"
+            >
+              <span class="tree__dot"></span>
+              <span class="tree__name">{{ pr.name }}</span>
+              <span class="tree__meta">{{ Math.round(pr.w) }}×{{ Math.round(pr.d) }}</span>
+            </div>
+          </template>
         </template>
       </template>
     </div>

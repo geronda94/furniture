@@ -17,6 +17,8 @@ import { Mesh } from '@babylonjs/core/Meshes/mesh'
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode'
 import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData'
 import { CreateBox } from '@babylonjs/core/Meshes/Builders/boxBuilder'
+import { CreateCylinder } from '@babylonjs/core/Meshes/Builders/cylinderBuilder'
+import { CreateSphere } from '@babylonjs/core/Meshes/Builders/sphereBuilder'
 import '@babylonjs/core/Rendering/edgesRenderer'
 import '@babylonjs/core/Culling/ray'
 import type { Instance } from '../state/project'
@@ -25,6 +27,7 @@ import type { SolveResponse } from '../api'
 import type {
   MaterialVariable,
   Materials,
+  Prop,
   Opening,
   Room,
   SceneObject,
@@ -84,6 +87,9 @@ export class BabylonRenderer {
   shadow: ShadowGenerator
   private roomRoot: TransformNode
   private furniture: TransformNode
+  private propsRoot: TransformNode
+  private propSig = ''
+  private propMats = new Map<string, StandardMaterial>()
   private materials = new Map<string, StandardMaterial>()
   private textures = new Map<string, Texture>()
   private parts = new Map<string, Mesh>()
@@ -198,6 +204,7 @@ export class BabylonRenderer {
 
     this.roomRoot = new TransformNode('room', this.scene)
     this.furniture = new TransformNode('furniture', this.scene)
+    this.propsRoot = new TransformNode('props', this.scene)
     this.scene.activeCamera = this.orbit
     const selMat = new StandardMaterial('sel-mat', this.scene)
     selMat.wireframe = true
@@ -247,6 +254,155 @@ export class BabylonRenderer {
     if (sm) {
       sm.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE
       sm.resetRefreshCounter()
+    }
+  }
+
+  /** Декоративная мебель демо-сцены: не участвует в BOM и picking. */
+  syncProps(props: Prop[] = []): void {
+    const sig = JSON.stringify(props)
+    if (sig === this.propSig) return
+    this.propSig = sig
+    this.propsRoot.getChildMeshes().forEach((m) => m.dispose())
+    this.propsRoot.dispose()
+    this.propsRoot = new TransformNode('props', this.scene)
+    const matCache = this.propMats
+    const material = (color: string, alpha = 1): StandardMaterial => {
+      const key = `${color}:${alpha}`
+      let m = matCache.get(key)
+      if (m) return m
+      m = new StandardMaterial(`prop:${key}`, this.scene)
+      m.diffuseColor = matColor(color)
+      m.emissiveColor = matColor(color).scale(0.08)
+      m.specularColor = new Color3(0.05, 0.05, 0.05)
+      m.alpha = alpha
+      if (alpha < 1) m.transparencyMode = 2
+      matCache.set(key, m)
+      return m
+    }
+    const add = (
+      parent: TransformNode, name: string,
+      sx: number, sy: number, sz: number,
+      x: number, y: number, z: number,
+      color: string, alpha = 1,
+    ): Mesh => {
+      const m = CreateBox(name, {
+        width: sx * MM, height: sy * MM, depth: sz * MM,
+      }, this.scene)
+      m.parent = parent
+      m.position.set(x * MM, z * MM, y * MM)
+      m.material = material(color, alpha)
+      m.isPickable = false
+      m.receiveShadows = true
+      this.shadow.addShadowCaster(m)
+      return m
+    }
+    const cyl = (
+      parent: TransformNode, name: string,
+      diameter: number, height: number,
+      x: number, y: number, z: number,
+      color: string, alpha = 1,
+    ): Mesh => {
+      const m = CreateCylinder(name, {
+        diameter: diameter * MM, height: height * MM, tessellation: 24,
+      }, this.scene)
+      m.parent = parent
+      m.position.set(x * MM, z * MM, y * MM)
+      m.material = material(color, alpha)
+      m.isPickable = false
+      this.shadow.addShadowCaster(m)
+      return m
+    }
+    for (const p of props) {
+      const root = new TransformNode(`prop:${p.id}`, this.scene)
+      root.parent = this.propsRoot
+      root.position.set(p.x * MM, (p.z || 0) * MM, p.y * MM)
+      root.rotation.y = (-(p.rot || 0) * Math.PI) / 180
+      const w = p.w, d = p.d, h = p.h
+      const c = p.color || '#8b8f95'
+      const a = p.accent || '#d9d4ca'
+      const type = p.type
+      if (type === 'bed') {
+        add(root, 'bed-base', w, 300, d, 0, 0, 150, c)
+        add(root, 'bed-mattress', w - 80, 220, d - 80, 0, 0, 410, a)
+        add(root, 'bed-head', w, 900, 80, 0, d / 2 - 40, 450, c)
+        add(root, 'pillow-l', w * 0.34, 110, d * 0.22, -w * 0.22, d / 2 - 260, 570, '#f1ede5')
+        add(root, 'pillow-r', w * 0.34, 110, d * 0.22, w * 0.22, d / 2 - 260, 570, '#f1ede5')
+        add(root, 'blanket', w * 0.92, 40, d * 0.52, 0, -d * 0.1, 545, a)
+      } else if (type === 'sofa' || type === 'armchair') {
+        const seatH = Math.max(320, h * 0.62)
+        add(root, 'sofa-base', w, seatH, d, 0, 0, seatH / 2, c)
+        add(root, 'sofa-back', w, h, Math.max(140, d * 0.2), 0, d / 2 - 70, h / 2, c)
+        add(root, 'arm-l', Math.max(100, w * 0.1), h * 0.72, d, -w / 2 + 50, 0, h * 0.36, c)
+        add(root, 'arm-r', Math.max(100, w * 0.1), h * 0.72, d, w / 2 - 50, 0, h * 0.36, c)
+        const cushions = type === 'armchair' ? 1 : 3
+        for (let i = 0; i < cushions; i++) {
+          const cw = (w - (cushions + 1) * 70) / cushions
+          add(root, `cushion-${i}`, cw, 80, d * 0.72,
+            -w / 2 + 50 + cw / 2 + i * (cw + 70), -d * 0.06, seatH + 40, a)
+        }
+      } else if (type === 'coffee-table' || type === 'dresser') {
+        const topH = type === 'dresser' ? h * 0.75 : h
+        add(root, 'table-top', w, Math.max(60, h * 0.12), d, 0, 0, topH - 30, c)
+        if (type === 'dresser') {
+          add(root, 'dresser-body', w - 40, h * 0.7, d - 40, 0, 0, h * 0.35, a)
+          for (let i = 0; i < 3; i++) {
+            add(root, `drawer-${i}`, w - 100, 8, 8, 0, -d / 2 + 20, 180 + i * (h * 0.16), '#5b5f64')
+          }
+        } else {
+          for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+            add(root, 'leg', 50, topH - 60, 50, sx * (w / 2 - 70), sy * (d / 2 - 70), (topH - 60) / 2, c)
+          }
+        }
+      } else if (type === 'chair') {
+        add(root, 'seat', w, 80, d, 0, 0, h * 0.55, c)
+        add(root, 'back', w, h * 0.55, 60, 0, d / 2 - 30, h * 0.75, c)
+        for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+          add(root, 'leg', 40, h * 0.55, 40, sx * (w / 2 - 50), sy * (d / 2 - 50), h * 0.275, a)
+        }
+      } else if (type === 'tv') {
+        add(root, 'tv-screen', w, h * 0.8, 45, 0, 0, h * 0.55, '#101215')
+        add(root, 'tv-foot', Math.max(250, w * 0.35), 40, 180, 0, 0, 20, '#1b1d20')
+      } else if (type === 'rug') {
+        add(root, 'rug', w, 12, d, 0, 0, 6, c)
+      } else if (type === 'bathtub') {
+        add(root, 'tub-outer', w, h, d, 0, 0, h / 2, a)
+        add(root, 'tub-inner', w - 120, Math.max(40, h - 100), d - 120, 0, 0, h - 40, '#e8eef0')
+      } else if (type === 'toilet') {
+        cyl(root, 'toilet-base', Math.min(w, d) * 0.75, h * 0.55, 0, -d * 0.08, h * 0.275, a)
+        add(root, 'toilet-tank', w * 0.7, h * 0.5, 180, 0, d / 2 - 80, h * 0.55, a)
+        cyl(root, 'toilet-seat', Math.min(w, d) * 0.8, 50, 0, -d * 0.08, h * 0.58, '#f4f1ec')
+      } else if (type === 'vanity') {
+        add(root, 'vanity-body', w, h * 0.78, d, 0, 0, h * 0.39, c)
+        add(root, 'vanity-top', w + 30, 60, d + 20, 0, 0, h * 0.82, a)
+        cyl(root, 'basin', Math.min(w, d) * 0.42, 80, 0, 0, h * 0.84, '#f1f3f2')
+        cyl(root, 'faucet', 30, 180, 0, -d * 0.24, h * 0.9, '#8e969c')
+      } else if (type === 'shower') {
+        add(root, 'tray', w, 70, d, 0, 0, 35, a)
+        add(root, 'glass-1', 20, h * 0.85, d, w / 2 - 10, 0, h * 0.45, '#b9d3db', 0.28)
+        add(root, 'glass-2', w, h * 0.85, 20, 0, d / 2 - 10, h * 0.45, '#b9d3db', 0.28)
+      } else if (type === 'plant') {
+        cyl(root, 'pot', Math.min(w, d) * 0.55, h * 0.25, 0, 0, h * 0.125, a)
+        const leaf = CreateSphere('leaves', {
+          diameter: Math.min(w, d) * 0.9 * MM, segments: 12,
+        }, this.scene)
+        leaf.parent = root
+        leaf.position.set(0, h * 0.55 * MM, 0)
+        leaf.material = material(c)
+        leaf.isPickable = false
+      } else if (type === 'lamp') {
+        cyl(root, 'lamp-pole', 35, h * 0.9, 0, 0, h * 0.45, '#777c80')
+        cyl(root, 'lamp-shade', w, h * 0.18, 0, 0, h * 0.9, a)
+      } else if (type === 'fridge' || type === 'stove' || type === 'sink') {
+        add(root, `${type}-body`, w, h, d, 0, 0, h / 2, c)
+        if (type === 'stove') {
+          for (let i = 0; i < 4; i++) {
+            cyl(root, `burner-${i}`, 120, 8, (i % 2 ? 1 : -1) * w * 0.22,
+              (i < 2 ? -1 : 1) * d * 0.22, h + 5, '#25282b')
+          }
+        } else if (type === 'sink') {
+          cyl(root, 'basin', Math.min(w, d) * 0.45, 20, 0, 0, h - 5, '#d6dde0')
+        }
+      }
     }
   }
 
@@ -1005,6 +1161,11 @@ export class BabylonRenderer {
     this.wallMode = mode
   }
 
+  setOrbit(alphaDeg: number, betaDeg: number): void {
+    this.orbit.alpha = (alphaDeg * Math.PI) / 180
+    this.orbit.beta = (betaDeg * Math.PI) / 180
+  }
+
   setMode(mode: 'orbit' | 'first' | 'fly'): void {
     this.mode = mode
     if (mode === 'orbit') {
@@ -1136,6 +1297,7 @@ export class BabylonRenderer {
     // В режиме детали комната и соседние модули только мешают: камера
     // подходит вплотную, и обратные стороны стен дают чёрные плоскости.
     this.roomRoot.setEnabled(false)
+    this.propsRoot.setEnabled(false)
     for (const [id, root] of this.roots) {
       root.setEnabled(id === instanceId)
     }
@@ -1177,6 +1339,7 @@ export class BabylonRenderer {
   exitObjectMode(): void {
     if (!this.savedCamera) return
     this.roomRoot.setEnabled(true)
+    this.propsRoot.setEnabled(true)
     for (const root of this.roots.values()) root.setEnabled(true)
     const c = this.savedCamera
     this.orbit.alpha = c.alpha

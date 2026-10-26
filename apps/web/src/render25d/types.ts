@@ -73,6 +73,29 @@ export interface Material {
   texScale?: number
 }
 
+
+/** Декоративная мебель/сантехника демо-сцены. Не входит в BOM и смету. */
+export type PropType =
+  | 'bed' | 'sofa' | 'armchair' | 'chair' | 'coffee-table' | 'tv'
+  | 'rug' | 'bathtub' | 'toilet' | 'vanity' | 'shower' | 'plant'
+  | 'dresser' | 'lamp' | 'fridge' | 'stove' | 'sink'
+
+export interface Prop {
+  id: string
+  type: PropType
+  name: string
+  /** центр в комнате, мм */
+  x: number
+  y: number
+  z?: number
+  rot?: number
+  w: number
+  d: number
+  h: number
+  color?: string
+  accent?: string
+}
+
 export type WallIndex = number
 
 export type ViewStyle = 'schematic' | 'realistic'

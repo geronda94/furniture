@@ -32,6 +32,8 @@ import type {
   Materials,
   Opening,
   OpeningKind,
+  Prop,
+  PropType,
   Room,
   RoomSurface,
   ViewStyle,
@@ -554,6 +556,12 @@ export interface Project {
   finishes?: Finish[]
   /** явный список зон/этажей (пустые зоны тоже можно завести) */
   zones?: string[]
+  /** декоративная мебель/сантехника демо-сцены (вне BOM) */
+  props?: Prop[]
+  /** как показывать стены при открытии проекта */
+  wallMode?: 'cutaway' | 'low'
+  /** стартовый ракурс 3D для демо-проекта, градусы */
+  camera3d?: { alpha: number; beta: number }
   views: SavedView[]
   log?: LogEntry[]
 }
@@ -740,6 +748,8 @@ export function defaultProject(): Project {
     materialVars: [],
     finishes: [],
     zones: [],
+    props: [],
+    wallMode: 'cutaway',
     views: [],
     log: [],
   }
@@ -1167,6 +1177,41 @@ function normalizeProject(raw: unknown): Project {
             price_m2: Math.max(0, Number(f.price_m2) || 0),
           }))
       : [],
+    wallMode: d.wallMode === 'low' ? 'low' : 'cutaway',
+    camera3d: (() => {
+      const c = d.camera3d
+      if (!c || typeof c !== 'object') return undefined
+      return {
+        alpha: Number(c.alpha) || -60,
+        beta: Number(c.beta) || 38,
+      }
+    })(),
+    props: (() => {
+      const allowed = new Set<PropType>([
+        'bed', 'sofa', 'armchair', 'chair', 'coffee-table', 'tv',
+        'rug', 'bathtub', 'toilet', 'vanity', 'shower', 'plant',
+        'dresser', 'lamp', 'fridge', 'stove', 'sink',
+      ])
+      return Array.isArray(d.props)
+        ? d.props
+            .filter((p) => p && allowed.has(p.type as PropType))
+            .slice(0, 120)
+            .map((p, i) => ({
+              id: String(p.id || `prop${i + 1}`),
+              type: p.type as PropType,
+              name: String(p.name || 'Декор'),
+              x: Math.round(Number(p.x) || 0),
+              y: Math.round(Number(p.y) || 0),
+              z: Math.round(Number(p.z) || 0),
+              rot: Number(p.rot) || 0,
+              w: Math.max(100, Number(p.w) || 1000),
+              d: Math.max(100, Number(p.d) || 1000),
+              h: Math.max(50, Number(p.h) || 500),
+              color: String(p.color || '#8b8f95'),
+              accent: p.accent ? String(p.accent) : undefined,
+            }))
+        : []
+    })(),
     zones: (() => {
       const names = new Set<string>()
       for (const z of d.zones ?? []) {
@@ -2227,7 +2272,16 @@ async function solveOne(inst: Instance): Promise<void> {
 }
 
 export async function solveAll(): Promise<void> {
-  await Promise.all(state.project.instances.map((i) => solveOne(i)))
+  // Не отправляем 20+ одновременных запросов: браузер упирается в лимит
+  // соединений, часть ответов теряется. Небольшая очередь стабильнее.
+  const queue = [...state.project.instances]
+  const workers = Math.min(4, queue.length)
+  await Promise.all(Array.from({ length: workers }, async () => {
+    while (queue.length) {
+      const inst = queue.shift()
+      if (inst) await solveOne(inst)
+    }
+  }))
 }
 
 const timers = new Map<string, number>()
@@ -3907,6 +3961,7 @@ export async function init(): Promise<void> {
     rows = []
   }
 
+  let cached: Record<string, SolveResponse> | null = null
   let pid = saved && rows.some((r) => r.id === saved) ? saved : rows[0]?.id
   if (!pid) {
     state.project = defaultProject()
@@ -3926,7 +3981,11 @@ export async function init(): Promise<void> {
   } else {
     state.projectId = pid
     try {
-      const raw = await apiGetProject(pid)
+      const raw = await apiGetProject(pid) as Record<string, unknown>
+      const maybeCache = raw._solutions
+      if (maybeCache && typeof maybeCache === 'object') {
+        cached = maybeCache as Record<string, SolveResponse>
+      }
       state.project = normalizeProject(raw)
     } catch {
       state.project = defaultProject()
@@ -3944,9 +4003,27 @@ export async function init(): Promise<void> {
   state.saveState = 'saved'
   state.selection = state.project.instances[0]?.id ?? null
   state.selected = state.selection ? [state.selection] : []
+  state.wallMode = state.project.wallMode ?? 'cutaway'
   state.fitToken++
-  await solveAll()
-  applyLegacyOpenFlags()
+
+  for (const key of Object.keys(derived)) delete derived[key]
+  if (cached) {
+    for (const [id, res] of Object.entries(cached)) {
+      if (state.project.instances.some((i) => i.id === id)) {
+        derived[id] = res
+      }
+    }
+    applyLegacyOpenFlags()
+    touch()
+    // Если кэш неполный — досчитаем только недостающие модули.
+    for (const inst of state.project.instances) {
+      if (!derived[inst.id]) void solveOne(inst)
+    }
+  } else {
+    // Не блокируем вход в проект: 3D и карточки дорисуются по мере solve.
+    void solveAll().then(applyLegacyOpenFlags)
+    touch()
+  }
 }
 
 export async function listProjects() {

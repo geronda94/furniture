@@ -289,20 +289,24 @@ def demo_login(response: Response):
     Гость может свободно двигать мебель и смотреть присадку, но его правки
     не попадают в публичный демо-проект.
     """
-    seed = repo_get("demo")
+    seed = repo_get("demo-apartment")
     if seed is None:
-        demo_file = PROJECTS / "demo" / "project.json"
-        if demo_file.exists():
-            try:
-                seed = json.loads(demo_file.read_text(encoding="utf-8"))
-            except Exception:
-                seed = None
+        for name in ("demo-apartment", "demo"):
+            demo_file = PROJECTS / name / "project.json"
+            if demo_file.exists():
+                try:
+                    seed = json.loads(demo_file.read_text(encoding="utf-8"))
+                    break
+                except Exception:
+                    seed = None
+    if seed is None:
+        seed = repo_get("demo")
     if seed is None:
         raise HTTPException(503, "демо-проект не найден")
     user = create_guest()
     pid = _new_id("demo-")
     doc = json.loads(json.dumps(seed))
-    doc["name"] = "Демо — Кухня"
+    doc["name"] = "Демо — квартира"
     doc.pop("_owner", None)
     repo_put(pid, doc, owner=user["id"])
     set_session(response, user["id"])

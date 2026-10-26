@@ -234,6 +234,42 @@ function draw() {
     dims: props.compact ? [] : dims,
   })
 
+  // Декор демо-сцены: кровать, диван, сантехника.
+  for (const pr of state.project.props ?? []) {
+    const rad = ((pr.rot || 0) * Math.PI) / 180
+    const cs = Math.cos(rad)
+    const sn = Math.sin(rad)
+    const corner = (lx: number, ly: number): Vec3 => [
+      pr.x + lx * cs - ly * sn,
+      pr.y + lx * sn + ly * cs,
+      0,
+    ]
+    const pts = [
+      corner(-pr.w / 2, -pr.d / 2), corner(pr.w / 2, -pr.d / 2),
+      corner(pr.w / 2, pr.d / 2), corner(-pr.w / 2, pr.d / 2),
+    ].map((q) => proj.point(q))
+    ctx.save()
+    ctx.globalAlpha = 0.62
+    ctx.fillStyle = pr.color || '#8b8f95'
+    ctx.strokeStyle = 'rgba(18, 21, 24, 0.85)'
+    ctx.lineWidth = 1.2
+    ctx.beginPath()
+    ctx.moveTo(pts[0].x, pts[0].y)
+    for (let k = 1; k < pts.length; k++) ctx.lineTo(pts[k].x, pts[k].y)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+    ctx.globalAlpha = 1
+    if (!props.compact && pr.w * pr.d > 500000) {
+      ctx.fillStyle = 'rgba(235, 238, 240, 0.9)'
+      ctx.font = '9px ui-sans-serif, system-ui, sans-serif'
+      ctx.textAlign = 'center'
+      const mid = proj.point([pr.x, pr.y, 0])
+      ctx.fillText(pr.name, mid.x, mid.y)
+    }
+    ctx.restore()
+  }
+
   // Отделка пола: зоны плитки/ламината (схематично, полупрозрачно)
   for (const f of state.project.finishes ?? []) {
     if (f.kind !== 'floor') continue

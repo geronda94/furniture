@@ -35,6 +35,14 @@ const camMode = ref<'orbit' | 'first' | 'fly'>('orbit')
 const fitTarget = ref<'module' | 'room'>('room')
 const planOpen = ref(false)
 const viewMore = ref(false)
+let cameraApplied = false
+
+function applyProjectCamera(): void {
+  const cam = state.project.camera3d
+  if (!renderer || !cam || cameraApplied) return
+  renderer.setOrbit(cam.alpha, cam.beta)
+  cameraApplied = true
+}
 const viewNameLabel = computed(() => {
   const labels: Record<string, string> = {
     iso: 'Изо', front: 'Фасад', side: 'Бок', top: 'Сверху',
@@ -53,6 +61,7 @@ let dimLast = 0
 function sync(): void {
   if (!renderer) return
   renderer.syncRoom(state.project.room, state.project.materials)
+  renderer.syncProps(state.project.props ?? [])
   renderer.syncInstances(
     state.project.instances,
     derived,
@@ -454,6 +463,7 @@ function onKey(e: KeyboardEvent): void {
 
 watch(() => state.rev, sync)
 watch(() => state.project.materials, sync, { deep: true })
+watch(() => state.project.props, sync, { deep: true })
 watch(
   () => [state.selected, state.selection, state.wallIndex,
     state.wallItemId, state.openingId] as const,
@@ -498,6 +508,17 @@ watch(
 )
 watch(() => state.wallMode, (m) => renderer?.setWallMode(m))
 watch(() => state.viewMode, (m) => renderer?.setQuality(m))
+watch(
+  () => state.projectId,
+  () => {
+    cameraApplied = false
+    window.setTimeout(applyProjectCamera, 0)
+  },
+)
+watch(() => state.fitToken, () => {
+  fit(fitTarget.value)
+  window.setTimeout(applyProjectCamera, 0)
+})
 
 onMounted(() => {
   if (canvasEl.value) {
@@ -508,6 +529,7 @@ onMounted(() => {
     renderer.setSelected(state.selected.length ? [...state.selected]
     : state.selection ? [state.selection] : [])
     renderer.fit('room', state.project.room, null)
+    applyProjectCamera()
     if (import.meta.env.DEV) {
       ;(window as unknown as Record<string, unknown>).__babylon = renderer
     }
