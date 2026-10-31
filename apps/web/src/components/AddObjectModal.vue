@@ -5,12 +5,16 @@ import ObjectIcon from './ObjectIcon.vue'
 import {
   addInstance,
   addOpening,
+  addProp,
   closeAddModal,
   defaultParams,
   MODULE_PRESETS,
+  PROP_GROUPS,
+  PROP_PRESETS,
   runners,
   state,
   suggestDoors,
+  ui,
   type Params,
 } from '../state/project'
 import type { WallIndex } from '../render25d/types'
@@ -20,8 +24,9 @@ const emit = defineEmits<{ (e: 'close'): void }>()
 const winEl = ref<HTMLElement | null>(null)
 const { style: dragStyle, onDown: onDragStart } = useModalDrag(winEl)
 
-type Tab = 'furniture' | 'tech' | 'opening'
-const tab = ref<Tab>('furniture')
+type Tab = 'furniture' | 'tech' | 'decor' | 'opening'
+const tab = ref<Tab>(ui.addTab)
+watch(tab, (v) => { ui.addTab = v })
 const query = ref('')
 const group = ref('Все')
 const selectedKey = ref(MODULE_PRESETS[0]?.key ?? '')
@@ -42,8 +47,13 @@ function showStep(settings: boolean): void {
   })
 }
 
-function selectCard(key: string): void {
-  selectedKey.value = key
+function selectCard(item: LibItem): void {
+  if (item.kind === 'prop') {
+    addProp(item.key)
+    emit('close')
+    return
+  }
+  selectedKey.value = item.key
   if (mobile.value) showStep(true)
 }
 
@@ -51,26 +61,65 @@ function backToCatalog(): void {
   showStep(false)
 }
 
-const groups = computed(() => [
-  'Все',
-  ...Array.from(new Set(
-    MODULE_PRESETS.map((p) => p.group).filter((g) => g !== 'Техника'),
-  )),
-])
+type LibItem = {
+  key: string
+  kind: 'module' | 'prop'
+  label: string
+  hint: string
+  group: string
+  icon?: string
+  category?: string
+}
 
-const items = computed(() => {
+const FURNITURE_PROPS = ['soft', 'beds', 'tables', 'storage']
+
+const groups = computed(() => {
+  if (tab.value === 'tech') return ['Все', 'Техника']
+  const propGroups = PROP_GROUPS
+    .filter((g) => tab.value === 'decor'
+      ? g.id !== 'tech'
+      : FURNITURE_PROPS.includes(g.id))
+    .map((g) => g.label)
+  return tab.value === 'decor'
+    ? ['Все', ...propGroups]
+    : ['Все', 'Корпусная', ...propGroups]
+})
+
+const items = computed<LibItem[]>(() => {
   const q = query.value.trim().toLowerCase()
-  return MODULE_PRESETS.filter((p) => {
-    if (tab.value === 'tech') {
-      if (p.group !== 'Техника') return false
-    } else if (p.group === 'Техника') {
-      return false
+  const out: LibItem[] = []
+  const wantModules = tab.value === 'furniture' || tab.value === 'tech'
+  if (wantModules) {
+    for (const p of MODULE_PRESETS) {
+      const tech = p.group === 'Техника'
+      if (tab.value === 'tech' !== tech) continue
+      if (tab.value === 'furniture' && group.value !== 'Все' &&
+          group.value !== 'Корпусная') continue
+      if (q && !`${p.label} ${p.hint} ${p.group}`.toLowerCase().includes(q)) {
+        continue
+      }
+      out.push({
+        key: p.key, kind: 'module', label: p.label, hint: p.hint,
+        group: tech ? 'Техника' : 'Корпусная',
+      })
     }
-    if (tab.value === 'furniture' && group.value !== 'Все' &&
-        p.group !== group.value) return false
-    if (!q) return true
-    return `${p.label} ${p.hint} ${p.group}`.toLowerCase().includes(q)
-  })
+  }
+  for (const p of PROP_PRESETS) {
+    if (tab.value === 'furniture' && !FURNITURE_PROPS.includes(p.category)) {
+      continue
+    }
+    if (tab.value === 'tech' && p.category !== 'tech') continue
+    if (tab.value === 'decor' && p.category === 'tech') continue
+    if (group.value !== 'Все' && group.value !== 'Корпусная' &&
+        p.group !== group.value) continue
+    if (q && !`${p.name} ${p.group}`.toLowerCase().includes(q)) continue
+    out.push({
+      key: p.key, kind: 'prop', label: p.name,
+      hint: `${p.w}×${p.h}×${p.d} мм`,
+      group: p.group, icon: p.icon, category: p.category,
+    })
+  }
+  return out
 })
 
 const selected = computed(
@@ -99,13 +148,14 @@ watch(
 )
 watch(tab, () => {
   if (tab.value === 'opening') return
-  const first = items.value[0]
+  const first = items.value.find((p) => p.kind === 'module')
   if (first) selectedKey.value = first.key
 })
 
 watch(group, () => {
-  if (!items.value.some((p) => p.key === selectedKey.value)) {
-    const first = items.value[0]
+  if (!items.value.some((p) => p.kind === 'module' &&
+      p.key === selectedKey.value)) {
+    const first = items.value.find((p) => p.kind === 'module')
     if (first) selectedKey.value = first.key
   }
 })
@@ -133,6 +183,11 @@ const opening = reactive({
   z0: 900,
   z1: 2200,
 })
+
+function addDecor(key: string): void {
+  addProp(key)
+  closeAddModal()
+}
 
 function pickOpening(kind: 'window' | 'door' | 'arch'): void {
   openingKind.value = kind
@@ -234,6 +289,13 @@ onBeforeUnmount(() => {
             </button>
             <button
               class="add__tab"
+              :class="{ 'add__tab--on': tab === 'decor' }"
+              @click="tab = 'decor'"
+            >
+              Декор
+            </button>
+            <button
+              class="add__tab"
               :class="{ 'add__tab--on': tab === 'opening' }"
               @click="tab = 'opening'"
             >
@@ -266,16 +328,23 @@ onBeforeUnmount(() => {
             <div class="add__grid">
               <button
                 v-for="p in items"
-                :key="p.key"
+                :key="`${p.kind}-${p.key}`"
                 class="cat-card"
-                :class="{ 'cat-card--on': p.key === selectedKey }"
-                @click="selectCard(p.key)"
-                @dblclick="selectedKey = p.key; add()"
+                :class="{ 'cat-card--on': p.kind === 'module' &&
+                  p.key === selectedKey }"
+                @click="selectCard(p)"
+                @dblclick="p.kind === 'module' && (selectedKey = p.key, add())"
               >
                 <ObjectIcon
+                  v-if="p.kind === 'module'"
                   class="cat-card__icon"
                   :kind="p.key.replace('tech-', '')"
                 />
+                <span
+                  v-else
+                  class="cat-card__icon cat-card__icon--emoji"
+                  aria-hidden="true"
+                >{{ p.icon }}</span>
                 <span class="cat-card__name">{{ p.label }}</span>
                 <span class="cat-card__hint">{{ p.hint }}</span>
                 <span class="cat-card__group">{{ p.group }}</span>
@@ -283,6 +352,27 @@ onBeforeUnmount(() => {
               <div v-if="!items.length" class="cat-empty">
                 Ничего не найдено
               </div>
+            </div>
+          </template>
+
+          <template v-else-if="tab === 'decor'">
+            <div class="add__hint">
+              Мебель, техника и сантехника для показа. В смету и BOM не входят,
+              но проверяются как твёрдые тела — не пересекают стены, проёмы,
+              мебель и друг друга.
+            </div>
+            <div class="add__grid">
+              <button
+                v-for="d in items"
+                :key="`${d.kind}-${d.key}`"
+                class="cat-card"
+                @click="addDecor(d.key)"
+              >
+                <span class="cat-card__icon cat-card__icon--emoji" aria-hidden="true">{{ d.icon }}</span>
+                <span class="cat-card__name">{{ d.label }}</span>
+                <span class="cat-card__hint">{{ d.hint }}</span>
+                <span class="cat-card__group">{{ d.group }}</span>
+              </button>
             </div>
           </template>
 
@@ -331,6 +421,7 @@ onBeforeUnmount(() => {
         </div>
 
         <aside
+          v-if="tab !== 'decor'"
           class="add__settings"
           :class="{ 'add__step-hidden': (tab === 'furniture' || tab === 'tech') && !mobileSettings }"
         >
@@ -491,11 +582,13 @@ onBeforeUnmount(() => {
       <footer class="add__foot">
         <span class="dim">
           {{
-            (tab === 'furniture' || tab === 'tech')
-              ? (mobileSettings
-                ? 'Проверьте размеры и добавьте модуль'
-                : 'Выберите модуль из каталога')
-              : 'Проём закрепляется за выбранной стеной'
+            tab === 'decor'
+              ? 'Нажмите карточку — декор встанет в свободное место'
+              : (tab === 'furniture' || tab === 'tech')
+                ? (mobileSettings
+                  ? 'Проверьте размеры и добавьте модуль'
+                  : 'Выберите модуль из каталога')
+                : 'Проём закрепляется за выбранной стеной'
           }}
         </span>
         <span class="spacer"></span>
@@ -506,6 +599,11 @@ onBeforeUnmount(() => {
           :disabled="!selected"
           @click="showStep(true)"
         >Настроить</button>
+        <button
+          v-if="tab === 'decor'"
+          class="btn btn--primary"
+          @click="addDecor('plant')"
+        >Добавить растение</button>
         <button v-else class="btn btn--primary" :disabled="!canAdd" @click="add">
           {{ (tab === 'furniture' || tab === 'tech') ? 'Добавить модуль' : 'Добавить проём' }}
         </button>

@@ -325,7 +325,7 @@ function draw(): void {
     materials: sceneMaterials(),
     width: w,
     height: h,
-    style: props.schematic ? 'schematic' : 'realistic',
+    style: props.schematic ? 'clay' : 'realistic',
     wallMode: 'cutaway',
   })
   faces = scene.faces
@@ -342,7 +342,7 @@ function draw(): void {
       h: info?.totalH ?? 700,
     },
     mode: 'persp',
-    style: props.schematic ? 'schematic' : 'realistic',
+    style: props.schematic ? 'clay' : 'realistic',
     background: props.schematic ? 'light' : 'dark',
     selection: null,
   })

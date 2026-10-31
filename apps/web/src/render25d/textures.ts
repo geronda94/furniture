@@ -1,6 +1,6 @@
 import type { Material } from './types'
 
-const TEX_SIZE = 256
+const TEX_SIZE = 512
 const cache = new Map<string, HTMLCanvasElement>()
 const imageCache = new Map<string, HTMLCanvasElement>()
 const imagePending = new Set<string>()
@@ -40,52 +40,80 @@ function wood(color: string, accent: string): HTMLCanvasElement {
   ctx.fillStyle = color
   ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE)
 
-  // мягкие широкие полосы
-  for (let i = 0; i < 18; i++) {
+  // Крупные мягкие полосы — направление волокон.
+  for (let i = 0; i < 34; i++) {
     const x = rand() * TEX_SIZE
-    const w = 4 + rand() * 18
-    const k = 1 + Math.floor(rand() * 4)
+    const w = 6 + rand() * 30
+    const k = 1 + Math.floor(rand() * 5)
     const phase = rand() * Math.PI * 2
-    ctx.globalAlpha = 0.02 + rand() * 0.035
-    ctx.fillStyle = accent
+    ctx.globalAlpha = 0.015 + rand() * 0.04
+    ctx.fillStyle = rand() > 0.35 ? accent : '#ffffff'
     ctx.beginPath()
-    for (let y = 0; y <= TEX_SIZE; y += 4) {
-      const xx = x + Math.sin((y / TEX_SIZE) * Math.PI * 2 * k + phase) * 5
+    for (let y = 0; y <= TEX_SIZE; y += 3) {
+      const xx = x + Math.sin((y / TEX_SIZE) * Math.PI * 2 * k + phase) * 9
       if (y === 0) ctx.moveTo(xx, y)
       else ctx.lineTo(xx, y)
     }
-    for (let y = TEX_SIZE; y >= 0; y -= 4) {
+    for (let y = TEX_SIZE; y >= 0; y -= 3) {
       const xx =
-        x + w + Math.sin((y / TEX_SIZE) * Math.PI * 2 * k + phase) * 5
+        x + w + Math.sin((y / TEX_SIZE) * Math.PI * 2 * k + phase) * 9
       ctx.lineTo(xx, y)
     }
     ctx.closePath()
     ctx.fill()
   }
 
-  // тонкие волокна
-  ctx.globalAlpha = 1
-  for (let i = 0; i < 44; i++) {
-    const x = rand() * TEX_SIZE
-    const k = 1 + Math.floor(rand() * 5)
-    const phase = rand() * Math.PI * 2
+  // Кафедральные дуги — характерный рисунок распила.
+  for (let i = 0; i < 5; i++) {
+    const cx = rand() * TEX_SIZE
+    const cy = rand() * TEX_SIZE
+    const r = 40 + rand() * 150
+    ctx.globalAlpha = 0.03 + rand() * 0.05
     ctx.strokeStyle = accent
-    ctx.globalAlpha = 0.025 + rand() * 0.05
-    ctx.lineWidth = 0.6 + rand() * 0.7
+    ctx.lineWidth = 1 + rand() * 2.4
     ctx.beginPath()
-    for (let y = 0; y <= TEX_SIZE; y += 6) {
+    ctx.ellipse(cx, cy, r, r * (0.35 + rand() * 0.25), rand() * Math.PI,
+      0.2, Math.PI * 1.7)
+    ctx.stroke()
+  }
+
+  // Тонкие волокна и поры.
+  ctx.globalAlpha = 1
+  for (let i = 0; i < 90; i++) {
+    const x = rand() * TEX_SIZE
+    const k = 1 + Math.floor(rand() * 6)
+    const phase = rand() * Math.PI * 2
+    ctx.strokeStyle = rand() > 0.25 ? accent : '#ffffff'
+    ctx.globalAlpha = 0.012 + rand() * 0.045
+    ctx.lineWidth = 0.4 + rand() * 0.9
+    ctx.beginPath()
+    for (let y = 0; y <= TEX_SIZE; y += 4) {
       const xx =
         x +
-        Math.sin((y / TEX_SIZE) * Math.PI * 2 * k + phase) * (1 + rand() * 0.9)
+        Math.sin((y / TEX_SIZE) * Math.PI * 2 * k + phase) * (1 + rand() * 1.4)
       if (y === 0) ctx.moveTo(xx, y)
       else ctx.lineTo(xx, y)
     }
     ctx.stroke()
   }
 
+  // Редкие сучки.
+  for (let i = 0; i < 3; i++) {
+    const x = rand() * TEX_SIZE
+    const y = rand() * TEX_SIZE
+    const r = 4 + rand() * 12
+    ctx.globalAlpha = 0.12
+    ctx.strokeStyle = accent
+    ctx.lineWidth = 1.4
+    for (let k = 1; k <= 3; k++) {
+      ctx.beginPath()
+      ctx.ellipse(x, y, r * k, r * k * 0.55, rand() * Math.PI, 0, Math.PI * 2)
+      ctx.stroke()
+    }
+  }
+  ctx.globalAlpha = 1
   return c
 }
-
 function stone(color: string, accent: string): HTMLCanvasElement {
   const [c, ctx] = makeCanvas()
   const rand = rng(hash(color + accent))

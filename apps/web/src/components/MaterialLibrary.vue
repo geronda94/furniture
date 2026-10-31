@@ -31,7 +31,8 @@ const items = computed(() => {
   const q = query.value.trim().toLowerCase()
   return all.value.filter((i) => {
     if (active.value !== 'Все' && i.category !== active.value) return false
-    return !q || `${i.name} ${i.category}`.toLowerCase().includes(q)
+    return !q || `${i.name} ${i.category} ${i.brand || ''} ${i.code || ''}`
+      .toLowerCase().includes(q)
   })
 })
 
@@ -75,6 +76,31 @@ function applyUrl(): void {
   setTexture(props.role, u, props.instanceId)
   emit('close')
 }
+
+/** Сжать фото текстуры в квадрат 512 px, чтобы data URL не раздувал проект. */
+async function onFile(e: Event): Promise<void> {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  const bitmap = await createImageBitmap(file)
+  const side = 512
+  const canvas = document.createElement('canvas')
+  canvas.width = side
+  canvas.height = side
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  const scale = Math.max(side / bitmap.width, side / bitmap.height)
+  const w = bitmap.width * scale
+  const h = bitmap.height * scale
+  ctx.drawImage(bitmap, (side - w) / 2, (side - h) / 2, w, h)
+  const texture = canvas.toDataURL('image/jpeg', 0.82)
+  if (props.mode === 'pick') {
+    emit('pick', { texture })
+    emit('close')
+    return
+  }
+  setTexture(props.role, texture, props.instanceId)
+  emit('close')
+}
 </script>
 
 <template>
@@ -109,9 +135,14 @@ function applyUrl(): void {
             >
               <span
                 class="matcard__swatch"
-                :style="{ background: m.color, borderColor: m.accent || m.color }"
+                :style="m.texture_url
+                  ? { backgroundImage: `url(${m.texture_url})`, backgroundSize: 'cover', borderColor: m.accent || m.color }
+                  : { background: m.color, borderColor: m.accent || m.color }"
               ></span>
               <span class="matcard__name">{{ m.name }}</span>
+              <span v-if="m.brand || m.code" class="matcard__brand">
+                {{ [m.brand, m.code].filter(Boolean).join(' · ') }}
+              </span>
               <span class="matcard__meta">
                 {{ m.category }}
                 <template v-if="m.price_m2"> · {{ m.price_m2 }} ₽/м²</template>
@@ -119,11 +150,19 @@ function applyUrl(): void {
             </button>
           </div>
           <div class="matlib__url">
-            <span class="field__label">Своя текстура по URL</span>
+            <span class="field__label">Своя текстура: фото или URL</span>
             <div class="matlib__url-row">
               <input v-model="url" class="input" placeholder="https://…/texture.jpg" />
               <button class="btn btn--sm" @click="applyUrl">Применить</button>
+              <label class="btn btn--sm matlib__file">
+                Загрузить фото
+                <input type="file" accept="image/*" @change="onFile" />
+              </label>
             </div>
+            <span class="matlib__hint">
+              Фото сжимается до 512×512 и сохраняется в проекте. Для бесшовной
+              текстуры лучше квадратный кадр без бликов.
+            </span>
           </div>
         </div>
       </section>

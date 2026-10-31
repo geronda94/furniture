@@ -3,6 +3,7 @@ name: furniture
 services:
   db:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-furniture}
       POSTGRES_USER: ${POSTGRES_USER:-furniture}
@@ -18,15 +19,22 @@ services:
       retries: 20
 
   api:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile.api
     command: >
-      uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload
+      uvicorn apps.api.main:app --host 0.0.0.0 --port 8000
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-furniture}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-furniture}
-      APP_SECRET: ${APP_SECRET:-dev-furniture-secret-change-me}
-      COOKIE_SECURE: ${COOKIE_SECURE:-0}
+      APP_SECRET: ${APP_SECRET:?set APP_SECRET in .env}
+      COOKIE_SECURE: ${COOKIE_SECURE:-1}
+      RATE_SOLVE_PER_MIN: ${RATE_SOLVE_PER_MIN:-240}
+      RATE_BATCH_PER_MIN: ${RATE_BATCH_PER_MIN:-120}
+      RATE_VALIDATE_PER_MIN: ${RATE_VALIDATE_PER_MIN:-240}
+      RATE_LAYOUT_PER_MIN: ${RATE_LAYOUT_PER_MIN:-300}
+      RATE_NORMALIZE_PER_MIN: ${RATE_NORMALIZE_PER_MIN:-60}
+      RATE_SAVE_PER_MIN: ${RATE_SAVE_PER_MIN:-180}
       PYTHONPATH: /app
     volumes:
       - .:/app
@@ -35,15 +43,27 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
 
   web:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile.web
     ports:
       - "5176:80"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   pgdata:

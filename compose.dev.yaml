@@ -1,0 +1,12 @@
+# Разработка: авто-перезагрузка API при правке исходников и локальная сборка.
+#
+#   docker compose -f compose.yaml -f compose.dev.yaml up -d
+#
+# В проде (`compose.yaml` без override) API работает без `--reload`:
+# перезапуск — только через `tools/deploy.sh`.
+name: furniture
+
+services:
+  api:
+    command: >
+      uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload

@@ -14,6 +14,9 @@ venv/
 *.pem
 *.p12
 
+# гостевые копии демо (создаются кнопкой «Посмотреть демо» и e2e)
+projects/demo-[0-9]*/
+
 # временное
 .playwright-mcp/
 tmp/
@@ -28,3 +31,9 @@ projects/*/video/
 projects/*/previews/
 projects/*/cards/
 .auth/
+
+# резервные дампы БД (локальные, не в git)
+backups/
+
+# локальные БД/выгрузки стратегии
+*.sqlite

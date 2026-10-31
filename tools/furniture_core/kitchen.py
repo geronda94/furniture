@@ -516,6 +516,7 @@ def scene3d(sections, cfg: Config, open_sections=(),
         for j in range(n):
             b = _box("Фасад дверь", xx, 0, z, fw, t, dh, "door", sec)
             b["hinge"] = "left" if j % 2 == 0 else "right"
+            b["op_part"] = f"Фасад дверь · {sec}.{j + 1}"
             boxes.append(b)
             xx += fw + cfg.gap_between
 
@@ -535,6 +536,7 @@ def scene3d(sections, cfg: Config, open_sections=(),
             b = _box("Фасад ящик", xx, 0, z, fw, t, dh, "drawerfront", sec)
             b["drawer_id"] = did
             b["open"] = run
+            b["op_part"] = f"Фасад ящик · {sec}.{did}"
             boxes.append(b)
             # короб ящика — полый: 2 боковины + передняя и задняя стенки + дно.
             # Передняя стенка короба — опора для фасада (саморезы изнутри).
@@ -653,4 +655,15 @@ def scene3d(sections, cfg: Config, open_sections=(),
             else:
                 emit_doors(x, W, zb, fh, s.doors, sec)
         x += W
+    # Уникальное имя каждой физической детали для карты присадки.
+    # Иначе две одинаковые двери/полки/боковины сливаются в одну карту,
+    # и отверстия с левой и правой створки оказываются на одном фасаде.
+    counters: dict[tuple[int, str], int] = {}
+    for b in boxes:
+        sec_i = int(b.get("sec") or 0)
+        base = str(b.get("name") or "")
+        key = (sec_i, base)
+        counters[key] = counters.get(key, 0) + 1
+        if not b.get("op_part"):
+            b["op_part"] = f"{base} · {sec_i}.{counters[key]}"
     return boxes

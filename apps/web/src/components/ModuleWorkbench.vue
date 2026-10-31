@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import ModulePreview from './ModulePreview.vue'
-import DrillingMap from './DrillingMap.vue'
 import PartDetail from './PartDetail.vue'
 import MaterialLibrary from './MaterialLibrary.vue'
 import HardwareLibrary, { type HardwareKind } from './HardwareLibrary.vue'
 import NumField from './NumField.vue'
 import BomPanel from './BomPanel.vue'
 import MaterialPanel from './MaterialPanel.vue'
+import ModuleAssemblyTab from './ModuleAssemblyTab.vue'
+import ModuleCostTab from './ModuleCostTab.vue'
+import ModuleFrontsTab from './ModuleFrontsTab.vue'
 import {
   addKey,
   channelsOf,
@@ -24,14 +26,12 @@ import {
   playPart,
   addZone,
   resetPartMaterial,
-  setConnectionOverride,
   setEdgePolicy,
   setHiddenFasteners,
   setInstanceZone,
   setPartMaterial,
   setPartMaterialFull,
   setPartMaterialGroup,
-  toggleAssemblyStep,
   zonesList,
   pushSelection,
   renameInstance,
@@ -57,13 +57,12 @@ import {
   updateParams,
   type BackKind,
   type Frame,
-  type FrontBlock,
   type Hardware,
   type Params,
   type Reinforce,
 } from '../state/project'
 import { moduleInfo, relationsFor, sizeLabel } from '../module/info'
-import { apiHardwareCatalog, type AssemblyOperation, type EdgePlanRow } from '../api'
+import { apiHardwareCatalog } from '../api'
 import { resolveObjectMaterial } from '../material/vars'
 import type { Material } from '../render25d/types'
 import type { Channel } from '../anim/channels'
@@ -89,6 +88,13 @@ const info = computed(() =>
 const calc = computed(() => derived[props.instanceId] ?? null)
 const p = computed<Params | null>(() => inst.value?.params ?? null)
 const dims = computed(() => calc.value?.dims ?? null)
+const totalHeight = computed(() => {
+  const v = p.value
+  if (!v) return 0
+  const floor = (v.mount || 'floor') !== 'wall'
+  return Math.round(v.H + (floor ? Math.max(0, v.plinthH || 0) +
+    Math.max(0, v.worktopT || 0) : 0))
+})
 const drawers = computed(() => calc.value?.drawers ?? [])
 const sceneForTab = computed<'all' | 'carcass' | 'fronts' | 'drawers' | 'shelves'>(() => {
   if (tab.value === 'fronts') return 'fronts'
@@ -112,16 +118,6 @@ const partSource = computed(() =>
     ? partMaterialSource(inst.value.id, part.value)
     : null,
 )
-const assemblyDone = computed(() =>
-  new Set(inst.value?.assemblyDone ?? []),
-)
-const assemblyProgress = computed(() => {
-  const total = calc.value?.assembly?.length ?? 0
-  if (!total) return 0
-  let done = 0
-  for (let i = 0; i < total; i++) if (assemblyDone.value.has(i)) done++
-  return Math.round((done / total) * 100)
-})
 function focusWarning(text: string): void {
   if (!info.value) return
   const el = info.value.elements.find(
@@ -143,14 +139,6 @@ function onHiddenFasteners(e: Event): void {
     (e.target as HTMLSelectElement).value === 'yes',
   )
 }
-function onConnection(cls: string, e: Event): void {
-  if (!inst.value) return
-  setConnectionOverride(
-    inst.value.id,
-    cls,
-    (e.target as HTMLSelectElement).value,
-  )
-}
 function onEdgeType(which: 'visible' | 'hidden', e: Event): void {
   if (!inst.value) return
   const value = (e.target as HTMLSelectElement).value
@@ -170,7 +158,6 @@ function onHardwareSelect(payload: { kind: HardwareKind; id: string }): void {
   if (payload.kind === 'shelf') update({ shelfSupport: payload.id })
   if (payload.kind === 'fasteners') update({ fastener: payload.id })
 }
-const cost = computed(() => calc.value?.cost ?? null)
 const PARAM_LABELS: Record<ManagedParam, string> = {
   t: 'толщина ЛДСП', back: 'задняя стенка', backT: 'толщина задней',
   roof: 'крыша', reinforce: 'царги', frame: 'каркас',
@@ -184,16 +171,6 @@ const overridden = computed<ManagedParam[]>(() =>
     ? MANAGED_PARAMS.filter((k) => isParamOverridden(inst.value!, k))
     : [],
 )
-const money = (v: number, withVat = false) => {
-  const c = cost.value
-  const locale = c?.locale || 'ru-RU'
-  const symbol = c?.symbol || c?.currency || ''
-  const value = withVat && c?.total_with_vat != null ? c.total_with_vat : v
-  return (
-    new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(value) +
-    ' ' + symbol
-  )
-}
 
 const part = computed(() =>
   partSelection.instanceId === props.instanceId ? partSelection.part : null,
@@ -328,195 +305,6 @@ function openVars(): void {
   ui.settingsTab = 'vars'
   ui.settingsOpen = true
 }
-
-/* ---------- карта присадки ---------- */
-type OpGroup = {
-  part: string
-  kind: string
-  ops: AssemblyOperation[]
-  w: number
-  h: number
-  edges: Record<string, EdgePlanRow['sides'][string]>
-  front: string
-}
-const OP_KINDS = [
-  ['fastener_face', 'Крепёж (пласть)'],
-  ['fastener_end', 'Крепёж (торец)'],
-  ['hinge_cup', 'Петли'],
-  ['hinge_plate', 'Ответные планки'],
-  ['shelf_pin', 'Полкодержатели'],
-  ['slide_mount', 'Направляющие'],
-  ['slide_box', 'Направляющие ящика'],
-  ['handle', 'Ручки'],
-  ['gas_strut', 'Газовые патроны'],
-] as const
-const hiddenKinds = ref<Record<string, boolean>>({})
-const opKinds = computed(() => {
-  const counts: Record<string, number> = {}
-  for (const o of calc.value?.operations ?? []) {
-    counts[o.kind] = (counts[o.kind] ?? 0) + 1
-  }
-  return OP_KINDS
-    .filter(([id]) => counts[id])
-    .map(([id, label]) => ({ id, label, count: counts[id] }))
-})
-const PART_ALIAS: Record<string, string> = {
-  'Боковина Л': 'Боковина лев.',
-  'Боковина П': 'Боковина прав.',
-}
-function findPlanRow(part: string): EdgePlanRow | null {
-  const rows = calc.value?.edge_plan ?? []
-  const alias = PART_ALIAS[part] || part
-  return (
-    rows.find((r) => r.part === alias) ||
-    rows.find((r) => r.part === part) ||
-    rows.find((r) => r.part.startsWith(alias)) ||
-    rows.find((r) => alias.startsWith(r.part)) ||
-    null
-  )
-}
-const opGroups = computed<OpGroup[]>(() => {
-  const map = new Map<string, OpGroup>()
-  for (const o of calc.value?.operations ?? []) {
-    if (hiddenKinds.value[o.kind]) continue
-    let g = map.get(o.part)
-    if (!g) {
-      const row = findPlanRow(o.part)
-      g = {
-        part: o.part,
-        kind: o.part_kind || '',
-        ops: [],
-        w: row?.w ?? 0,
-        h: row?.h ?? 0,
-        edges: row?.sides ?? {},
-        front: row?.front ?? '',
-      }
-      map.set(o.part, g)
-    }
-    g.ops.push(o)
-  }
-  const order = ['side', 'horizontal', 'divider', 'shelf', 'door',
-    'drawer_front', 'drawer_side', 'drawer_panel']
-  return [...map.values()].sort((a, b) => {
-    const ia = order.indexOf(a.kind)
-    const ib = order.indexOf(b.kind)
-    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) ||
-      a.part.localeCompare(b.part, 'ru')
-  })
-})
-function toggleKind(id: string): void {
-  hiddenKinds.value = { ...hiddenKinds.value, [id]: !hiddenKinds.value[id] }
-}
-function printMaps(): void {
-  window.print()
-}
-
-const gapBottom = 2
-const gapTop = 2
-const gapBetween = 3
-const openH = computed(() => (p.value ? p.value.H - gapTop - gapBottom : 0))
-
-/* ---------- фасады ---------- */
-function legacyBlocks(v: Params): FrontBlock[] {
-  if (v.fronts?.length) return v.fronts.map((b) => ({ ...b }))
-  if (v.drawers && v.doors) {
-    return [
-      { type: 'drawers', count: 1, height: 200 },
-      { type: 'doors', count: v.doors, height: 0 },
-    ]
-  }
-  if (v.drawers) {
-    const hs = v.drawerHeights?.length
-      ? v.drawerHeights
-      : Array.from({ length: v.drawers }, () => 0)
-    return hs.map((h) => ({
-      type: 'drawers' as const,
-      count: 1,
-      height: Math.round(h),
-    }))
-  }
-  return v.doors ? [{ type: 'doors', count: v.doors, height: 0 }] : []
-}
-
-const blocks = computed<FrontBlock[]>(() => (p.value ? legacyBlocks(p.value) : []))
-
-function counts(list: FrontBlock[]): { doors: number; drawers: number } {
-  return {
-    doors: list.filter((b) => b.type === 'doors').reduce((s, b) => s + b.count, 0),
-    drawers: list.filter((b) => b.type === 'drawers').reduce((s, b) => s + b.count, 0),
-  }
-}
-function writeFronts(next: FrontBlock[]): void {
-  const c = counts(next)
-  updateParams({ fronts: next, doors: c.doors, drawers: c.drawers })
-}
-function setBlock(i: number, patch: Partial<FrontBlock>): void {
-  writeFronts(blocks.value.map((b, k) => (k === i ? { ...b, ...patch } : b)))
-}
-function addBlock(type: 'doors' | 'drawers'): void {
-  writeFronts([...blocks.value, { type, count: 1, height: 0 }])
-}
-function removeBlock(i: number): void {
-  writeFronts(blocks.value.filter((_, k) => k !== i))
-}
-function move(i: number, dy: number): void {
-  const next = [...blocks.value]
-  const j = i + dy
-  if (j < 0 || j >= next.length) return
-  ;[next[i], next[j]] = [next[j], next[i]]
-  writeFronts(next)
-}
-function preset(key: string): void {
-  const v = p.value
-  if (!v) return
-  if (key === 'doors') {
-    writeFronts([{ type: 'doors', count: Math.max(1, Math.ceil(v.W / 600)), height: 0 }])
-  } else if (key === 'drawers') {
-    writeFronts([
-      { type: 'drawers', count: 1, height: 0 },
-      { type: 'drawers', count: 1, height: 0 },
-      { type: 'drawers', count: 1, height: 0 },
-    ])
-  } else if (key === 'mix') {
-    writeFronts([
-      { type: 'drawers', count: 1, height: 200 },
-      { type: 'drawers', count: 1, height: 200 },
-      { type: 'doors', count: 2, height: 0 },
-    ])
-  } else if (key === 'drawer-door') {
-    writeFronts([
-      { type: 'drawers', count: 1, height: 200 },
-      { type: 'doors', count: 2, height: 0 },
-    ])
-  } else if (key === 'door-drawer') {
-    writeFronts([
-      { type: 'doors', count: 2, height: 0 },
-      { type: 'drawers', count: 1, height: 200 },
-    ])
-  } else if (key === 'reset') {
-    updateParams({ fronts: undefined })
-  }
-}
-
-const preview = computed(() => {
-  const v = p.value
-  if (!v) return []
-  const available = openH.value
-  const fixed = blocks.value.reduce((s, b) => s + (b.height || 0), 0)
-  const autos = blocks.value.filter((b) => !b.height).length
-  const autoH = autos
-    ? Math.max(0, available - fixed - gapBetween * (blocks.value.length - 1)) / autos
-    : 0
-  return blocks.value.map((b, i) => ({
-    ...b,
-    i,
-    h: b.height || autoH,
-    label:
-      b.type === 'doors'
-        ? `${b.count} ${b.count === 1 ? 'дверь' : 'двери'}`
-        : `${b.count} ${b.count === 1 ? 'ящик' : 'ящика'}`,
-  }))
-})
 
 /* ---------- корпус ---------- */
 function num(e: Event): number {
@@ -662,39 +450,65 @@ const tabs: { id: Tab; label: string }[] = [
     }">
       <!-- КРУПНАЯ ЗАКРЕПЛЁННАЯ КАРТИНКА -->
       <div class="wb__visual" :class="{ 'wb__visual--part': previewMode === 'part' }">
-        <div class="wb__mode" role="group" aria-label="Режим просмотра">
+        <div class="wb-mode-rail" role="tablist" aria-label="Режим просмотра">
           <button
-            class="tab tab--sm"
-            :class="{ 'tab--active': previewMode === 'object' }"
+            class="wb-mode-rail__btn"
+            :class="{ 'wb-mode-rail__btn--on': previewMode === 'object' }"
+            role="tab"
+            :aria-selected="previewMode === 'object'"
+            title="Объект целиком"
             @click="previewMode = 'object'"
-          >Объект</button>
+          ><span>Объект</span></button>
           <button
-            class="tab tab--sm"
-            :class="{ 'tab--active': previewMode === 'part' }"
+            class="wb-mode-rail__btn"
+            :class="{ 'wb-mode-rail__btn--on': previewMode === 'part' }"
+            role="tab"
+            :aria-selected="previewMode === 'part'"
             :disabled="part == null"
+            title="Выбранная деталь"
             @click="previewMode = 'part'"
-          >Деталь</button>
+          ><span>Деталь</span></button>
         </div>
-        <ModulePreview
-          v-if="previewMode === 'object'"
-          :instance-id="instanceId"
-          fill
-          schematic
-          :view="previewView"
-          :scene="sceneForTab"
-          show-dims
-          :part="part"
-          :drawer-id="tab === 'drawers' ? drawerFocus : null"
-          @pick="pick"
-          @toggle="onTogglePart"
-        />
-        <PartDetail
-          v-else
-          :instance-id="instanceId"
-          :part-index="part"
-          @close="previewMode = 'object'"
-          @select="pick"
-        />
+        <div class="wb__view-ctl" role="group" aria-label="Ракурс">
+          <button
+            v-for="v in [
+              { id: 'iso', icon: '◇', label: 'Изо' },
+              { id: 'front', icon: '▣', label: 'Фасад' },
+              { id: 'side', icon: '◧', label: 'Бок' },
+              { id: 'top', icon: '⬒', label: 'Сверху' },
+            ] as const"
+            :key="v.id"
+            class="wb__view-btn"
+            :class="{ 'wb__view-btn--on': previewView === v.id }"
+            :title="v.label"
+            :aria-label="v.label"
+            @click="previewView = v.id"
+          >{{ v.icon }}</button>
+        </div>
+        <Transition name="wb-slide" mode="out-in">
+          <div :key="previewMode" class="wb__visual-inner">
+            <ModulePreview
+              v-if="previewMode === 'object'"
+              :instance-id="instanceId"
+              fill
+              schematic
+              :view="previewView"
+              :scene="sceneForTab"
+              show-dims
+              :part="part"
+              :drawer-id="tab === 'drawers' ? drawerFocus : null"
+              @pick="pick"
+              @toggle="onTogglePart"
+            />
+            <PartDetail
+              v-else
+              :instance-id="instanceId"
+              :part-index="part"
+              @close="previewMode = 'object'"
+              @select="pick"
+            />
+          </div>
+        </Transition>
       </div>
 
       <!-- МЕНЮ И ВАЖНЫЕ ФУНКЦИИ -->
@@ -706,7 +520,9 @@ const tabs: { id: Tab; label: string }[] = [
             aria-label="Название модуля"
             @change="renameInstance(inst.id, ($event.target as HTMLInputElement).value)"
           />
-          <span class="dim">{{ p.W }}×{{ p.H }}×{{ p.D }}</span>
+          <span class="dim" :title="`Полная высота; корпус ${p.H} мм`">
+            {{ p.W }}×{{ totalHeight }}×{{ p.D }}
+          </span>
         </header>
 
         <div class="wb__tabs">
@@ -719,31 +535,15 @@ const tabs: { id: Tab; label: string }[] = [
           >{{ t.label }}</button>
         </div>
 
-        <div class="wb__quick">
-          <button class="btn btn--sm wb__eye" title="Показать объект анфас" @click="previewView = 'front'">👁 Напротив</button>
-          <button class="btn btn--sm" @click="previewView = 'iso'">Изо</button>
-          <button class="btn btn--sm" @click="previewView = 'side'">Бок</button>
-          <button class="btn btn--sm" @click="previewView = 'top'">Верх</button>
-        </div>
-
-        <div class="wb__coords">
-          <div class="wb__label">Положение <span class="dim">в комнате, мм</span></div>
-          <div class="coords-row">
-            <label class="coord"><span>X</span>
-              <input type="number" :value="inst.x" step="10"
-                @change="setInstancePosition(inst.id, { x: Number(($event.target as HTMLInputElement).value) })" />
-            </label>
-            <label class="coord"><span>Y</span>
-              <input type="number" :value="inst.y" step="10"
-                @change="setInstancePosition(inst.id, { y: Number(($event.target as HTMLInputElement).value) })" />
-            </label>
-            <label class="coord" :class="{ 'is-locked': inst.zLocked }"><span>Z</span>
-              <input type="number" :value="inst.z" :disabled="inst.zLocked" step="10"
-                @change="setInstancePosition(inst.id, { z: Number(($event.target as HTMLInputElement).value) })" />
-            </label>
-            <button class="tree__act coord__lock" @click="toggleZLock(inst.id)">
-              {{ inst.zLocked ? '🔒' : '🔓' }}
-            </button>
+        <div class="wb__size">
+          <div class="wb__label">Габариты <span class="dim">пересчёт зависимых деталей</span></div>
+          <div class="wb__size-row">
+            <NumField label="Ш, мм" :value="p.W" :min="200" :max="3000" :step="50"
+              @change="update({ W: $event })" />
+            <NumField label="В, мм" :value="p.H" :min="200" :max="2600" :step="50"
+              @change="update({ H: $event })" />
+            <NumField label="Г, мм" :value="p.D" :min="200" :max="900" :step="10"
+              @change="update({ D: $event })" />
           </div>
         </div>
 
@@ -864,7 +664,9 @@ const tabs: { id: Tab; label: string }[] = [
 
         <div v-if="dims" class="wb__side-dims">
           <span>Снаружи</span>
-          <b>{{ dims.outer.W }}×{{ dims.outer.H }}×{{ dims.outer.D }}</b>
+          <b>{{ dims.outer.W }}×{{ dims.outer.H_total || dims.outer.H }}×{{ dims.outer.D }}</b>
+          <span class="dim">корпус</span>
+          <b class="dim">{{ dims.outer.H }} мм</b>
           <span>Внутри</span>
           <b>{{ dims.inner.W }}×{{ dims.inner.H }}×{{ dims.inner.D }}</b>
           <span>Плита / задник</span>
@@ -905,76 +707,7 @@ const tabs: { id: Tab; label: string }[] = [
         </details>
       </template>
 
-      <template v-else-if="tab === 'fronts'">
-        <div class="wb__row wb__row--2">
-          <label class="field"><span class="field__label">Материал фасадов</span>
-            <select class="select" :value="p.facadeMaterial || 'ldsp'"
-              @change="update({ facadeMaterial: ($event.target as HTMLSelectElement).value as 'ldsp' | 'mdf' })">
-              <option value="ldsp">ЛДСП</option>
-              <option value="mdf">МДФ</option>
-            </select>
-          </label>
-          <label class="field"><span class="field__label">Тип фасада</span>
-            <select class="select" :value="p.facadeStyle || 'handle'"
-              @change="update({ facadeStyle: ($event.target as HTMLSelectElement).value as 'flat' | 'milled' | 'handle' | 'push' | 'profile' })">
-              <option value="flat">Гладкий</option>
-              <option value="milled">Фрезерованный</option>
-              <option value="handle">С ручкой</option>
-              <option value="push">Push-to-open (без ручки)</option>
-              <option value="profile">Профиль-ручка</option>
-            </select>
-          </label>
-        </div>
-        <p class="dim wb__note">
-          Материал влияет на деталировку и смету. Push/профиль отключают
-          отверстия под ручки; фрезеровка — декор без изменения корпуса.
-        </p>
-        <div class="wb__chips">
-          <button class="chip" @click="preset('doors')">Только двери</button>
-          <button class="chip" @click="preset('drawers')">Только ящики</button>
-          <button class="chip" @click="preset('drawer-door')">Ящик + двери</button>
-          <button class="chip" @click="preset('door-drawer')">Двери + ящик</button>
-          <button class="chip" @click="preset('mix')">Микс</button>
-          <button class="chip" @click="preset('reset')">Авто</button>
-        </div>
-        <div class="fc__blocks">
-          <div v-for="(b, i) in blocks" :key="i" class="fc-block">
-            <div class="fc-block__head">
-              <span class="fc-block__no">{{ i + 1 }}</span>
-              <select class="select fc-block__type" :value="b.type"
-                @change="setBlock(i, { type: ($event.target as HTMLSelectElement).value as 'doors' | 'drawers' })">
-                <option value="doors">Двери</option><option value="drawers">Ящики</option>
-              </select>
-              <div class="fc-block__acts">
-                <button class="tree__act" title="Выше" @click="move(i, -1)">↑</button>
-                <button class="tree__act" title="Ниже" @click="move(i, 1)">↓</button>
-                <button class="tree__act" title="Удалить" @click="removeBlock(i)">×</button>
-              </div>
-            </div>
-            <div class="fc-block__row">
-              <label class="field"><span class="field__label">{{ b.type === 'doors' ? 'Полотен' : 'Ящиков' }}</span>
-                <input class="input" type="number" min="1" max="6" :value="b.count" @input="setBlock(i, { count: num($event) })" />
-              </label>
-              <label class="field"><span class="field__label">Высота, мм (0 — авто)</span>
-                <input class="input" type="number" min="0" max="2000" step="10" :value="b.height" @input="setBlock(i, { height: num($event) })" />
-              </label>
-            </div>
-          </div>
-          <div v-if="!blocks.length" class="dim wb__note">Фасадов нет — открытая секция.</div>
-        </div>
-        <div class="wb__actions">
-          <button class="btn btn--sm" @click="addBlock('doors')">＋ двери</button>
-          <button class="btn btn--sm" @click="addBlock('drawers')">＋ ящики</button>
-        </div>
-        <div class="fc__elevation wb__elevation" :style="{ aspectRatio: `${p.W} / ${p.H}` }">
-          <div v-for="b in preview" :key="b.i" class="fc__band" :class="`fc__band--${b.type}`" :style="{ flexGrow: Math.max(1, b.h) }">
-            <span>{{ b.label }}</span><small>{{ b.height ? `${Math.round(b.height)} мм` : 'авто' }}</small>
-          </div>
-          <div v-if="!preview.length" class="fc__band fc__band--open"><span>Открытая секция</span></div>
-        </div>
-        <p class="dim wb__note">Сверху вниз. Высота 0 — блок добирает остаток. Зазоры 2/3 мм учитываются автоматически.</p>
-      </template>
-
+      <ModuleFrontsTab v-else-if="tab === 'fronts'" :params="p" />
       <template v-else-if="tab === 'body'">
         <div class="wb__row wb__row--3">
           <label class="field"><span class="field__label">Толщина ЛДСП</span>
@@ -1213,106 +946,11 @@ const tabs: { id: Tab; label: string }[] = [
         </template>
       </template>
 
-      <template v-else-if="tab === 'assembly'">
-        <div v-if="!calc" class="dim wb__note">Присадка ещё не рассчитана.</div>
-        <template v-else>
-          <div class="wb__assembly-head">
-            <div class="wb__label">Карта присадки и сборки</div>
-            <button class="btn btn--sm" @click="printMaps">Печать / PDF</button>
-          </div>
-          <div class="wb__assembly-plan">
-            <span>Петли: <b>{{ (calc.hardware_plan?.hinges ?? 0) }}</b></span>
-            <span>Крепёж: <b>{{ calc.hardware_plan?.fasteners ?? 0 }}</b></span>
-            <span>Саморезы: <b>{{ calc.hardware_plan?.screws ?? 0 }}</b></span>
-            <span>Отверстия опор: <b>{{ calc.hardware_plan?.leg_holes ?? 0 }}</b></span>
-            <span>Полкодержатели: <b>{{ (calc.hardware_plan?.shelf_pins ?? 0) }}</b></span>
-            <span>Направляющие: <b>{{ (calc.hardware_plan?.slide_mounts ?? 0) }}</b></span>
-            <span>Ручки: <b>{{ (calc.hardware_plan?.handles ?? 0) }}</b></span>
-            <span>Газовые патроны: <b>{{ (calc.hardware_plan?.gas_struts ?? 0) ?? 0 }}</b></span>
-            <span v-if="(calc.hardware_plan?.requires_pattern ?? 0)" class="is-warn">
-              По шаблону: <b>{{ (calc.hardware_plan?.requires_pattern ?? 0) }}</b>
-            </span>
-          </div>
-          <div class="wb__chips wb__chips--wrap">
-            <button
-              v-for="k in opKinds" :key="k.id"
-              class="chip"
-              :class="{ 'chip--off': hiddenKinds[k.id] }"
-              @click="toggleKind(k.id)"
-            >{{ k.label }} · {{ k.count }}</button>
-          </div>
-
-          <div v-if="calc.hardware_plan?.joints?.length" class="wb__group">
-            <div class="wb__label">Соединения</div>
-            <ul class="wb__joints">
-              <li v-for="j in calc.hardware_plan.joints" :key="j.joint">
-                <span>{{ j.joint }}</span>
-                <b>{{ j.fastener }}</b>
-                <span class="dim">×{{ j.count }}</span>
-              </li>
-            </ul>
-            <div class="wb__row wb__row--2">
-              <label class="field"><span class="field__label">Корпус</span>
-                <select class="select" :value="p.connectionOverrides?.carcass || 'auto'" @change="onConnection('carcass', $event)">
-                  <option value="auto">Как выбрано</option>
-                  <option v-for="f in fastenerOptions" :key="f.id" :value="f.id">{{ f.name }}</option>
-                </select>
-              </label>
-              <label class="field"><span class="field__label">Перегородки</span>
-                <select class="select" :value="p.connectionOverrides?.divider || 'auto'" @change="onConnection('divider', $event)">
-                  <option value="auto">Как выбрано</option>
-                  <option v-for="f in fastenerOptions" :key="f.id" :value="f.id">{{ f.name }}</option>
-                </select>
-              </label>
-            </div>
-          </div>
-
-          <div v-if="calc.assembly?.length" class="wb__group">
-            <div class="wb__assembly-steps-head">
-              <div class="wb__label">Порядок сборки</div>
-              <span class="dim">{{ assemblyProgress }}%</span>
-            </div>
-            <div class="wb__progress"><i :style="{ width: assemblyProgress + '%' }"></i></div>
-            <ol class="wb__steps">
-              <li
-                v-for="(step, i) in calc.assembly"
-                :key="i"
-                :class="{ 'is-done': assemblyDone.has(i) }"
-                @click="toggleAssemblyStep(inst.id, i)"
-              >
-                <span class="wb__step-check">{{ assemblyDone.has(i) ? '✓' : '' }}</span>
-                <span>{{ step }}</span>
-              </li>
-            </ol>
-          </div>
-
-          <div v-for="g in opGroups" :key="g.part" class="wb__map">
-            <div class="wb__map-head">
-              <b>{{ g.part }}</b>
-              <span v-if="g.w && g.h">{{ g.w }} × {{ g.h }} мм</span>
-              <span class="dim">{{ g.ops.length }} отв.</span>
-            </div>
-            <DrillingMap
-              v-if="g.w && g.h"
-              :part="g.part" :w="g.w" :h="g.h"
-              :operations="g.ops" :edges="g.edges" :front="g.front"
-            />
-            <ul class="wb__ops">
-              <li v-for="o in g.ops" :key="o.id">
-                <span class="wb__op-kind">{{ o.kind }}</span>
-                <span>{{ o.hardware }}</span>
-                <b>Ø{{ o.dia }}×{{ o.depth }}</b>
-                <span class="dim">{{ o.face }} · x{{ o.x }} y{{ o.y }}</span>
-                <span v-if="o.requires_pattern" class="wb__draft">шаблон</span>
-              </li>
-            </ul>
-          </div>
-          <p v-if="!opGroups.length" class="dim wb__note">
-            Нет отверстий по выбранным фильтрам.
-          </p>
-        </template>
-      </template>
-
+      <ModuleAssemblyTab
+        v-else-if="tab === 'assembly'"
+        :calc="calc" :inst="inst" :params="p"
+        :fastener-options="fastenerOptions"
+      />
       <template v-else-if="tab === 'materials'">
         <div class="wb__zone">
           <label class="field">
@@ -1377,39 +1015,7 @@ const tabs: { id: Tab; label: string }[] = [
         </p>
       </template>
 
-      <template v-else-if="tab === 'cost'">
-        <div v-if="!cost" class="dim wb__note">Смета ещё не рассчитана.</div>
-        <template v-else>
-          <div class="wb__label">Смета модуля · {{ cost.currency }} · {{ cost.market_name }}</div>
-          <div class="wb__price-note">
-            {{ cost.shop_name }} · {{ cost.supplier_name }}
-            <span v-if="cost.draft" class="wb__draft">цены-заготовка</span>
-          </div>
-          <ul class="detail__gaps wb__cost">
-            <li v-for="(line, i) in cost.lines" :key="i" class="wb__cost-line">
-              <span class="wb__cost-name">
-                {{ line.label }}
-                <small>{{ line.qty }} {{ line.unit }} × {{ money(line.unit_price) }}</small>
-              </span>
-              <b>{{ money(line.total) }}</b>
-            </li>
-          </ul>
-          <ul class="detail__gaps wb__cost-total">
-            <li><span>Материалы и работы</span><b>{{ money(cost.subtotal) }}</b></li>
-            <li><span>Наценка {{ cost.markup_percent }}%</span><b>{{ money(cost.markup) }}</b></li>
-            <li><span>Партнёрская комиссия {{ cost.partner_percent }}%</span><b>{{ money(cost.partner) }}</b></li>
-            <li v-if="cost.vat" class="wb__cost-vat">
-              <span>НДС {{ cost.vat_percent }}%</span><b>{{ money(cost.vat ?? 0) }}</b>
-            </li>
-            <li class="wb__cost-grand"><span>С НДС</span><b>{{ money(0, true) }}</b></li>
-          </ul>
-          <p class="dim wb__note">
-            Цены: {{ cost.source || 'прайс рынка' }} · обновлено {{ cost.updated || '—' }}.
-            {{ cost.shop_name }} / {{ cost.supplier_name }}. Наценка и партнёрская
-            комиссия — заготовка для КП.
-          </p>
-        </template>
-      </template>
+      <ModuleCostTab v-else-if="tab === 'cost'" :cost="calc?.cost ?? null" />
 
       <template v-else>
         <div v-if="!element" class="dim wb__note">Выберите дверь/ящик на картинке или в «Деталях».</div>

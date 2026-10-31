@@ -1,0 +1,19 @@
+# Брендирование PDF КП. Значения можно переопределить env (см. .env.example).
+default:
+  company: "Furniture constructor"
+  phone: ""
+  email: ""
+  site: ""
+  address: ""
+  bank: ""
+  vat: ""
+  logo: ""
+  note: ""
+
+# Реквизиты по цехам (id из specs/shops.yaml)
+shops: {}
+#  shop-ro-bucuresti:
+#    company: "Мебельная мастерская"
+#    bank: "RO00 XXXX 0000 0000 0000 0000"
+#    vat: "RO12345678"
+#    logo: "assets/logo.png"

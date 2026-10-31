@@ -14,6 +14,8 @@ export interface WallSeg {
   len: number
   /** наружная стена контура или внутренняя перегородка */
   outer: boolean
+  /** толщина стены, мм */
+  t: number
 }
 
 export function outlinePoints(room: Room): Pt[] {
@@ -50,6 +52,7 @@ function makeWall(
   b: Pt,
   outer: boolean,
   outline: Pt[],
+  t: number,
 ): WallSeg | null {
   const vx = b.x - a.x
   const vy = b.y - a.y
@@ -68,28 +71,31 @@ function makeWall(
       ny = -ny
     }
   }
-  return { index, a, b, dx, dy, nx, ny, len, outer }
+  return { index, a, b, dx, dy, nx, ny, len, outer, t }
 }
 
 export function roomWalls(room: Room): WallSeg[] {
   const outline = outlinePoints(room)
+  const tRoom = Math.max(40, Math.min(300, room.wallT ?? 100))
   const out: WallSeg[] = []
   for (let i = 0; i < outline.length; i++) {
-    const w = makeWall(i, outline[i], outline[(i + 1) % outline.length], true, outline)
+    const w = makeWall(i, outline[i], outline[(i + 1) % outline.length], true, outline, tRoom)
     if (w) out.push(w)
   }
   const parts = (room as Room & {
-    partitions?: { a: [number, number]; b: [number, number] }[]
+    partitions?: { a: [number, number]; b: [number, number]; wallT?: number }[]
   }).partitions
   if (Array.isArray(parts)) {
     for (const p of parts) {
       if (!p?.a || !p?.b) continue
+      const t = Math.max(40, Math.min(300, Number(p.wallT) || tRoom))
       const w = makeWall(
         out.length,
         { x: Number(p.a[0]) || 0, y: Number(p.a[1]) || 0 },
         { x: Number(p.b[0]) || 0, y: Number(p.b[1]) || 0 },
         false,
         outline,
+        t,
       )
       if (w) out.push(w)
     }

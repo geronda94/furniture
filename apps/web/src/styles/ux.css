@@ -86,9 +86,9 @@
 }
 
 .appmenu__item {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 1px 9px;
   padding: 9px 10px;
   text-align: left;
   color: var(--text);
@@ -98,8 +98,36 @@
 }
 
 .appmenu__item:hover { background: var(--bg-2); }
-.appmenu__item b { font-size: 12px; font-weight: 600; }
-.appmenu__item span { color: var(--dim); font-size: 10.5px; line-height: 1.35; }
+.appmenu__item b { grid-column: 2; font-size: 12px; font-weight: 600; }
+.appmenu__item span { grid-column: 2; color: var(--dim); font-size: 10.5px; line-height: 1.35; }
+
+.appmenu__ico {
+  grid-row: 1 / span 2;
+  margin-top: 1px;
+  color: var(--accent);
+  opacity: 0.9;
+}
+
+.appmenu__current {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 10px 2px;
+  padding: 10px 12px;
+  width: calc(100% - 20px);
+  text-align: left;
+  color: var(--text);
+  background: var(--accent-weak);
+  border: 1px solid rgba(224, 163, 62, 0.35);
+  border-radius: var(--radius-sm);
+}
+
+.appmenu__current:hover { border-color: rgba(224, 163, 62, 0.65); }
+.appmenu__current .app-icon { color: var(--accent); flex: 0 0 auto; }
+.appmenu__current-text { display: flex; flex-direction: column; min-width: 0; }
+.appmenu__current-text b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.appmenu__current-text small { color: var(--dim); font-size: 10px; }
+.appmenu__current-arrow { margin-left: auto; color: var(--accent); font-size: 16px; }
 
 .appmenu__error {
   margin: 8px 12px 0;
@@ -133,6 +161,7 @@
   display: flex;
   align-items: flex-end;
   justify-content: center;
+  padding-bottom: calc(56px + env(safe-area-inset-bottom));
   background: rgba(4, 6, 8, 0.55);
 }
 
@@ -191,6 +220,14 @@
 .view__sheet-row .btn {
   flex: 1 0 auto;
   min-height: 38px;
+  border-color: var(--line);
+}
+
+.view__sheet-row .tab--active {
+  color: #1b1305;
+  background: var(--accent);
+  border-color: var(--accent);
+  font-weight: 650;
 }
 
 /* ---------- миниатюры: CSS-размер, а не DPR-размер canvas ---------- */
@@ -731,7 +768,23 @@
 
 @media (max-width: 900px) {
   .toast {
+    left: 8px;
+    right: 8px;
     bottom: calc(64px + env(safe-area-inset-bottom));
+    max-width: none;
+    transform: none;
+    padding: 9px 10px;
+    font-size: 12px;
+    line-height: 1.35;
+    gap: 8px;
+  }
+
+  .toast__text {
+    flex: 1 1 100%;
+  }
+
+  .toast__action {
+    margin-left: 0;
   }
 }
 
@@ -844,18 +897,76 @@
 
 /* карта присадки */
 .dmap {
+  position: relative;
   margin: 0;
   display: grid;
   gap: 4px;
 }
 
+/* Масштаб схемы присадки: длинные детали иначе не кликнуть */
+.dmap__zoom {
+  position: absolute;
+  right: 6px;
+  top: 6px;
+  z-index: 3;
+  display: flex;
+  gap: 4px;
+}
+
+.dmap__zoom-btn {
+  width: 32px;
+  height: 32px;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text);
+  background: rgba(20, 23, 27, 0.88);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.dmap__zoom-btn:hover {
+  border-color: var(--accent);
+}
+
 .dmap__svg {
   width: 100%;
   max-height: none;
+  touch-action: pan-y;
   background:
     linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px) 0 0 / 20px 20px,
     linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px) 0 0 / 20px 20px;
   border-radius: 4px;
+}
+
+/* В приближении схема забирает жесты себе: панорама без прокрутки страницы */
+.dmap__svg--pan {
+  touch-action: none;
+  cursor: grab;
+}
+
+.dmap__svg--pan:active {
+  cursor: grabbing;
+}
+
+@media (max-width: 900px) {
+  .dmap__zoom-btn {
+    width: 38px;
+    height: 38px;
+    font-size: 17px;
+  }
+
+  .dmap__zoom {
+    right: 8px;
+    top: 8px;
+    gap: 6px;
+  }
+}
+
+@media print {
+  .dmap__zoom {
+    display: none;
+  }
 }
 
 .dmap__dim,
@@ -890,6 +1001,12 @@
   gap: 4px 10px;
   font-size: 10px;
   color: var(--muted);
+}
+
+.dmap__key--hint {
+  margin-left: auto;
+  opacity: 0.75;
+  font-style: italic;
 }
 
 .dmap__key {
@@ -1754,6 +1871,51 @@
   font-size: 9.5px;
 }
 
+.pdetail__view-label {
+  color: var(--dim);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pdetail__viewseg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.pdetail__viewbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 9px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.pdetail__viewbtn span {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.pdetail__viewbtn:hover {
+  color: var(--text);
+  background: var(--bg-2);
+}
+
+.pdetail__viewbtn--on {
+  color: #1b1305;
+  background: var(--accent);
+}
+
 .pdetail__mark {
   display: grid;
   grid-template-columns: 118px 1fr;
@@ -1811,6 +1973,7 @@
   position: fixed;
   z-index: 200;
   max-width: 280px;
+  pointer-events: none;
   display: grid;
   gap: 2px;
   padding: 7px 9px;
@@ -2409,3 +2572,1423 @@
 
 .tour { pointer-events: auto; }
 .tour__card { pointer-events: auto; }
+
+/* ============================================================
+   Навигация и камера: единые группы, мобильный джойстик
+   ============================================================ */
+
+/* ---------- шапка проекта ---------- */
+
+.topbar {
+  gap: 12px;
+}
+
+.topbar__left,
+.topbar__right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.topbar__left {
+  flex: 0 1 auto;
+}
+
+.topbar__center {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 auto;
+}
+
+.topbar__right {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.topbar__label {
+  color: var(--dim);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.topbar__group {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 1px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+}
+
+.topbar__history .btn {
+  height: 24px;
+}
+
+.topbar__menu {
+  gap: 6px;
+}
+
+.topbar__menu-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+/* ---------- заголовок 3D и группы кнопок ---------- */
+
+.view__title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.view__mode-label {
+  padding: 1px 6px;
+  color: var(--accent);
+  background: var(--accent-weak);
+  border: 1px solid rgba(224, 163, 62, 0.28);
+  border-radius: 99px;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.view__groups,
+.view__actions {
+  min-width: 0;
+}
+
+.view__group {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 1px 2px;
+  border-left: 1px solid var(--line);
+}
+
+.view__group:first-child {
+  border-left: 0;
+}
+
+.view__group-label {
+  padding: 0 4px;
+  color: var(--dim);
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.view__group--tools .tab--active {
+  color: var(--text);
+  background: var(--bg-3);
+  border-color: var(--line-2);
+}
+
+.view__more {
+  margin-left: 2px;
+}
+
+/* ---------- шторка «Вид и сцена» ---------- */
+
+.view__sheet-row--stack {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.view__sheet-row--stack .tab {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  min-height: 44px;
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.view__sheet-row--stack .tab small {
+  color: var(--dim);
+  font-size: 9.5px;
+  font-weight: 400;
+}
+
+.view__sheet-row--stack .tab--active small {
+  color: var(--accent);
+}
+
+.view__sheet-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.view__sheet-note b {
+  color: var(--text);
+}
+
+
+@media (max-width: 900px) {
+  /* На телефоне шапка 3D скрыта, но в 2D она нужна: вернуться в 3D,
+     переключить план и листать стены. */
+  .wallview .view__head,
+  .view--plan .view__head {
+    display: flex;
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 40px;
+    flex-basis: auto;
+    overflow: visible;
+    padding: 4px 8px;
+    gap: 4px;
+  }
+
+  /* Действия переносим на вторую строку: «3D» и «План» иначе уезжают
+     за экран, и с телефона нельзя вернуться в объём. */
+  .wallview .view__actions,
+  .view--plan .view__actions {
+    flex-wrap: wrap;
+    flex: 1 1 100%;
+  }
+
+  .wallview .view__title,
+  .view--plan .view__title {
+    font-size: 11px;
+  }
+
+  .wallview .view__actions,
+  .view--plan .view__actions {
+    gap: 2px;
+  }
+
+  .wallview .view__actions .tab,
+  .view--plan .view__actions .tab {
+    min-height: 32px;
+    padding: 0 7px;
+    font-size: 10px;
+  }
+}
+
+/* ---------- предложение 2D на слабом GPU ---------- */
+
+.view__zoom {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.view__zoom-btn {
+  width: 34px;
+  height: 34px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text);
+  background: rgba(20, 23, 27, 0.86);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.view__zoom-btn:hover {
+  border-color: var(--accent);
+}
+
+.view__building {
+  position: absolute;
+  left: 50%;
+  top: 14px;
+  transform: translateX(-50%);
+  z-index: 15;
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--muted);
+  background: rgba(15, 17, 20, 0.78);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  pointer-events: none;
+}
+
+.view__gpu-note {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 14;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 24px);
+  padding: 7px 10px;
+  color: var(--text);
+  background: rgba(20, 18, 12, 0.92);
+  border: 1px solid rgba(224, 163, 62, 0.45);
+  border-radius: 8px;
+  font-size: 10.5px;
+  box-shadow: var(--shadow);
+}
+
+.view__gpu-note--strong {
+  border-color: rgba(224, 163, 62, 0.8);
+  background: rgba(28, 22, 12, 0.96);
+}
+
+.view__gpu-btn {
+  padding: 4px 8px;
+  color: #1b1305;
+  background: var(--accent);
+  border: 0;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+@media (max-width: 900px) {
+  /* Четыре вкладки не помещаются в строку — горизонтальный скролл. */
+  .add__tabs {
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    justify-content: flex-start;
+    scrollbar-width: none;
+  }
+
+  .add__tabs::-webkit-scrollbar { display: none; }
+
+  .add__tab {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+}
+
+/* эмодзи-иконка карточки декора */
+.cat-card__icon--emoji {
+  display: grid;
+  place-items: center;
+  font-size: 26px;
+  line-height: 1;
+}
+
+@media (max-width: 900px) {
+  /* Быстрое меню модуля на телефоне: без дублирующих переключателей. */
+  .object-modal:not(.object-modal--full) .om-mode {
+    display: none;
+  }
+
+  .object-modal .modal__title {
+    max-width: 42vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .object-modal:not(.object-modal--full) .modal__sub {
+    display: none;
+  }
+
+  .object-modal .modal__tools .tab {
+    padding: 0 6px;
+    font-size: 10px;
+  }
+}
+
+@media (max-width: 900px) {
+  /* Детальный режим: заголовок в одну строку, переключатели не дублируем. */
+  .object-modal--full .om-mode {
+    display: none;
+  }
+
+  .object-modal--full .modal__title {
+    max-width: 46vw;
+  }
+
+  /* В превью модуля уже есть иконки ракурсов — текстовый ряд лишний. */
+  .wb .module-preview__views {
+    display: none;
+  }
+
+  .wb__view-ctl {
+    top: 4px;
+    right: 4px;
+  }
+}
+
+/* ---------- поиск в списке объектов ---------- */
+
+.outliner__search {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 12px 8px;
+}
+
+.outliner__search-input {
+  flex: 1;
+  min-height: 32px;
+  font-size: 12px;
+}
+
+@media (max-width: 900px) {
+  .outliner__search {
+    padding: 0 10px 8px;
+  }
+  .outliner__search-input {
+    min-height: 36px;
+  }
+}
+
+/* ---------- заметка в дереве объектов ---------- */
+
+.outliner__note {
+  margin: 6px 10px 10px;
+  padding: 7px 9px;
+  color: var(--dim);
+  background: var(--bg-0);
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  font-size: 9.5px;
+  line-height: 1.45;
+}
+
+@media (max-width: 900px) {
+  /* Меню не должно уходить под нижнюю панель. */
+  .appmenu {
+    top: calc(48px + env(safe-area-inset-top));
+    right: 8px;
+    left: 8px;
+    width: auto;
+    max-height: calc(100dvh - 48px - 66px - env(safe-area-inset-bottom));
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  }
+}
+
+/* ---------- индикатор расстановки на телефоне ---------- */
+
+.m-layout-badge {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .m-layout-badge {
+    position: fixed;
+    top: calc(46px + env(safe-area-inset-top));
+    right: 10px;
+    z-index: 38;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 9px;
+    color: #1b1305;
+    background: var(--accent);
+    border: 0;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  }
+
+  .m-layout-badge--err {
+    color: #fff;
+    background: var(--danger);
+  }
+}
+
+/* ---------- панель декора ---------- */
+
+.prop-panel {
+  position: fixed;
+  left: 14px;
+  /* выше мини-плана (он в левом нижнем углу) */
+  bottom: calc(196px + env(safe-area-inset-bottom));
+  z-index: 72;
+  width: min(340px, calc(100vw - 24px));
+  overflow: hidden;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+
+.prop-panel__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+  cursor: grab;
+  touch-action: none;
+}
+
+.prop-panel__ico {
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.prop-panel__title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  margin-right: auto;
+}
+
+.prop-panel__title b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.prop-panel__title small {
+  color: var(--dim);
+  font-size: 9.5px;
+}
+
+.prop-panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px 10px 11px;
+  max-height: min(62dvh, 520px);
+  overflow-y: auto;
+}
+
+.prop-panel__mini {
+  display: flex;
+  gap: 5px;
+  padding: 7px 10px calc(9px + env(safe-area-inset-bottom));
+}
+
+.prop-panel__fold {
+  display: none;
+}
+
+.prop-panel__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.prop-panel__danger {
+  margin-left: auto;
+  color: var(--danger);
+  border-color: rgba(239, 91, 91, 0.4);
+}
+
+.prop-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.prop-panel__grid--2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.prop-panel__color {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 7px;
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.prop-panel__color input {
+  width: 32px;
+  height: 24px;
+  margin-left: auto;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+}
+
+.prop-panel__hint {
+  margin: 0;
+  color: var(--dim);
+  font-size: 9.5px;
+  line-height: 1.45;
+}
+
+@media (max-width: 900px) {
+  .prop-panel {
+    left: 8px;
+    right: 8px;
+    bottom: calc(84px + env(safe-area-inset-bottom));
+    width: auto;
+  }
+  .prop-panel__grid {
+    gap: 4px;
+  }
+  .prop-panel__fold {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 36px;
+    padding: 0;
+  }
+  /* Подсказка про слабый GPU на телефоне только мешает: упрощённый вид
+     включается сам, а вернуться в 3D можно из «Вида». */
+  .view__zoom {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.view__zoom-btn {
+  width: 34px;
+  height: 34px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text);
+  background: rgba(20, 23, 27, 0.86);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.view__zoom-btn:hover {
+  border-color: var(--accent);
+}
+
+.view__building {
+  position: absolute;
+  left: 50%;
+  top: 14px;
+  transform: translateX(-50%);
+  z-index: 15;
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--muted);
+  background: rgba(15, 17, 20, 0.78);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  pointer-events: none;
+}
+
+.view__gpu-note {
+    display: none;
+  }
+}
+
+/* ---------- HUD производительности (?perf=1) ---------- */
+
+.view__perf {
+  position: absolute;
+  top: 8px;
+  left: 10px;
+  z-index: 12;
+  padding: 3px 7px;
+  color: #9ff0b8;
+  background: rgba(10, 14, 12, 0.78);
+  border: 1px solid rgba(110, 220, 150, 0.3);
+  border-radius: 4px;
+  font: 10px/1.2 ui-monospace, SFMono-Regular, monospace;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ---------- 2D-развёртки стен ---------- */
+
+.wallview {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.wallview__tabs {
+  display: flex;
+  gap: 3px;
+  padding: 5px 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: rgba(16, 18, 21, 0.92);
+  border-bottom: 1px solid var(--line);
+}
+
+.wallview__tabs::-webkit-scrollbar { display: none; }
+
+.wallview__tab {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 0 9px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  font-size: 10.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.wallview__tab:hover {
+  color: var(--text);
+  background: var(--bg-2);
+}
+
+.wallview__tab--on {
+  color: #1b1305;
+  background: var(--accent);
+  border-color: var(--accent);
+  font-weight: 650;
+}
+
+.wallview__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+  background: #0f1215;
+}
+
+.wallview__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.wallview__hint {
+  left: 10px;
+  bottom: 8px;
+}
+
+@media (max-width: 900px) {
+  .wallview__tabs {
+    padding: 4px 6px;
+  }
+  .wallview__tab {
+    min-height: 30px;
+    font-size: 10px;
+  }
+}
+
+/* ---------- джойстик камеры ---------- */
+
+.campad {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 18;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+.campad__joy {
+  position: relative;
+  width: 112px;
+  height: 112px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background:
+    radial-gradient(circle at 50% 42%, rgba(224, 163, 62, 0.12), transparent 62%),
+    rgba(15, 17, 20, 0.58);
+  box-shadow: inset 0 0 24px rgba(0, 0, 0, 0.45), 0 8px 22px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(4px);
+  cursor: grab;
+  touch-action: none;
+}
+
+.campad__joy:active,
+.campad--active .campad__joy {
+  cursor: grabbing;
+  border-color: rgba(224, 163, 62, 0.6);
+}
+
+.campad__ring {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.08);
+  pointer-events: none;
+}
+
+.campad__ring--h {
+  left: 12%;
+  right: 12%;
+  top: 50%;
+  height: 1px;
+}
+
+.campad__ring--v {
+  top: 12%;
+  bottom: 12%;
+  left: 50%;
+  width: 1px;
+}
+
+.campad__thumb {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 46px;
+  height: 46px;
+  margin: -23px 0 0 -23px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  background:
+    radial-gradient(circle at 38% 32%, rgba(255, 255, 255, 0.28), transparent 45%),
+    linear-gradient(160deg, #eab254, #c28625);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  transition: transform 0.06s linear;
+}
+
+.campad__label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -17px;
+  bottom: auto;
+  color: rgba(231, 234, 238, 0.62);
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: center;
+  pointer-events: none;
+}
+
+.campad__z {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.campad__zbtn {
+  width: 44px;
+  height: 43px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  color: var(--text);
+  background: rgba(21, 24, 29, 0.78);
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  backdrop-filter: blur(4px);
+  touch-action: none;
+}
+
+.campad__zbtn span {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.campad__zbtn small {
+  color: var(--dim);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+}
+
+.campad__zbtn--on,
+.campad__zbtn:active {
+  color: #1b1305;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.campad__zbtn--on small,
+.campad__zbtn:active small {
+  color: rgba(27, 19, 5, 0.7);
+}
+
+.campad__key {
+  position: absolute;
+  z-index: 2;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  color: rgba(231, 234, 238, 0.78);
+  background: rgba(16, 18, 21, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 1;
+  pointer-events: none;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.campad__key--w { top: 8px; left: 50%; transform: translateX(-50%); }
+.campad__key--s { bottom: 8px; left: 50%; transform: translateX(-50%); }
+.campad__key--a { left: 8px; top: 50%; transform: translateY(-50%); }
+.campad__key--d { right: 8px; top: 50%; transform: translateY(-50%); }
+
+.campad--desktop {
+  right: 14px;
+  left: auto;
+  bottom: 14px;
+}
+
+.campad--desktop .campad__joy {
+  width: 92px;
+  height: 92px;
+}
+
+.campad--desktop .campad__thumb {
+  width: 40px;
+  height: 40px;
+  margin: -20px 0 0 -20px;
+}
+
+.campad--desktop .campad__zbtn {
+  width: 38px;
+  height: 37px;
+}
+
+/* ---------- меню проекта: разделы ---------- */
+
+.appmenu__section + .appmenu__section {
+  border-top: 1px solid var(--line);
+}
+
+.appmenu__label {
+  display: block;
+  padding: 8px 16px 2px;
+  color: var(--dim);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* ---------- мобильная нижняя панель ---------- */
+
+.mobilebar__ico {
+  font-size: 15px;
+  line-height: 1;
+}
+
+@media (max-width: 900px) {
+  .topbar {
+    gap: 6px;
+    padding: 6px 8px;
+    overflow: visible;
+  }
+
+  .topbar__left {
+    flex: 1 1 auto;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .topbar__center {
+    display: none;
+  }
+
+  .topbar__right {
+    flex: 0 0 auto;
+    gap: 3px;
+    margin-left: 0;
+  }
+
+  .topbar__history {
+    display: none;
+  }
+
+  .topbar .project-name {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+  }
+
+  .topbar .brand {
+    flex: 0 0 auto;
+  }
+
+  .topbar .brand__name,
+  .topbar .brand__sub {
+    display: none;
+  }
+
+  .topbar__menu {
+    height: 38px;
+    padding: 0 10px;
+  }
+
+  .topbar__menu-text {
+    display: none;
+  }
+
+  .topbar__menu-icon {
+    font-size: 17px;
+  }
+
+  .view__head {
+    display: none;
+  }
+
+  .view__dock {
+    top: 8px;
+    left: 8px;
+    right: 8px;
+    max-width: none;
+    width: auto;
+    justify-content: flex-start;
+    overflow-x: auto;
+  }
+
+  .view__dock .tab {
+    flex: 0 0 auto;
+  }
+
+  .view__dock .tab:first-child {
+    font-weight: 650;
+    color: var(--text);
+  }
+
+  .campad {
+    left: 10px;
+    bottom: 10px;
+  }
+
+  .campad__joy {
+    width: 104px;
+    height: 104px;
+  }
+
+  .minimap {
+    left: auto;
+    right: 8px;
+    bottom: 10px;
+    width: 116px;
+    height: 86px;
+  }
+
+  .minimap--open {
+    left: 8px;
+    right: 8px;
+    top: 8px;
+    bottom: 8px;
+    width: auto;
+    height: auto;
+  }
+
+  .wallmode {
+    display: none;
+  }
+
+  .mobilebar {
+    gap: 4px;
+    padding: 5px 6px calc(5px + env(safe-area-inset-bottom));
+  }
+
+  .mobilebar__btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+    min-height: 46px;
+    min-width: 0;
+    padding: 3px 2px;
+    font-size: 10px;
+    line-height: 1.1;
+  }
+
+  .mobilebar__btn--add {
+    flex: 0 0 52px;
+    font-size: 24px;
+    font-weight: 400;
+  }
+
+  .view__sheet-card {
+    max-height: min(82dvh, 640px);
+  }
+}
+
+@media (max-width: 640px) {
+  .viewcube-wrap {
+    display: none;
+  }
+
+  .topbar .brand__mark {
+    width: 9px;
+    height: 9px;
+  }
+
+  .topbar .project-name {
+    font-size: 13px;
+  }
+
+  .campad__joy {
+    width: 96px;
+    height: 96px;
+  }
+
+  .campad__thumb {
+    width: 42px;
+    height: 42px;
+    margin: -21px 0 0 -21px;
+  }
+
+  .campad__zbtn {
+    width: 40px;
+    height: 39px;
+  }
+
+  .minimap {
+    width: 100px;
+    height: 74px;
+  }
+}
+
+@media (max-width: 380px) {
+  .minimap {
+    display: none;
+  }
+}
+
+
+/* ---------- компактная шторка объекта на телефоне ---------- */
+
+.om-compact,
+.om-collapse {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .object-modal:not(.object-modal--full) .om-compact {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--line);
+  }
+
+  .object-modal:not(.object-modal--full) .om-collapse {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 36px;
+    padding: 0;
+  }
+
+  .om-compact__text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    margin-right: auto;
+  }
+
+  .om-compact__text b {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+  }
+
+  .om-compact__text span {
+    color: var(--dim);
+    font-size: 10px;
+    white-space: nowrap;
+  }
+
+  .object-modal--quick-collapsed {
+    max-height: none !important;
+    overflow: hidden !important;
+  }
+
+  .object-modal--quick-collapsed .om {
+    display: none;
+  }
+}
+
+/* ---------- переключатель режима инспектора ---------- */
+
+.om-mode {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  margin-left: 8px;
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+}
+
+.om-mode__btn {
+  height: 22px;
+  padding: 0 8px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  font-size: 10.5px;
+}
+
+.om-mode__btn:hover {
+  color: var(--text);
+}
+
+.om-mode__btn--on {
+  color: var(--text);
+  background: var(--bg-3);
+}
+
+@media (max-width: 640px) {
+  .om-mode {
+    margin-left: 0;
+  }
+
+  .modal__sub {
+    display: none;
+  }
+}
+
+@media (max-width: 1500px) {
+  .view__group-label {
+    display: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .viewcube-wrap {
+    display: none;
+  }
+}
+
+/* ---------- панель расстановки ---------- */
+
+.layout-panel {
+  width: min(620px, calc(100vw - 24px));
+  height: auto;
+  min-height: 0;
+  max-height: min(80dvh, 700px);
+}
+
+.layout-panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  overflow-y: auto;
+}
+
+.layout-panel__lead {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.layout-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.layout-panel__row {
+  display: grid;
+  grid-template-columns: auto minmax(90px, auto) 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 7px 8px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-size: 11px;
+}
+
+.layout-panel__row.is-error {
+  border-color: rgba(239, 91, 91, 0.35);
+}
+
+.layout-panel__tag {
+  padding: 1px 5px;
+  color: var(--dim);
+  background: var(--bg-0);
+  border-radius: 3px;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.layout-panel__row.is-error .layout-panel__tag {
+  color: var(--danger);
+}
+
+.layout-panel__row span:last-child {
+  color: var(--muted);
+}
+
+.layout-panel__row.is-link {
+  cursor: pointer;
+}
+
+.layout-panel__fix {
+  color: var(--dim);
+  font-style: normal;
+}
+
+.layout-panel__btn {
+  padding: 1px 7px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  /* На телефоне три колонки не помещаются: тег и имя в строку, текст ниже. */
+  .layout-panel__row {
+    grid-template-columns: auto 1fr auto;
+    gap: 4px 8px;
+    align-items: center;
+    padding: 8px 9px;
+    font-size: 11.5px;
+  }
+
+  .layout-panel__row > span:nth-child(3) {
+    grid-column: 1 / -1;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+
+  .layout-panel__row b {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .layout-panel__go {
+    grid-column: 3;
+    grid-row: 1;
+  }
+}
+
+.layout-panel__row.is-link:hover {
+  border-color: var(--accent);
+  background: var(--bg-3);
+}
+
+.layout-panel__go {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.layout-panel__checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+
+.layout-panel__checks span {
+  padding: 3px 7px;
+  color: var(--ok);
+  background: rgba(74, 190, 120, 0.08);
+  border: 1px solid rgba(74, 190, 120, 0.24);
+  border-radius: 999px;
+  font-size: 10px;
+}
+
+.layout-panel__checks span::before {
+  content: '✓ ';
+}
+
+.layout-panel__err {
+  margin: 0;
+  color: var(--danger);
+  font-size: 11px;
+}
+
+.layout-panel__ok {
+  margin: 0;
+  color: var(--ok);
+  font-size: 11px;
+}
+
+.layout-panel__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-top: 4px;
+}
+
+/* ---------- конструктор на телефоне: порядок в «Детали» ---------- */
+@media (max-width: 900px) {
+  /* имя дублирует заголовок модалки */
+  .object-modal--full .wb__name {
+    display: none;
+  }
+
+  .object-modal--full .wb__head {
+    padding-bottom: 2px;
+  }
+
+  /* 9 вкладок — сеткой по 3, без горизонтальной прокрутки */
+  .object-modal--full .wb__tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px;
+    overflow: visible;
+    min-height: 0;
+  }
+
+  .object-modal--full .wb__tab {
+    width: auto;
+    min-height: 30px;
+    padding: 0 6px;
+    font-size: 11px;
+  }
+
+  .object-modal--full .wb__top {
+    gap: 6px;
+  }
+
+  /* В режиме детали схема присадки должна быть видна целиком:
+     фиксированная высота слота обрезала нижние отверстия длинной детали. */
+  .wb__top--part {
+    flex: 0 0 auto;
+    max-height: none;
+  }
+
+  .wb__visual--part {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .object-modal--full .pdetail__map .dmap__svg {
+    max-height: 58dvh;
+  }
+
+  /* блок «Корпус» в детали — вторичная сводка, на телефоне прячем */
+  .object-modal--full .part-detail__corpus {
+    display: none;
+  }
+}
+
+/* Плашка камеры на телефоне: док уезжает под неё, чтобы не перекрывать */
+@media (max-width: 900px) {
+  .view__dock {
+    top: 52px;
+  }
+
+  .cam-switch {
+    z-index: 18;
+  }
+
+  .bp-bar {
+    top: 52px;
+  }
+}

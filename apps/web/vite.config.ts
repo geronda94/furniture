@@ -25,5 +25,19 @@ export default defineConfig({
   preview: {
     host: true,
     allowedHosts,
+    proxy: {
+      '/api': apiTarget,
+    },
+  },
+  build: {
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            { name: 'babylon', test: /node_modules[\\/]@babylonjs/ },
+          ],
+        },
+      },
+    },
   },
 })

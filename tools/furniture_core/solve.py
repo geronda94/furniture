@@ -1,7 +1,7 @@
 """Высокоуровневый solve: изделие -> деталировка + сцена (локальные координаты)."""
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 from collections import Counter
 
 from .config import Config
@@ -143,6 +143,15 @@ def solve(product: dict, cfg: Config | None = None, *, market: str | None = None
         cfg.reinforce = ("on" if v is True else "off" if v is False
                          else str(v))
 
+    # Защита от «цоколя выше корпуса» и отрицательных размеров.
+    plinth_requested = cfg.plinth_h
+    if cfg.mount != "wall":
+        max_plinth = max(0.0, cfg.corpus_h - 2 * cfg.t)
+        if cfg.plinth_h < 0:
+            cfg.plinth_h = 0.0
+        elif cfg.plinth_h > max_plinth:
+            cfg.plinth_h = max_plinth
+
     runners = load_runners(cfg.hardware_file if hasattr(cfg, "hardware_file")
                            else None)
     runner = find_runner(runners, cfg.runners)
@@ -181,6 +190,11 @@ def solve(product: dict, cfg: Config | None = None, *, market: str | None = None
     sheets, usable_w, usable_h = pack(parts, cfg)
     errs, warns = validate(total_w, cfg.corpus_h, cfg.corpus_d, parts, cfg,
                            sheets, usable_w, usable_h)
+    if cfg.mount != "wall" and plinth_requested > cfg.plinth_h + 0.1:
+        warns.append(
+            f"цоколь {plinth_requested:.0f} мм больше допустимого для корпуса "
+            f"{cfg.corpus_h:.0f} мм — уменьшен до {cfg.plinth_h:.0f} мм",
+        )
     if not cfg.include_roof and cfg.reinforce == "off":
         warns.append("Нет крыши и царг — корпус может потерять жёсткость")
     if cfg.back == "cardboard" and cfg.reinforce == "off":
@@ -295,9 +309,15 @@ def solve(product: dict, cfg: Config | None = None, *, market: str | None = None
 
     # габариты: наружные и внутренние (для мастеров/сборщиков)
     t = cfg.t
+    plinth_total = (cfg.plinth_h if cfg.mount != "wall" else 0.0)
+    worktop_total = (cfg.worktop_t if cfg.mount != "wall" else 0.0)
     dims = {
         "outer": {"W": round(total_w, 1), "H": cfg.corpus_h,
+                  "H_total": round(cfg.corpus_h + plinth_total +
+                                   worktop_total, 1),
                   "D": cfg.corpus_d},
+        "plinth_h": round(plinth_total, 1),
+        "worktop_t": round(worktop_total, 1),
         "inner": {"W": round(total_w - 2 * t, 1),
                   "H": round(cfg.corpus_h - 2 * t, 1),
                   "D": round(cfg.corpus_d, 1)},
@@ -634,6 +654,7 @@ def solve(product: dict, cfg: Config | None = None, *, market: str | None = None
         },
         "objects": objects,
         "bom": bom,
+        "parts": [asdict(p) for p in parts],
         "drilling": holes,
         "operations": operations,
         "hardware_plan": hardware_plan,
@@ -642,6 +663,8 @@ def solve(product: dict, cfg: Config | None = None, *, market: str | None = None
             "material": s["material"],
             "count": len(s["placements"]),
             "overflow": s.get("overflow", []),
+            # координаты деталей на листе — для карты раскроя и CSV
+            "placements": s.get("placements", []),
         } for s in sheets],
         "totals": {
             "positions": len(parts),

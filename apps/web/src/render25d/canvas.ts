@@ -210,9 +210,37 @@ function drawFace(
   style: ViewStyle,
   projector?: Projector,
 ): void {
-  const tex = textureFor(f.material)
   const alpha = f.alpha ?? 1
 
+  // Clay-вид (Каркас/Чертёж/превью конструктора): только градиент серого
+  // и тонкий контур, никаких текстур и цветов.
+  if (style === 'clay') {
+    ctx.save()
+    ctx.globalAlpha = alpha
+    path(ctx, f.pts)
+    const ys = f.pts.map((p) => p.y)
+    const minY = Math.min(...ys)
+    const maxY = Math.max(...ys)
+    if (maxY - minY > 0.5 && f.colorTop && f.colorBottom) {
+      const g = ctx.createLinearGradient(0, minY, 0, maxY)
+      g.addColorStop(0, f.colorTop)
+      g.addColorStop(0.55, f.color)
+      g.addColorStop(1, f.colorBottom)
+      ctx.fillStyle = g
+    } else {
+      ctx.fillStyle = f.color
+    }
+    ctx.fill()
+    if (f.kind !== 'floor') {
+      ctx.strokeStyle = 'rgba(28, 31, 34, 0.5)'
+      ctx.lineWidth = 0.9
+      ctx.stroke()
+    }
+    ctx.restore()
+    return
+  }
+
+  const tex = textureFor(f.material)
   ctx.save()
   ctx.globalAlpha = alpha
 
@@ -236,30 +264,6 @@ function drawFace(
     ctx.fillStyle = f.color
     ctx.fill()
   }
-  // схематичный вид: горизонтальные пласти штрихуем, чтобы крыша/дно/полки
-  // не сливались с вертикальными боковинами
-  if (style === 'schematic' && Math.abs(f.normal[2]) > 0.7 &&
-      f.kind !== 'floor' && f.pts.length > 2) {
-    ctx.save()
-    path(ctx, f.pts)
-    ctx.clip()
-    ctx.strokeStyle = 'rgba(20, 24, 28, 0.16)'
-    ctx.lineWidth = 0.8
-    const xs = f.pts.map((p) => p.x)
-    const ys = f.pts.map((p) => p.y)
-    const minX = Math.min(...xs)
-    const maxX = Math.max(...xs)
-    const minY = Math.min(...ys)
-    const maxY = Math.max(...ys)
-    for (let x = minX - (maxY - minY); x < maxX; x += 7) {
-      ctx.beginPath()
-      ctx.moveTo(x, maxY)
-      ctx.lineTo(x + (maxY - minY), minY)
-      ctx.stroke()
-    }
-    ctx.restore()
-  }
-
   ctx.restore()
 
   // у пола не рисуем контур: треугольники триангуляции дают видимые швы

@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT))
 from fastapi.testclient import TestClient  # noqa: E402
 
 from apps.api.main import app  # noqa: E402
+from apps.api import main as api_main  # noqa: E402
 
 SCHEMA = "furniture/project@0"
 
@@ -60,6 +61,20 @@ def main() -> int:
     r = c.get("/api/health")
     ok &= check("health", r.status_code == 200 and r.json().get("ok") is True)
 
+    # Rate limit тяжёлых эндпоинтов: бюджет на пользователя, порог из env.
+    limits = api_main.common
+    prev_solve = limits.SOLVE_PER_MIN
+    limits.SOLVE_PER_MIN = 2
+    limits._RATE.clear()
+    probe = {"product": {"product": "base-cabinet",
+                         "params": {"W": 800, "H": 720, "D": 560}}}
+    codes = [c.post("/api/solve", json=probe).status_code for _ in range(3)]
+    retry = c.post("/api/solve", json=probe).headers.get("Retry-After")
+    limits.SOLVE_PER_MIN = prev_solve
+    limits._RATE.clear()
+    ok &= check("rate limit: solve", codes == [200, 200, 429], str(codes))
+    ok &= check("rate limit: Retry-After", retry == "60", str(retry))
+
     r = c.post("/api/solve", json={"product": {
         "product": "base-cabinet",
         "params": {"W": 800, "H": 720, "D": 560, "doors": 2,
@@ -72,6 +87,20 @@ def main() -> int:
     ok &= check("solve: постформинг без кромки 2 мм",
                 all(b["edge"].count("2") == 0
                     for b in body["bom"] if b["name"] == "Столешница"))
+
+    r = c.post("/api/solve/batch", json={"products": [
+        {"id": "a", "product": "base-cabinet",
+         "params": {"W": 600, "H": 720, "D": 560, "doors": 1}},
+        {"id": "b", "product": "base-cabinet",
+         "params": {"W": 800, "H": 720, "D": 560, "doors": 2}},
+        {"id": "bad", "product": "base-cabinet", "params": {"W": -5}},
+    ]})
+    batch = r.json().get("results", [])
+    ok &= check("solve/batch: несколько модулей",
+                r.status_code == 200 and len(batch) == 3
+                and batch[0].get("result", {}).get("dims", {}).get("outer", {}).get("H_total") == 858)
+    ok &= check("solve/batch: ошибка одного не ломает остальные",
+                "result" in batch[2] or "error" in batch[2])
 
     r = c.get("/api/hardware")
     hw = r.json()
@@ -148,6 +177,17 @@ def main() -> int:
         r = c.put(f"/api/projects/{pid}", json=project("API тест"))
         ok &= check("project: create", r.status_code == 200)
 
+        # Сохранение тоже под лимитом: второй PUT при пороге 1 — 429.
+        prev_save = limits.SAVE_PER_MIN
+        limits.SAVE_PER_MIN = 1
+        limits._RATE.clear()
+        first = c.put(f"/api/projects/{pid}", json=project("API тест")).status_code
+        second = c.put(f"/api/projects/{pid}", json=project("API тест")).status_code
+        limits.SAVE_PER_MIN = prev_save
+        limits._RATE.clear()
+        ok &= check("rate limit: PUT", [first, second] == [200, 429],
+                    f"{first}/{second}")
+
         # Второй пользователь не видит и не меняет чужой проект.
         other = TestClient(app)
         other_email = f"other-{int(time.time() * 1000)}@example.test"
@@ -186,6 +226,111 @@ def main() -> int:
         ok &= check("actions: толщина применена",
                     saved["globals"]["t"] == 18
                     and saved["instances"][0]["params"]["t"] == 18)
+
+        # Расстановка: проверка стены и автоплотнение (docs/20-layout-rules.md)
+        lpid = f"test-layout-{int(time.time() * 1000):x}"
+        try:
+            bad = project("Расстановка")
+            bad["room"] = {
+                "w": 4000, "d": 3000, "h": 2700, "wallT": 100,
+                "outline": [[0, 0], [4000, 0], [4000, 3000], [0, 3000]],
+                "partitions": [{"a": [2000, 0], "b": [2000, 3000],
+                                "wallT": 100}],
+                "openings": [],
+            }
+            bad["instances"] = [{
+                "id": "bad1", "name": "bad1", "x": 2000, "y": 1000,
+                "z": 0, "rot": 0,
+                "params": {"W": 600, "D": 560, "H": 720,
+                           "mount": "floor"},
+            }]
+            r = c.put(f"/api/projects/{lpid}", json=bad)
+            ok &= check("layout: проект создан", r.status_code == 200)
+
+            lay = c.get(f"/api/projects/{lpid}/layout").json()
+            ok &= check("layout: корпус в стене — ошибка",
+                        lay.get("errors", 0) >= 1
+                        and any(i["code"] == "in-wall"
+                                for i in lay.get("issues", [])))
+            prev = c.post(f"/api/projects/{lpid}/layout/normalize",
+                          json={"commit": False}).json()
+            ok &= check("layout: предпросмотр не сохраняет",
+                        prev.get("committed") is False
+                        and prev.get("instances", [{}])[0].get("x") == 2100
+                        and prev.get("errors") == 0)
+            still = c.get(f"/api/projects/{lpid}/layout").json()
+            ok &= check("layout: предпросмотр не записан",
+                        still.get("errors", 0) >= 1)
+
+            done = c.post(f"/api/projects/{lpid}/layout/normalize",
+                          json={"commit": True}).json()
+            ok &= check("layout: нормализация применена",
+                        done.get("committed") is True
+                        and done.get("errors") == 0)
+            after = c.get(f"/api/projects/{lpid}/layout").json()
+            ok &= check("layout: после нормализации чисто",
+                        after.get("errors") == 0, str(after.get("issues")))
+
+            # декор — тоже твёрдое тело: проверяется и блокируется strict PUT
+            doc = c.get(f"/api/projects/{lpid}").json()
+            doc["props"] = [{
+                "id": "pbad", "type": "plant", "name": "Кактус",
+                "x": 50, "y": 50, "z": 0, "rot": 0,
+                "w": 300, "d": 300, "h": 800, "color": "#5a7",
+            }]
+            c.put(f"/api/projects/{lpid}", json=doc)
+            lay = c.get(f"/api/projects/{lpid}/layout").json()
+            ok &= check("layout: декор в стене — ошибка",
+                        any(i["code"] == "prop-in-wall"
+                            for i in lay.get("issues", [])), lay.get("issues"))
+            pre = c.post("/api/projects/validate", json=doc)
+            ok &= check("layout: preflight отклоняет декор в стене",
+                        pre.status_code == 200
+                        and pre.json().get("errors", 0) > 0,
+                        pre.text[:200])
+            strict = c.put(f"/api/projects/{lpid}?strict=1", json=doc)
+            ok &= check("layout: strict PUT не сохраняет декор в стене",
+                        strict.status_code == 422, strict.text[:200])
+            norm = c.post(f"/api/projects/{lpid}/layout/normalize",
+                          json={"commit": True}).json()
+            fixed_doc = c.get(f"/api/projects/{lpid}").json()
+            moved = (fixed_doc.get("props") or [{}])[0]
+            ok &= check("layout: нормализация разводит декор",
+                        norm.get("committed") is True
+                        and norm.get("errors") == 0
+                        and (moved.get("x"), moved.get("y")) != (50, 50),
+                        {"norm": norm, "prop": moved})
+            doc["props"] = []
+            strict_ok = c.put(f"/api/projects/{lpid}?strict=1", json=doc)
+            ok &= check("layout: strict PUT принимает чистый проект",
+                        strict_ok.status_code == 200)
+
+            guide = c.get("/api/ai/guide").json()
+            rules_text = " ".join(guide.get("rules", [])).lower()
+            ok &= check("ai guide: правила расстановки",
+                        "GET /api/projects/{id}/layout" in guide.get("endpoints", {})
+                        and "цоколь" in rules_text
+                        and "декор" in rules_text
+                        and "strict" in rules_text)
+        finally:
+            c.delete(f"/api/projects/{lpid}")
+
+        # Выгрузки для цеха: SVG раскроя, DXF деталей, XLSX.
+        for fmt in ("svg", "dxf", "xlsx"):
+            r = c.post(f"/api/projects/{pid}/export/{fmt}")
+            ok &= check(f"export: {fmt}", r.status_code == 200 and
+                        len(r.content) > 1000)
+        r = c.post(f"/api/projects/{pid}/quote.pdf")
+        ok &= check("export: PDF КП", r.status_code == 200 and
+                    r.content.startswith(b"%PDF") and len(r.content) > 5000)
+
+        # Раскрой всего проекта: общая укладка + координаты деталей.
+        r = c.post(f"/api/projects/{pid}/cutting")
+        cut = r.json() if r.status_code == 200 else {}
+        ok &= check("cutting: общий раскрой проекта",
+                    r.status_code == 200 and cut.get("totals", {}).get("sheets", 0) > 0)
+        ok &= check("cutting: координаты на листах",
+                    any(s.get("placements") for s in cut.get("sheets", [])))
 
         r = c.post(f"/api/projects/{pid}/versions", json={"name": "Первый"})
         ok &= check("versions: create", r.status_code == 200)

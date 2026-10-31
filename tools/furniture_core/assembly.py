@@ -47,6 +47,7 @@ class Box:
     sec: int = 0
     hinge: str = ""
     drawer_id: int | None = None
+    op_part: str = ""
 
     @property
     def cx(self) -> float:
@@ -79,6 +80,7 @@ def _boxes(raw: Iterable[dict]) -> list[Box]:
                 sec=int(b.get("sec", 0)),
                 hinge=str(b.get("hinge", "")),
                 drawer_id=b.get("drawer_id"),
+                op_part=str(b.get("op_part", "")),
             ))
         except (TypeError, ValueError):
             continue
@@ -121,6 +123,10 @@ ALIAS = {
 
 
 def _part_name(box: Box) -> str:
+    # Для карты присадки — уникальное имя физической детали.
+    # Для BOM/кромки остаётся агрегированное имя (box.name).
+    if box.op_part:
+        return box.op_part
     return ALIAS.get(box.name, box.name)
 
 
@@ -235,11 +241,24 @@ def _handle_holes(
     hinge: str,
     section: int,
     detail: str,
+    mount: str = "floor",
+    handle_height: float | None = None,
 ) -> list[dict]:
     if handle.mount == "profile" or handle.centers < 0:
         return []
-    y = box.sz / 2 if is_drawer else max(
-        handle.hole_dia, box.sz - handle.door_top)
+    # Ручка должна быть в зоне, до которой человек дотягивается:
+    # у напольных — у верхней кромки створки, у навесных — у нижней.
+    # Иначе у верхних шкафов ручка оказывается под потолком.
+    low = handle.hole_dia / 2 + 2
+    high = max(low, box.sz - handle.hole_dia / 2 - 2)
+    if is_drawer:
+        y = box.sz / 2
+    elif handle_height is not None:
+        y = max(low, min(high, float(handle_height)))
+    elif mount == "wall":
+        y = max(low, min(high, handle.door_top))
+    else:
+        y = max(low, min(high, box.sz - handle.door_top))
     out: list[dict] = []
     for hi, base_x in enumerate(_handle_centers(
             box, handle, is_drawer=is_drawer, hinge=hinge), start=1):
@@ -489,15 +508,19 @@ def build_operations(
                     ))
 
     # 5. Ручки на дверях и фасадах ящиков.
+    mount = str(params.get("mount") or "floor")
+    handle_height = params.get("handleHeight")
     for i, door in enumerate(doors, start=1):
         out += _handle_holes(
             door, handle, is_drawer=False, hinge=door.hinge,
             section=door.sec, detail=f"дверь {i}",
+            mount=mount, handle_height=handle_height,
         )
     for i, front in enumerate(drawer_fronts, start=1):
         out += _handle_holes(
             front, handle, is_drawer=True, hinge="",
             section=front.sec, detail=f"ящик {i}",
+            mount=mount, handle_height=handle_height,
         )
 
     # 6. Направляющие ящиков.

@@ -1,0 +1,7 @@
+[Unit]
+Description=Furniture database dump (pg_dump, rotation 14 days)
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/root/projects/furniture/tools/backup_db.sh

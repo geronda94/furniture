@@ -279,7 +279,8 @@
 
   .mobilebar {
     position: relative;
-    z-index: 40;
+    /* выше шторки «Вид» (70): иначе её же кнопкой нельзя закрыть */
+    z-index: 76;
     display: flex;
     align-items: stretch;
     gap: 6px;

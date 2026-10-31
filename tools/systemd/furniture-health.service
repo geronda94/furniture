@@ -1,0 +1,7 @@
+[Unit]
+Description=Furniture stack health watchdog (api/web/db + site)
+
+[Service]
+Type=oneshot
+ExecStart=/root/projects/furniture/tools/health_watch.sh
+Environment=FURNITURE_SITE_URL=https://5176.it2b.top

@@ -1,0 +1,13 @@
+{
+  "name": "@furniture/e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "smoke": "node smoke.mjs",
+    "perf": "node perf.mjs",
+    "touch": "node touch.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.0"
+  }
+}

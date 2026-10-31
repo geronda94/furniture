@@ -11,6 +11,7 @@ import {
   addWallItem,
   createFolder,
   deleteFolder,
+  deleteProp,
   finishCalc,
   openAddModal,
   removeFinish,
@@ -19,6 +20,7 @@ import {
   removeWallItem,
   revealProps,
   select,
+  selectProp,
   selectAll,
   selectFolder,
   selectOpening,
@@ -33,7 +35,31 @@ import {
 import type { WallItemKind } from '../render25d/types'
 
 const expanded = ref<Record<string, boolean>>({})
-const outlinerTab = ref<'furniture' | 'room'>('furniture')
+const outlinerTab = ref<'furniture' | 'room' | 'decor'>('furniture')
+const q = ref('')
+
+const query = computed(() => q.value.trim().toLowerCase())
+function hit(name: string | undefined): boolean {
+  if (!query.value) return true
+  return (name || '').toLowerCase().includes(query.value)
+}
+const foundModules = computed(() =>
+  state.project.instances.filter((i) => hit(i.name || i.id)),
+)
+const foundProps = computed(() =>
+  (state.project.props ?? []).filter((p) => hit(p.name)),
+)
+
+function addDecorFromList(): void {
+  ui.addTab = 'decor'
+  openAddModal()
+}
+
+function openProp(id: string): void {
+  selectProp(id)
+  // На телефоне список — шторка: закрываем, чтобы было видно сам декор.
+  if (window.matchMedia('(max-width: 900px)').matches) ui.panelOpen = false
+}
 
 function toggleExpand(id: string): void {
   expanded.value = { ...expanded.value, [id]: !expanded.value[id] }
@@ -132,11 +158,30 @@ function floorSelected(): boolean {
         @click="outlinerTab = 'furniture'"
       >Мебель ({{ state.project.instances.length }})</button>
       <button
+        v-if="!ui.master"
         class="tab" role="tab"
         :class="{ 'tab--active': outlinerTab === 'room' }"
         :aria-selected="outlinerTab === 'room'"
         @click="outlinerTab = 'room'"
       >Помещение ({{ walls.length }})</button>
+      <button
+        v-if="!ui.master"
+        class="tab" role="tab"
+        :class="{ 'tab--active': outlinerTab === 'decor' }"
+        :aria-selected="outlinerTab === 'decor'"
+        @click="outlinerTab = 'decor'"
+      >Декор ({{ state.project.props?.length ?? 0 }})</button>
+    </div>
+
+    <div class="outliner__search">
+      <input
+        v-model="q"
+        class="input outliner__search-input"
+        type="search"
+        :placeholder="outlinerTab === 'decor' ? 'Поиск декора…' : 'Поиск модуля…'"
+        :aria-label="outlinerTab === 'decor' ? 'Поиск декора' : 'Поиск модуля'"
+      />
+
     </div>
 
     <div class="panel__body outliner__body">
@@ -268,7 +313,19 @@ function floorSelected(): boolean {
       </template>
 
       <!-- МЕБЕЛЬ -->
-      <template v-else>
+      <template v-else-if="outlinerTab === 'furniture'">
+        <template v-if="query">
+          <div class="tree__row tree__row--group">
+            <span class="tree__twist"></span>
+            <span class="tree__name">Найдено</span>
+            <span class="tree__meta">{{ foundModules.length }}</span>
+          </div>
+          <InstanceNode v-for="inst in foundModules" :key="inst.id" :inst="inst" />
+          <div v-if="!foundModules.length" class="tree__row tree__row--nested dim">
+            Ничего не найдено
+          </div>
+        </template>
+        <template v-else>
         <div class="tree__row tree__row--group">
           <button class="tree__twist" @click="toggleExpand('groups')">
             {{ isClosed('groups') ? '▸' : '▾' }}
@@ -317,22 +374,51 @@ function floorSelected(): boolean {
           <div v-if="!loose.length" class="tree__row tree__row--nested dim">
             Свободных модулей нет
           </div>
-          <template v-if="state.project.props?.length">
-            <div class="tree__row tree__row--group">
-              <span class="tree__twist"></span>
-              <span class="tree__name">Декор демо</span>
-              <span class="tree__meta">{{ state.project.props.length }}</span>
-            </div>
-            <div
-              v-for="pr in state.project.props"
-              :key="pr.id"
-              class="tree__row tree__row--item tree__row--nested"
-            >
-              <span class="tree__dot"></span>
-              <span class="tree__name">{{ pr.name }}</span>
-              <span class="tree__meta">{{ Math.round(pr.w) }}×{{ Math.round(pr.d) }}</span>
-            </div>
-          </template>
+        </template>
+        </template>
+      </template>
+
+      <template v-else>
+        <!-- ДЕКОР -->
+        <div class="tree__row tree__row--group">
+          <button class="tree__twist" @click="toggleExpand('decor')">
+            {{ isClosed('decor') ? '▸' : '▾' }}
+          </button>
+          <span class="tree__name">Декор сцены</span>
+          <span class="tree__meta">{{ state.project.props?.length ?? 0 }}</span>
+          <button class="tree__act" title="Добавить декор" @click="addDecorFromList">
+            ＋декор
+          </button>
+        </div>
+        <template v-if="!isClosed('decor')">
+          <div
+            v-for="pr in foundProps"
+            :key="pr.id"
+            class="tree__row tree__row--item tree__row--nested"
+            :class="{ 'is-selected': state.propId === pr.id }"
+            @click="openProp(pr.id)"
+          >
+            <span class="tree__dot"></span>
+            <span class="tree__name">{{ pr.name }}</span>
+            <span class="tree__meta">
+              {{ Math.round(pr.w) }}×{{ Math.round(pr.h) }}×{{ Math.round(pr.d) }}
+            </span>
+            <button
+              class="tree__act"
+              title="Удалить декор"
+              @click.stop="deleteProp(pr.id)"
+            >×</button>
+          </div>
+          <div v-if="!state.project.props?.length" class="tree__row tree__row--nested dim">
+            Декора пока нет — добавьте кнопкой «＋декор»
+          </div>
+          <div v-else-if="!foundProps.length" class="tree__row tree__row--nested dim">
+            Ничего не найдено
+          </div>
+          <p class="outliner__note">
+            Декор не входит в BOM и смету. Он проверяется как твёрдое тело:
+            стены, проёмы, мебель и другой декор.
+          </p>
         </template>
       </template>
     </div>

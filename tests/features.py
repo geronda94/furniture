@@ -458,6 +458,14 @@ def main() -> int:
     ok &= check("опоры: без разметки",
                 r["hardware_plan"]["leg_holes"] == 0)
 
+    # 18. Полная высота включает цоколь и столешницу
+    r = solve({"product": "base-cabinet", "params": {
+        "W": 800, "H": 720, "D": 560, "plinthH": 100, "worktopT": 38,
+    }}, CFG)
+    ok &= check("H_total: цоколь + корпус + столешница",
+                r["dims"]["outer"].get("H_total") == 858,
+                str(r["dims"]["outer"]))
+
     print()
     print("Все проверки пройдены." if ok else "Есть ошибки.")
     return 0 if ok else 1

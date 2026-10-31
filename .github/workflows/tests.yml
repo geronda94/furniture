@@ -20,6 +20,19 @@ jobs:
         run: python3 tests/geometry.py
       - name: Features
         run: python3 tests/features.py
+      - name: Layout
+        run: python3 tests/layout.py
+      - name: Scene collisions
+        run: python3 tests/scene.py
+      - name: Standards (GOST/EN)
+        run: python3 tests/standards.py
+      - name: Project cutting
+        run: python3 tests/cutting.py
+      - name: Validate demo projects
+        run: |
+          python3 tools/validate_project.py projects/demo-apartment/project.json
+          python3 tools/validate_project.py projects/demo/project.json
+          python3 tools/validate_project.py projects/demo-kitchen-2026/project.json
       - name: API
         run: python3 tests/api.py
 
@@ -38,3 +51,64 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npm run build
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Install API deps
+        run: pip install -r requirements.txt
+      - name: Build web
+        working-directory: apps/web
+        run: |
+          npm ci
+          npm run build
+      - name: Install Playwright
+        working-directory: tests/e2e
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+      - name: Start API and preview
+        run: |
+          APP_SECRET=ci-secret uvicorn apps.api.main:app --host 127.0.0.1 --port 8000 >/tmp/api.log 2>&1 &
+          cd apps/web
+          VITE_API_PROXY_TARGET=http://127.0.0.1:8000 npx vite preview --port 4173 --host 127.0.0.1 >/tmp/web.log 2>&1 &
+          for i in $(seq 1 40); do
+            curl -sf http://127.0.0.1:8000/api/health >/dev/null && \
+            curl -sf http://127.0.0.1:4173/ >/dev/null && break
+            sleep 1
+          done
+      - name: Smoke
+        run: BASE_URL=http://127.0.0.1:4173 SHOTS=/tmp/shots node tests/e2e/smoke.mjs
+      - name: Touch camera contract
+        run: BASE_URL=http://127.0.0.1:4173 node tests/e2e/touch.mjs
+      - name: Camera rotation, pan and WASD
+        run: BASE_URL=http://127.0.0.1:4173 node tests/e2e/camera.mjs
+      - name: UI audit (desktop + iPhone)
+        continue-on-error: true
+        run: BASE_URL=http://127.0.0.1:4173 node tests/e2e/ui-audit.mjs
+      - name: Module workbench tabs
+        run: BASE_URL=http://127.0.0.1:4173 node tests/e2e/workbench.mjs
+      - name: Object library categories
+        run: BASE_URL=http://127.0.0.1:4173 node tests/e2e/library.mjs
+      - name: Quick start to ready project
+        run: BASE_URL=http://127.0.0.1:4173 node tests/e2e/quickstart.mjs
+      - name: Project exports (PDF/XLSX/DXF/SVG)
+        run: BASE_URL=http://127.0.0.1:4173 node tests/e2e/exports.mjs
+      - name: Wall items drag
+        run: BASE_URL=http://127.0.0.1:4173 node tests/e2e/wallitems.mjs
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-shots
+          path: /tmp/shots
+          if-no-files-found: ignore

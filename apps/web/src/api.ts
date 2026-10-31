@@ -208,7 +208,9 @@ export interface SolveResponse {
   cutouts?: unknown[]
   sheet?: { w: number; h: number; trim: number; kerf: number }
   dims: {
-    outer: { W: number; H: number; D: number }
+    outer: { W: number; H: number; H_total?: number; D: number }
+    plinth_h?: number
+    worktop_t?: number
     inner: { W: number; H: number; D: number }
     t: number
     t_back: number
@@ -225,6 +227,12 @@ export interface CatalogMaterial {
   texScale?: number
   price_m2?: number
   texture_url?: string
+  /** производитель/бренд декора */
+  brand?: string
+  /** код декора у производителя */
+  code?: string
+  /** коллекция/серия */
+  collection?: string
 }
 
 export interface MaterialCategory {
@@ -356,6 +364,28 @@ export async function apiSolve(
   return r.json()
 }
 
+export interface BatchSolveItem {
+  index: number
+  id?: string
+  result?: SolveResponse
+  error?: string
+}
+
+/** Посчитать несколько модулей одним запросом (комната/папка). */
+export async function apiSolveBatch(
+  products: unknown[],
+  opts: { market?: string; shop?: string; supplier?: string } = {},
+): Promise<BatchSolveItem[]> {
+  const r = await fetch('/api/solve/batch', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ products, ...opts }),
+  })
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  const data = (await r.json()) as { results?: BatchSolveItem[] }
+  return data.results ?? []
+}
+
 export async function apiGetProject(id: string): Promise<unknown> {
   const r = await fetch(`/api/projects/${id}`)
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
@@ -433,6 +463,18 @@ export async function apiListProjects(): Promise<ProjectRow[]> {
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
   const data = (await r.json()) as { projects: ProjectRow[] }
   return data.projects ?? []
+}
+
+export async function apiValidateProject(
+  doc: unknown,
+): Promise<LayoutReport> {
+  const r = await fetch('/api/projects/validate', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(doc),
+  })
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  return r.json()
 }
 
 export async function apiPutProject(
@@ -520,4 +562,120 @@ export async function apiDeleteVersion(pid: string, vid: string): Promise<void> 
     method: 'DELETE',
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
+}
+
+export interface LayoutIssue {
+  code: string
+  level: 'error' | 'warn' | string
+  instance: string
+  /** id декоративного объекта (если ошибка про декор) */
+  prop?: string | null
+  name: string
+  message: string
+  /** что сделать человеку (короткая подсказка с сервера) */
+  fix?: string
+  /** можно ли исправить автоматически (уплотнение/прижатие) */
+  auto_fixable?: boolean
+}
+
+export interface LayoutReport {
+  ok: boolean
+  errors: number
+  warnings: number
+  issues: LayoutIssue[]
+}
+
+export async function apiProjectLayout(id: string): Promise<LayoutReport> {
+  const r = await fetch(`/api/projects/${id}/layout`)
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  return r.json()
+}
+
+export async function apiNormalizeLayout(
+  id: string,
+  commit = true,
+): Promise<LayoutReport & {
+  changes: { instance?: string; prop?: string; message: string }[]
+  instances?: { id: string; x: number; y: number; rot: number }[]
+  props?: { id: string; x: number; y: number }[]
+  committed?: boolean
+}> {
+  const r = await fetch(`/api/projects/${id}/layout/normalize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ commit, closeGaps: true }),
+  })
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  return r.json()
+}
+
+export interface QuickStartInput {
+  name: string
+  room: {
+    w: number; d: number; h: number; wallT: number
+    shape?: 'rect' | 'l'; cutW?: number; cutD?: number
+  }
+  kind: 'kitchen' | 'wardrobe' | 'storage'
+  wall: number
+  openings: { kind: 'window' | 'door'; wall: number; x: number; w: number;
+    z0?: number; z1?: number }[]
+  sockets: { kind: 'socket' | 'switch'; wall: number; x: number; z: number }[]
+  height?: number
+}
+
+/** Быстрый старт: комната + сценарий → новый проект. */
+export async function apiQuickStart(
+  input: QuickStartInput,
+): Promise<{
+  id: string
+  project: Record<string, unknown>
+  errors: number
+  warnings: number
+  issues: { level: string; code: string; message: string }[]
+}> {
+  const r = await fetch('/api/quickstart', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  const data = await r.json().catch(() => ({}))
+  if (!r.ok) {
+    const detail = (data as { detail?: unknown }).detail
+    if (detail && typeof detail === 'object') {
+      const d = detail as { message?: string; issues?: unknown[] }
+      throw new Error(
+        `${d.message || 'Ошибка быстрого старта'}${
+          d.issues ? `: ${d.issues.length} замечаний` : ''}`)
+    }
+    throw new Error(typeof detail === 'string' ? detail : `HTTP ${r.status}`)
+  }
+  return data as {
+    id: string
+    project: Record<string, unknown>
+    errors: number
+    warnings: number
+    issues: { level: string; code: string; message: string }[]
+  }
+}
+
+export interface CuttingSheet {
+  material: string
+  count: number
+  overflow: string[]
+  placements: { name: string; x: number; y: number; w: number; h: number; rot: boolean }[]
+}
+
+export interface ProjectCutting {
+  ok: boolean
+  errors: string[]
+  sheets: CuttingSheet[]
+  totals: { sheets: number; pieces: number; kpd: number; materials: string[] }
+  sheet: { w: number; h: number; trim: number; kerf: number }
+}
+
+/** Раскрой всего проекта: одна укладка на все модули. */
+export async function apiProjectCutting(pid: string): Promise<ProjectCutting> {
+  const r = await fetch(`/api/projects/${pid}/cutting`, { method: 'POST' })
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  return r.json() as Promise<ProjectCutting>
 }

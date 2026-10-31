@@ -7,11 +7,13 @@ import { Color3, Color4 } from '@babylonjs/core/Maths/math.color'
 import { Matrix, Vector3 } from '@babylonjs/core/Maths/math.vector'
 import { DirectionalLight } from '@babylonjs/core/Lights/directionalLight'
 import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight'
+import { PointLight } from '@babylonjs/core/Lights/pointLight'
 import { ShadowGenerator } from '@babylonjs/core/Lights/Shadows/shadowGenerator'
 import '@babylonjs/core/Lights/Shadows/shadowGeneratorSceneComponent'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial'
 import { Material } from '@babylonjs/core/Materials/material'
 import { Texture } from '@babylonjs/core/Materials/Textures/texture'
+import { DynamicTexture } from '@babylonjs/core/Materials/Textures/dynamicTexture'
 import { RenderTargetTexture } from '@babylonjs/core/Materials/Textures/renderTargetTexture'
 import { Mesh } from '@babylonjs/core/Meshes/mesh'
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode'
@@ -19,12 +21,16 @@ import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData'
 import { CreateBox } from '@babylonjs/core/Meshes/Builders/boxBuilder'
 import { CreateCylinder } from '@babylonjs/core/Meshes/Builders/cylinderBuilder'
 import { CreateSphere } from '@babylonjs/core/Meshes/Builders/sphereBuilder'
+import { CreateTorus } from '@babylonjs/core/Meshes/Builders/torusBuilder'
+import { CreateCapsule } from '@babylonjs/core/Meshes/Builders/capsuleBuilder'
 import '@babylonjs/core/Rendering/edgesRenderer'
+import '@babylonjs/core/Rendering/outlineRenderer'
 import '@babylonjs/core/Culling/ray'
 import type { Instance } from '../state/project'
-import { derived, partAnimValues, state, ui } from '../state/project'
-import type { SolveResponse } from '../api'
+import { animState, derived, partAnimValues, state, ui } from '../state/project'
+import type { AssemblyOperation, SolveResponse } from '../api'
 import type {
+  Material as SurfaceMaterial,
   MaterialVariable,
   Materials,
   Prop,
@@ -33,6 +39,7 @@ import type {
   SceneObject,
 } from '../render25d/types'
 import { resolveObjectMaterial } from '../material/vars'
+import { textureFor } from '../render25d/textures'
 import { outlinePoints, roomWalls, triangulate, type WallSeg } from '../render25d/room'
 
 const MM = 0.001
@@ -62,6 +69,12 @@ interface WallMeta {
   baseY: number
   baseH: number
   kind: string
+  /** индекс стены в roomWalls — для проёмов */
+  index: number
+  /** начало/конец в плане, мм */
+  a: { x: number; y: number }
+  b: { x: number; y: number }
+  t: number
 }
 
 type Vec = Vector3
@@ -92,8 +105,14 @@ export class BabylonRenderer {
   private propMats = new Map<string, StandardMaterial>()
   private materials = new Map<string, StandardMaterial>()
   private textures = new Map<string, Texture>()
+  private procTextures = new Map<string, DynamicTexture>()
   private parts = new Map<string, Mesh>()
   private partMeta = new Map<string, PartMeta>()
+  /** Ключи частей по модулю: без обхода всех 380+ мешей каждый кадр. */
+  private partsByInst = new Map<string, string[]>()
+  /** Нужно пересчитать видимость/анимации (правка, флаги, конец анимации). */
+  private animDirty = true
+  private wasPlaying = false
   private walls: WallMeta[] = []
   private roomSig = ''
   private instSig = new Map<string, string>()
@@ -102,15 +121,40 @@ export class BabylonRenderer {
   private mode: 'orbit' | 'first' | 'fly' = 'orbit'
   private wallMode: 'cutaway' | 'low' = 'cutaway'
   private selected = ''
-  private quality: 'realistic' | 'schematic' = 'realistic'
+  private quality: 'realistic' | 'schematic' | 'blueprint' = 'realistic'
+  /** Чертёж: фиксированная камера, без свободного вращения. */
+  private blueprint = false
+  private bpView: 'iso' | 'front' | 'side' | 'top' = 'iso'
+  private bpPivot: 'room' | 'object' = 'room'
+  private hemi: HemisphericLight | null = null
+  private dir: DirectionalLight | null = null
+  private roomLightOn = true
+  private lampLights = new Map<string, { light: PointLight; on: boolean }>()
+  private sinkStreams = new Map<string, Mesh>()
   private wallDecor: Mesh[] = []
   private ceilingMesh: Mesh | null = null
   private roomH = 0
+  private roomBounds = { minX: 0, maxX: 0, minY: 0, maxY: 0 }
+  /** Комната, в которой сейчас камера прогулки: держим её внутри. */
+  private walkRect: { x: number; y: number; w: number; d: number } | null = null
+  private walkObstacles: { x: number; y: number; w: number; d: number }[] = []
+  private walkRadius = 200
+  private walkRoomName = ''
+  private walkEye = 1.6
+  private walkVy = 0
+  private walkGrounded = true
+  private walkFov = 1.02
+  private seated: { id: string; kind: string; eye: number } | null = null
   private selectionBox: Mesh
+  private selectedPartInst: string | null = null
+  private selectedPart: number | null = null
+  private edgeSaved = new Map<Mesh, { width: number; color: Color4 }>()
+  private outlineSaved = new Map<Mesh, { on: boolean; color: Color3; width: number }>()
   private selectedIds = new Set<string>()
   private selectedWall: number | null = null
   private selectedItem: string | null = null
   private selectedOpening: string | null = null
+  private selectedProp: TransformNode | null = null
   private openingMeshes = new Map<string, Mesh[]>()
   private wallItemMeshes = new Map<string, Mesh>()
   private disposed = false
@@ -125,6 +169,13 @@ export class BabylonRenderer {
     mode: 'orbit' | 'first' | 'fly'
   } | null = null
   private objectId: string | null = null
+  /** Был ли включён «Чертёж» до входа в объектный режим. */
+  private objectBp = false
+  private visibleIds: Set<string> | null = null
+  private visiblePropIds: Set<string> | null = null
+  private propRoots = new Map<string, TransformNode>()
+  private roomData: Room | null = null
+  private hardwareVisible = true
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas
@@ -146,16 +197,40 @@ export class BabylonRenderer {
       new Vector3(1.8, 1.0, 1.4),
       this.scene,
     )
-    this.orbit.lowerRadiusLimit = 0.25
+    this.orbit.lowerRadiusLimit = 0.55
     this.orbit.upperRadiusLimit = 40
     this.orbit.wheelDeltaPercentage = 0.01
-    this.orbit.zoomToMouseLocation = true
+    // Не приближаемся «сквозь» текстуры к курсору: цель остаётся в комнате,
+    // а минимальный радиус не даёт камере войти в корпус.
+    this.orbit.zoomToMouseLocation = false
     this.orbit.useNaturalPinchZoom = true
     this.orbit.panningSensibility = 480
-    this.orbit.angularSensibilityX = 1200
-    this.orbit.angularSensibilityY = 1200
+    // Положительная чувствительность = «хватаем сцену»: тянем вправо —
+    // сцена идёт вправо. С минусом было наоборот (проверено замером
+    // проекции углов комнаты: средний сдвиг −12 px вместо +19 px).
+    this.orbit.angularSensibilityX = 1100
+    this.orbit.angularSensibilityY = 1100
     this.orbit.inertia = 0.82
     this.orbit.attachControl(canvas, true)
+
+    // Панорама «роликом» (средняя кнопка мыши). В Babylon по умолчанию
+    // за панораму отвечают только правая кнопка и Ctrl+ЛКМ — средняя
+    // кнопка не была замаплена, поэтому перемещение роликом не работало.
+    try {
+      this.orbit.movement.input.addEntry({
+        source: 'pointer', button: 1, interaction: 'pan',
+      })
+    } catch {
+      /* старые сборки Babylon без inputMap — остаются правая/Ctrl+ЛКМ */
+    }
+    // Средняя кнопка в браузере включает автоскролл: гасим его на канвасе,
+    // иначе панорама «дёргается» и страница уезжает.
+    canvas.addEventListener('pointerdown', (e: PointerEvent) => {
+      if (e.button === 1) e.preventDefault()
+    })
+    canvas.addEventListener('auxclick', (e: MouseEvent) => {
+      if (e.button === 1) e.preventDefault()
+    })
 
     // Мультитач: два пальца — панорама + плавный пинч-зум
     const pointers = (this.orbit.inputs.attached as unknown as Record<
@@ -175,16 +250,34 @@ export class BabylonRenderer {
     }
 
     this.walk = new UniversalCamera('walk', new Vector3(0, 1.6, -2), this.scene)
-    this.walk.speed = 3.2
+    this.walk.speed = 2.6
+    // Мышь в прогулке ведём сами (pointer lock): инерция только мешала —
+    // камера «догоняла» курсор и улетала дальше нужного.
+    this.walk.inertia = 0.35
     this.walk.angularSensibility = 900
-    this.walk.minZ = 0.02
+    this.walk.minZ = 0.05
+    // Поле зрения как у человека: 58° по вертикали (~90° по горизонтали
+    // на 16:9). Прежние 0.8 рад (46°) ощущались зажатыми.
+    this.walk.fov = this.walkFov
+    // Штатные мышь/клавиатура Babylon конфликтуют с нашим управлением:
+    // оставляем только сенсорный обзор.
+    this.walk.inputs.removeByType('FreeCameraMouseInput')
+    this.walk.inputs.removeByType('FreeCameraKeyboardMoveInput')
+    // Сенсорный обзор в прогулке: по умолчанию Babylon ставит 200000
+    // (почти не поворачивается) и в «неправильную» сторону.
+    const walkTouch = (this.walk.inputs.attached as unknown as Record<
+      string, { touchAngularSensibility?: number }
+    >).touch
+    if (walkTouch) walkTouch.touchAngularSensibility = -16000
 
     const hemi = new HemisphericLight('hemi', new Vector3(0.2, 1, 0.1), this.scene)
     hemi.intensity = 0.98
     hemi.groundColor = new Color3(0.28, 0.29, 0.31)
+    this.hemi = hemi
     const dir = new DirectionalLight('dir', new Vector3(-0.55, -1, -0.7), this.scene)
     dir.position = new Vector3(4, 7, 5)
     dir.intensity = 0.72
+    this.dir = dir
 
     const fill = new DirectionalLight('fill', new Vector3(0.7, -0.35, 0.6), this.scene)
     fill.intensity = 0.3
@@ -208,7 +301,7 @@ export class BabylonRenderer {
     this.scene.activeCamera = this.orbit
     const selMat = new StandardMaterial('sel-mat', this.scene)
     selMat.wireframe = true
-    selMat.emissiveColor = matColor('#e0a33e')
+    selMat.emissiveColor = matColor('#ffc04a')
     selMat.disableLighting = true
     this.selectionBox = CreateBox('selection', { size: 1 }, this.scene)
     this.selectionBox.material = selMat
@@ -219,6 +312,7 @@ export class BabylonRenderer {
     this.engine.runRenderLoop(() => {
       if (this.disposed) return
       this.tickAnim()
+      this.tickWalk()
       this.updateWalls()
       if (this.projection === 'ortho') this.updateOrtho()
       this.scene.render()
@@ -238,17 +332,27 @@ export class BabylonRenderer {
 
   /** Пересобрать комнату (стены, пол, потолок, проёмы). */
   syncRoom(room: Room, materials: Materials): void {
+    this.roomData = room
     const sig = JSON.stringify({ room, mats: materials })
     if (sig === this.roomSig) return
     this.roomSig = sig
     this.roomRoot.getChildMeshes().forEach((m) => m.dispose())
     this.roomRoot.dispose()
     this.walls = []
+    this.lowWalls = false
     this.wallDecor = []
     this.ceilingMesh = null
     this.openingMeshes.clear()
     this.wallItemMeshes.clear()
     this.roomRoot = new TransformNode('room', this.scene)
+    this.roomH = room.h * MM
+    const pts = outlinePoints(room)
+    this.roomBounds = {
+      minX: Math.min(...pts.map((p) => p.x)) * MM,
+      maxX: Math.max(...pts.map((p) => p.x)) * MM,
+      minY: Math.min(...pts.map((p) => p.y)) * MM,
+      maxY: Math.max(...pts.map((p) => p.y)) * MM,
+    }
     this.buildRoom(room, materials)
     const sm = this.shadow.getShadowMap()
     if (sm) {
@@ -264,146 +368,587 @@ export class BabylonRenderer {
     this.propSig = sig
     this.propsRoot.getChildMeshes().forEach((m) => m.dispose())
     this.propsRoot.dispose()
+    this.propRoots.clear()
     this.propsRoot = new TransformNode('props', this.scene)
     const matCache = this.propMats
-    const material = (color: string, alpha = 1): StandardMaterial => {
-      const key = `${color}:${alpha}`
+    const shade = (hex: string, k: number): string => {
+      const c = matColor(hex)
+      return new Color3(
+        Math.min(1, c.r * k),
+        Math.min(1, c.g * k),
+        Math.min(1, c.b * k),
+      ).toHexString()
+    }
+    interface Paint {
+      color: string
+      alpha?: number
+      spec?: number
+      glow?: number
+    }
+    const material = (
+      color: string, alpha = 1, spec = 0.06, glow = 0.05,
+    ): StandardMaterial => {
+      const key = `${color}|${alpha}|${spec}|${glow}`
       let m = matCache.get(key)
       if (m) return m
       m = new StandardMaterial(`prop:${key}`, this.scene)
       m.diffuseColor = matColor(color)
-      m.emissiveColor = matColor(color).scale(0.08)
-      m.specularColor = new Color3(0.05, 0.05, 0.05)
+      m.emissiveColor = matColor(color).scale(glow)
+      m.specularColor = new Color3(spec, spec, spec)
+      m.specularPower = 64
       m.alpha = alpha
-      if (alpha < 1) m.transparencyMode = 2
+      if (alpha < 1) {
+        m.transparencyMode = 2
+        m.needDepthPrePass = true
+        m.backFaceCulling = false
+      }
       matCache.set(key, m)
+      return m
+    }
+    const paint = (color: string): Paint => ({ color })
+    const fabric = (color: string): Paint => ({ color, spec: 0.02, glow: 0.04 })
+    const wood = (color: string): Paint => ({ color, spec: 0.14, glow: 0.03 })
+    const ceramic = (color: string): Paint => ({ color, spec: 0.34, glow: 0.04 })
+    const metal = (color = '#9aa1a6'): Paint => ({ color, spec: 0.55, glow: 0.02 })
+    const glass = (color = '#cfe4ea'): Paint => ({
+      color, alpha: 0.2, spec: 0.75, glow: 0.03,
+    })
+    const screen = (color = '#0b0d10'): Paint => ({
+      color, spec: 0.5, glow: 0.18,
+    })
+    const apply = (m: Mesh, p: Paint | string): Mesh => {
+      const q: Paint = typeof p === 'string' ? { color: p } : p
+      m.material = material(q.color, q.alpha ?? 1, q.spec ?? 0.06,
+        q.glow ?? 0.05)
+      m.isPickable = false
+      m.receiveShadows = true
       return m
     }
     const add = (
       parent: TransformNode, name: string,
       sx: number, sy: number, sz: number,
       x: number, y: number, z: number,
-      color: string, alpha = 1,
+      p: Paint | string,
     ): Mesh => {
       const m = CreateBox(name, {
         width: sx * MM, height: sy * MM, depth: sz * MM,
       }, this.scene)
       m.parent = parent
       m.position.set(x * MM, z * MM, y * MM)
-      m.material = material(color, alpha)
-      m.isPickable = false
-      m.receiveShadows = true
-      this.shadow.addShadowCaster(m)
-      return m
+      return apply(m, p)
     }
     const cyl = (
       parent: TransformNode, name: string,
       diameter: number, height: number,
       x: number, y: number, z: number,
-      color: string, alpha = 1,
+      p: Paint | string, top = diameter,
     ): Mesh => {
       const m = CreateCylinder(name, {
-        diameter: diameter * MM, height: height * MM, tessellation: 24,
+        diameterBottom: diameter * MM,
+        diameterTop: top * MM,
+        height: height * MM,
+        tessellation: 28,
       }, this.scene)
       m.parent = parent
       m.position.set(x * MM, z * MM, y * MM)
-      m.material = material(color, alpha)
-      m.isPickable = false
-      this.shadow.addShadowCaster(m)
-      return m
+      return apply(m, p)
     }
+    const ball = (
+      parent: TransformNode, name: string,
+      sx: number, sy: number, sz: number,
+      x: number, y: number, z: number,
+      p: Paint | string,
+    ): Mesh => {
+      const m = CreateSphere(name, { diameter: 1, segments: 14 }, this.scene)
+      m.parent = parent
+      m.scaling.set(sx * MM, sy * MM, sz * MM)
+      m.position.set(x * MM, z * MM, y * MM)
+      return apply(m, p)
+    }
+    /** Мягкая подушка: капсула, растянутая по ширине/глубине. */
+    const soft = (
+      parent: TransformNode, name: string,
+      sx: number, sy: number, sz: number,
+      x: number, y: number, z: number,
+      p: Paint | string,
+    ): Mesh => {
+      const m = CreateCapsule(name, {
+        radius: 0.5, height: 0.5, tessellation: 16, subdivisions: 6,
+      }, this.scene)
+      m.parent = parent
+      m.rotation.z = Math.PI / 2
+      // Капсула: диаметр 1, полная длина 1.5 по локальной Y; после поворота
+      // на 90° длина идёт по X. Раньше масштаб был в миллиметрах и с
+      // перепутанными осями — подушки и одеяла уходили сквозь пол.
+      m.scaling.set(sz * MM, (sx * MM) / 1.5, sy * MM)
+      m.position.set(x * MM, z * MM, y * MM)
+      return apply(m, p)
+    }
+    const ring = (
+      parent: TransformNode, name: string,
+      diameter: number, thickness: number,
+      x: number, y: number, z: number,
+      p: Paint | string,
+    ): Mesh => {
+      const m = CreateTorus(name, {
+        diameter: diameter * MM,
+        thickness: thickness * MM,
+        tessellation: 28,
+      }, this.scene)
+      m.parent = parent
+      m.position.set(x * MM, z * MM, y * MM)
+      return apply(m, p)
+    }
+    const legs = (
+      parent: TransformNode, name: string,
+      w: number, d: number, height: number, inset: number,
+      p: Paint | string, dia = 44,
+    ): void => {
+      for (const [i, sx, sy] of [
+        [0, -1, -1], [1, 1, -1], [2, -1, 1], [3, 1, 1],
+      ] as const) {
+        cyl(parent, `${name}-${i}`, dia, height,
+          sx * (w / 2 - inset), sy * (d / 2 - inset), height / 2, p)
+      }
+    }
+
     for (const p of props) {
       const root = new TransformNode(`prop:${p.id}`, this.scene)
+      this.propRoots.set(p.id, root)
       root.parent = this.propsRoot
       root.position.set(p.x * MM, (p.z || 0) * MM, p.y * MM)
       root.rotation.y = (-(p.rot || 0) * Math.PI) / 180
       const w = p.w, d = p.d, h = p.h
       const c = p.color || '#8b8f95'
-      const a = p.accent || '#d9d4ca'
+      const a = p.accent || shade(c, 1.18)
+      const dark = shade(c, 0.62)
       const type = p.type
+
       if (type === 'bed') {
-        add(root, 'bed-base', w, 300, d, 0, 0, 150, c)
-        add(root, 'bed-mattress', w - 80, 220, d - 80, 0, 0, 410, a)
-        add(root, 'bed-head', w, 900, 80, 0, d / 2 - 40, 450, c)
-        add(root, 'pillow-l', w * 0.34, 110, d * 0.22, -w * 0.22, d / 2 - 260, 570, '#f1ede5')
-        add(root, 'pillow-r', w * 0.34, 110, d * 0.22, w * 0.22, d / 2 - 260, 570, '#f1ede5')
-        add(root, 'blanket', w * 0.92, 40, d * 0.52, 0, -d * 0.1, 545, a)
+        const frame = wood(c)
+        legs(root, 'bed-leg', w, d, 110, 90, metal(dark), 56)
+        add(root, 'bed-rail', w, 210, d, 0, 0, 215, frame)
+        add(root, 'bed-mattress', w - 50, 210, d - 70, 0, 0, 425, fabric(a))
+        soft(root, 'bed-duvet', w - 40, 66, d * 0.6, 0, -d * 0.12, 500,
+          fabric(shade(a, 1.04)))
+        add(root, 'bed-duvet-edge', w - 40, 20, 110, 0, -d * 0.37, 515,
+          fabric(shade(a, 1.1)))
+        add(root, 'bed-head', w, 900, 70, 0, d / 2 - 35, 450, frame)
+        add(root, 'bed-head-pad', w - 110, 570, 34, 0, d / 2 - 82, 470,
+          fabric(a))
+        soft(root, 'bed-pillow-l', w * 0.34, 120, d * 0.18,
+          -w * 0.21, d / 2 - 300, 545, fabric('#f1ede5'))
+        soft(root, 'bed-pillow-r', w * 0.34, 120, d * 0.18,
+          w * 0.21, d / 2 - 300, 545, fabric('#f1ede5'))
+        add(root, 'bed-throw', w * 0.8, 34, d * 0.24, 0, -d * 0.3, 530,
+          fabric(shade(c, 0.82)))
       } else if (type === 'sofa' || type === 'armchair') {
-        const seatH = Math.max(320, h * 0.62)
-        add(root, 'sofa-base', w, seatH, d, 0, 0, seatH / 2, c)
-        add(root, 'sofa-back', w, h, Math.max(140, d * 0.2), 0, d / 2 - 70, h / 2, c)
-        add(root, 'arm-l', Math.max(100, w * 0.1), h * 0.72, d, -w / 2 + 50, 0, h * 0.36, c)
-        add(root, 'arm-r', Math.max(100, w * 0.1), h * 0.72, d, w / 2 - 50, 0, h * 0.36, c)
-        const cushions = type === 'armchair' ? 1 : 3
-        for (let i = 0; i < cushions; i++) {
-          const cw = (w - (cushions + 1) * 70) / cushions
-          add(root, `cushion-${i}`, cw, 80, d * 0.72,
-            -w / 2 + 50 + cw / 2 + i * (cw + 70), -d * 0.06, seatH + 40, a)
+        const n = type === 'armchair' ? 1 : 3
+        const arm = Math.max(95, w * 0.085)
+        const innerW = w - arm * 2 - 50
+        const cw = (innerW - (n - 1) * 16) / n
+        legs(root, 'sofa-leg', w, d, 100, 95, metal(dark), 42)
+        add(root, 'sofa-frame', w - 50, 170, d - 50, 0, 0, 185, fabric(c))
+        for (let i = 0; i < n; i++) {
+          soft(root, `seat-${i}`, cw, 128, d * 0.68,
+            -innerW / 2 + cw / 2 + i * (cw + 16), -d * 0.08, 334,
+            fabric(a))
+        }
+        add(root, 'sofa-back', w, h * 0.56, 120, 0, d / 2 - 60, h * 0.6,
+          fabric(c))
+        for (let i = 0; i < n; i++) {
+          soft(root, `back-${i}`, cw, h * 0.38, 110,
+            -innerW / 2 + cw / 2 + i * (cw + 16), d / 2 - 130,
+            h * 0.57, fabric(shade(a, 1.03)))
+        }
+        for (const [i, sx] of [[0, -1], [1, 1]] as const) {
+          add(root, `arm-${i}`, arm, h * 0.56, d,
+            sx * (w / 2 - arm / 2), 0, h * 0.37, fabric(c))
+          const top = cyl(root, `arm-top-${i}`, arm, d,
+            sx * (w / 2 - arm / 2), 0, h * 0.65, fabric(c))
+          top.rotation.x = Math.PI / 2
+        }
+        const throwPillow = soft(root, 'sofa-pillow', w * 0.2, h * 0.2, 90,
+          -w * 0.26, -d * 0.12, h * 0.5, fabric(shade(a, 1.08)))
+        throwPillow.rotation.y = 0.45
+      } else if (type === 'chair') {
+        legs(root, 'chair-leg', w, d, h * 0.46, 52, wood(a), 34)
+        add(root, 'chair-seat', w, 52, d, 0, 0, h * 0.48, wood(c))
+        add(root, 'chair-seat-edge', w - 30, 18, d - 30, 0, 0, h * 0.455,
+          wood(dark))
+        for (const [i, sx] of [[0, -1], [1, 1]] as const) {
+          add(root, `chair-stile-${i}`, 46, h * 0.5, 40,
+            sx * (w / 2 - 45), d / 2 - 35, h * 0.73, wood(c))
+        }
+        add(root, 'chair-rail', w - 70, 70, 32, 0, d / 2 - 35, h * 0.97,
+          wood(c))
+        for (const [i, z] of [[0, h * 0.64], [1, h * 0.8]] as const) {
+          add(root, `chair-slat-${i}`, w - 110, 46, 24, 0, d / 2 - 35, z,
+            wood(c))
         }
       } else if (type === 'coffee-table' || type === 'dresser') {
-        const topH = type === 'dresser' ? h * 0.75 : h
-        add(root, 'table-top', w, Math.max(60, h * 0.12), d, 0, 0, topH - 30, c)
         if (type === 'dresser') {
-          add(root, 'dresser-body', w - 40, h * 0.7, d - 40, 0, 0, h * 0.35, a)
+          const legH = 70
+          const bodyTop = h - 34
+          const bodyH = bodyTop - legH
+          const dw = w - 90
+          const dh = (bodyH - 70) / 3
+          legs(root, 'dresser-leg', w, d, legH, 58, metal(dark), 40)
+          add(root, 'dresser-body', w, bodyH, d, 0, 0,
+            legH + bodyH / 2, wood(c))
+          add(root, 'dresser-top', w + 26, 34, d + 18, 0, 0, h - 17,
+            wood(shade(c, 1.04)))
           for (let i = 0; i < 3; i++) {
-            add(root, `drawer-${i}`, w - 100, 8, 8, 0, -d / 2 + 20, 180 + i * (h * 0.16), '#5b5f64')
+            const z = legH + 22 + dh / 2 + i * (dh + 14)
+            add(root, `drawer-${i}`, dw, dh, 18, 0, -d / 2 - 9, z,
+              wood(a))
+            add(root, `handle-${i}`, Math.min(220, dw * 0.3), 16, 22,
+              0, -d / 2 - 26, z + dh * 0.2, metal('#b6bdc1'))
           }
         } else {
-          for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-            add(root, 'leg', 50, topH - 60, 50, sx * (w / 2 - 70), sy * (d / 2 - 70), (topH - 60) / 2, c)
-          }
-        }
-      } else if (type === 'chair') {
-        add(root, 'seat', w, 80, d, 0, 0, h * 0.55, c)
-        add(root, 'back', w, h * 0.55, 60, 0, d / 2 - 30, h * 0.75, c)
-        for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-          add(root, 'leg', 40, h * 0.55, 40, sx * (w / 2 - 50), sy * (d / 2 - 50), h * 0.275, a)
+          const topH = h
+          add(root, 'table-top', w, 48, d, 0, 0, topH - 24, wood(c))
+          add(root, 'table-edge', w - 24, 18, d - 24, 0, 0, topH - 55,
+            wood(dark))
+          legs(root, 'table-leg', w, d, topH - 48, 78, wood(c), 46)
+          add(root, 'table-shelf', w - 170, 20, d - 120, 0, 0, h * 0.34,
+            wood(shade(c, 0.9)))
+          add(root, 'table-book', w * 0.18, 26, d * 0.24, -w * 0.2, 0,
+            h + 13, paint(a))
+          add(root, 'table-tray', w * 0.26, 14, d * 0.3, w * 0.18, 0,
+            h + 7, metal(dark))
         }
       } else if (type === 'tv') {
-        add(root, 'tv-screen', w, h * 0.8, 45, 0, 0, h * 0.55, '#101215')
-        add(root, 'tv-foot', Math.max(250, w * 0.35), 40, 180, 0, 0, 20, '#1b1d20')
+        add(root, 'tv-frame', w, h * 0.76, 55, 0, 0, h * 0.58,
+          paint('#26292d'))
+        add(root, 'tv-screen', w - 34, h * 0.76 - 34, 14, 0, -32,
+          h * 0.58, screen())
+        add(root, 'tv-neck', 90, h * 0.2, 60, 0, 0, h * 0.15,
+          metal('#2c3034'))
+        add(root, 'tv-foot', Math.max(420, w * 0.34), 26, 260, 0, 0, 13,
+          metal('#2c3034'))
+        add(root, 'tv-bar', w * 0.5, 22, 40, 0, -10, 8, paint('#17191c'))
       } else if (type === 'rug') {
-        add(root, 'rug', w, 12, d, 0, 0, 6, c)
-      } else if (type === 'bathtub') {
-        add(root, 'tub-outer', w, h, d, 0, 0, h / 2, a)
-        add(root, 'tub-inner', w - 120, Math.max(40, h - 100), d - 120, 0, 0, h - 40, '#e8eef0')
-      } else if (type === 'toilet') {
-        cyl(root, 'toilet-base', Math.min(w, d) * 0.75, h * 0.55, 0, -d * 0.08, h * 0.275, a)
-        add(root, 'toilet-tank', w * 0.7, h * 0.5, 180, 0, d / 2 - 80, h * 0.55, a)
-        cyl(root, 'toilet-seat', Math.min(w, d) * 0.8, 50, 0, -d * 0.08, h * 0.58, '#f4f1ec')
-      } else if (type === 'vanity') {
-        add(root, 'vanity-body', w, h * 0.78, d, 0, 0, h * 0.39, c)
-        add(root, 'vanity-top', w + 30, 60, d + 20, 0, 0, h * 0.82, a)
-        cyl(root, 'basin', Math.min(w, d) * 0.42, 80, 0, 0, h * 0.84, '#f1f3f2')
-        cyl(root, 'faucet', 30, 180, 0, -d * 0.24, h * 0.9, '#8e969c')
-      } else if (type === 'shower') {
-        add(root, 'tray', w, 70, d, 0, 0, 35, a)
-        add(root, 'glass-1', 20, h * 0.85, d, w / 2 - 10, 0, h * 0.45, '#b9d3db', 0.28)
-        add(root, 'glass-2', w, h * 0.85, 20, 0, d / 2 - 10, h * 0.45, '#b9d3db', 0.28)
-      } else if (type === 'plant') {
-        cyl(root, 'pot', Math.min(w, d) * 0.55, h * 0.25, 0, 0, h * 0.125, a)
-        const leaf = CreateSphere('leaves', {
-          diameter: Math.min(w, d) * 0.9 * MM, segments: 12,
-        }, this.scene)
-        leaf.parent = root
-        leaf.position.set(0, h * 0.55 * MM, 0)
-        leaf.material = material(c)
-        leaf.isPickable = false
-      } else if (type === 'lamp') {
-        cyl(root, 'lamp-pole', 35, h * 0.9, 0, 0, h * 0.45, '#777c80')
-        cyl(root, 'lamp-shade', w, h * 0.18, 0, 0, h * 0.9, a)
-      } else if (type === 'fridge' || type === 'stove' || type === 'sink') {
-        add(root, `${type}-body`, w, h, d, 0, 0, h / 2, c)
-        if (type === 'stove') {
-          for (let i = 0; i < 4; i++) {
-            cyl(root, `burner-${i}`, 120, 8, (i % 2 ? 1 : -1) * w * 0.22,
-              (i < 2 ? -1 : 1) * d * 0.22, h + 5, '#25282b')
+        add(root, 'rug-base', w, 10, d, 0, 0, 5, fabric(c))
+        add(root, 'rug-field', w - 130, 4, d - 130, 0, 0, 11,
+          fabric(shade(c, 1.12)))
+        add(root, 'rug-line', w - 240, 3, d - 240, 0, 0, 13,
+          fabric(shade(c, 0.86)))
+        for (const [i, sx, sz] of [
+          [0, 0, -1], [1, 0, 1], [2, -1, 0], [3, 1, 0],
+        ] as const) {
+          if (sx === 0) {
+            add(root, `rug-border-${i}`, w, 12, 50, 0,
+              sz * (d / 2 - 25), 6, fabric(a))
+          } else {
+            add(root, `rug-border-${i}`, 50, 12, d - 100,
+              sx * (w / 2 - 25), 0, 6, fabric(a))
           }
-        } else if (type === 'sink') {
-          cyl(root, 'basin', Math.min(w, d) * 0.45, 20, 0, 0, h - 5, '#d6dde0')
         }
+      } else if (type === 'bathtub') {
+        const shell = ceramic(a)
+        const inner = ceramic('#f8fbfb')
+        add(root, 'tub-bottom', w - 160, 80, d - 160, 0, 0, 40, inner)
+        add(root, 'tub-front', w, h, 80, 0, -d / 2 + 40, h / 2, shell)
+        add(root, 'tub-back', w, h, 80, 0, d / 2 - 40, h / 2, shell)
+        add(root, 'tub-left', 80, h, d - 160, -w / 2 + 40, 0, h / 2,
+          shell)
+        add(root, 'tub-right', 80, h, d - 160, w / 2 - 40, 0, h / 2,
+          shell)
+        add(root, 'tub-rim-front', w + 16, 32, 100, 0, -d / 2 + 40,
+          h + 16, inner)
+        add(root, 'tub-rim-back', w + 16, 32, 100, 0, d / 2 - 40,
+          h + 16, inner)
+        add(root, 'tub-rim-left', 100, 32, d - 160, -w / 2 + 40, 0,
+          h + 16, inner)
+        add(root, 'tub-rim-right', 100, 32, d - 160, w / 2 - 40, 0,
+          h + 16, inner)
+        add(root, 'tub-water', w - 220, 18, d - 220, 0, 0, h * 0.7,
+          glass('#d7ecf2'))
+        cyl(root, 'tub-drain', 70, 8, w * 0.3, 0, 84, metal('#5f676c'))
+        cyl(root, 'tub-faucet', 34, 240, -w * 0.34, d / 2 - 90, h + 120,
+          metal())
+        add(root, 'tub-spout', 34, 34, 160, -w * 0.34, d / 2 - 170,
+          h + 210, metal())
+      } else if (type === 'toilet') {
+        const china = ceramic(a)
+        cyl(root, 'toilet-pedestal', w * 0.52, h * 0.34, 0, -d * 0.02,
+          h * 0.17, china, w * 0.68)
+        ball(root, 'toilet-bowl', w * 0.8, h * 0.28, d * 0.52, 0,
+          -d * 0.1, h * 0.44, china)
+        const seat = ring(root, 'toilet-seat', w * 0.78, 26, 0, -d * 0.1,
+          h * 0.59, ceramic('#f8f8f5'))
+        seat.scaling.z = Math.max(1, (d * 0.56) / (w * 0.78))
+        ball(root, 'toilet-lid', w * 0.72, 22, d * 0.5, 0, -d * 0.1,
+          h * 0.61, ceramic('#f5f5f2'))
+        add(root, 'toilet-tank', w * 0.74, h * 0.44, 190, 0, d / 2 - 95,
+          h * 0.68, china)
+        add(root, 'toilet-tank-lid', w * 0.8, 26, 200, 0, d / 2 - 95,
+          h * 0.91, china)
+        cyl(root, 'toilet-button', 46, 10, 0, d / 2 - 95, h * 0.93,
+          metal())
+      } else if (type === 'vanity') {
+        const legH = 60
+        const bodyH = h - 120
+        add(root, 'vanity-plinth', w - 20, legH, d - 20, 0, 0, legH / 2,
+          wood(dark))
+        add(root, 'vanity-body', w, bodyH, d, 0, 0, legH + bodyH / 2,
+          wood(c))
+        add(root, 'vanity-top', w + 30, 60, d + 20, 0, 0, h - 30,
+          ceramic(a))
+        for (const [i, sx] of [[0, -1], [1, 1]] as const) {
+          add(root, `vanity-door-${i}`, w / 2 - 12, bodyH - 40, 18,
+            sx * w / 4, -d / 2 - 9, legH + bodyH / 2,
+            wood(shade(c, 1.06)))
+          add(root, `vanity-handle-${i}`, 18, bodyH * 0.2, 24, sx * 42,
+            -d / 2 - 26, legH + bodyH * 0.72, metal())
+        }
+        cyl(root, 'vanity-basin', Math.min(w * 0.4, d * 0.5), 120, 0, 0,
+          h + 60, ceramic('#fbfcfc'))
+        cyl(root, 'vanity-basin-in', Math.min(w * 0.33, d * 0.42), 18, 0,
+          0, h + 115, ceramic('#e8eff0'))
+        cyl(root, 'vanity-faucet', 30, 230, 0, d * 0.22, h + 115, metal())
+        add(root, 'vanity-spout', 30, 30, 150, 0, d * 0.22 - 75, h + 215,
+          metal())
+      } else if (type === 'shower') {
+        add(root, 'shower-tray', w, 70, d, 0, 0, 35, ceramic(a))
+        add(root, 'shower-floor', w - 90, 16, d - 90, 0, 0, 72,
+          ceramic('#eef4f5'))
+        cyl(root, 'shower-drain', 70, 6, w * 0.3, -d * 0.3, 80,
+          metal('#5f686d'))
+        add(root, 'shower-glass-front', w - 70, h * 0.76, 18, 0,
+          -d / 2 + 9, h * 0.44, glass())
+        add(root, 'shower-glass-side', 18, h * 0.76, d - 70, -w / 2 + 9,
+          0, h * 0.44, glass())
+        add(root, 'shower-post-l', 30, h * 0.76, 30, -w / 2 + 15,
+          -d / 2 + 15, h * 0.44, metal())
+        add(root, 'shower-post-r', 30, h * 0.76, 30, w / 2 - 15,
+          -d / 2 + 15, h * 0.44, metal())
+        add(root, 'shower-rail', w - 40, 26, 26, 0, -d / 2 + 20,
+          h * 0.82, metal())
+        add(root, 'shower-rail-side', 26, 26, d - 40, -w / 2 + 20, 0,
+          h * 0.82, metal())
+        cyl(root, 'shower-column', 38, h * 0.62, w / 2 - 80, d / 2 - 80,
+          h * 0.44, metal())
+        cyl(root, 'shower-head', 180, 20, w / 2 - 80, d / 2 - 80,
+          h * 0.78, metal('#70787d'))
+        add(root, 'shower-handle', 20, 190, 24, w * 0.32, -d / 2 - 10,
+          h * 0.4, metal())
+      } else if (type === 'plant') {
+        cyl(root, 'plant-pot', w * 0.5, h * 0.22, 0, 0, h * 0.11,
+          ceramic(a), w * 0.62)
+        cyl(root, 'plant-rim', w * 0.66, h * 0.03, 0, 0, h * 0.225,
+          ceramic(shade(a, 0.94)))
+        cyl(root, 'plant-soil', w * 0.54, 14, 0, 0, h * 0.235,
+          paint('#3a2c21'))
+        cyl(root, 'plant-stem', 26, h * 0.32, 0, 0, h * 0.38,
+          paint('#6b4e36'))
+        const leaves = [
+          [0, 0, 0.55, 0.62, 1.02, 0.0], [0.3, 0.08, 0.66, 0.5, 1.14, 0.5],
+          [-0.28, 0.12, 0.68, 0.52, 0.92, -0.55],
+          [0.16, -0.28, 0.72, 0.46, 1.2, 0.9],
+          [-0.2, -0.2, 0.78, 0.45, 0.86, -0.9],
+          [0.03, 0.02, 0.86, 0.42, 1.08, 0.25],
+          [-0.1, 0.26, 0.9, 0.36, 0.96, -0.3],
+        ] as const
+        leaves.forEach(([fx, fy, fz, size, k, rz], i) => {
+          const leaf = ball(root, `plant-leaf-${i}`, w * size, h * 0.12,
+            w * size, fx * w, fy * d, fz * h, fabric(shade(c, k)))
+          leaf.rotation.z = rz
+          leaf.rotation.x = i % 2 ? 0.25 : -0.25
+        })
+      } else if (type === 'hood') {
+        add(root, 'hood-body', w, h * 0.22, d, 0, 0, h * 0.86,
+          metal(shade(c, 1.03)))
+        add(root, 'hood-canopy', w * 0.96, h * 0.18, d * 0.82, 0, -d * 0.04,
+          h * 0.7, metal('#8f989e'))
+        add(root, 'hood-chimney', w * 0.32, h * 0.62, d * 0.22, 0, d * 0.12,
+          h * 0.31, metal('#9aa3a9'))
+        add(root, 'hood-filter', w * 0.7, 18, d * 0.5, 0, -d * 0.06,
+          h * 0.78, paint('#3c4247'))
+        for (const [i, sx] of [[0, -1], [1, 1]] as const) {
+          cyl(root, `hood-light-${i}`, 46, 10, sx * w * 0.28,
+            -d * 0.12, h * 0.83, { color: '#ffe8b8', glow: 0.9 })
+        }
+      } else if (type === 'lamp') {
+        cyl(root, 'lamp-base', w * 0.56, 32, 0, 0, 16, metal('#3a3d40'))
+        cyl(root, 'lamp-pole', 26, h * 0.78, 0, 0, h * 0.43,
+          metal('#6f767b'))
+        cyl(root, 'lamp-shade', w * 0.78, h * 0.17, 0, 0, h * 0.87,
+          { color: a, spec: 0.05, glow: 0.35 }, w * 0.5)
+        cyl(root, 'lamp-glow', w * 0.58, 8, 0, 0, h * 0.79,
+          { color: '#ffe6b0', spec: 0.1, glow: 0.95 })
+      } else if (type === 'fridge') {
+        add(root, 'fridge-plinth', w - 30, 50, d - 30, 0, 0, 25,
+          metal('#24272a'))
+        add(root, 'fridge-body', w, h - 50, d, 0, 0, 50 + (h - 50) / 2,
+          metal(c))
+        add(root, 'fridge-door-top', w - 16, (h - 50) * 0.3, 20, 0,
+          -d / 2 - 10, h - 50 - (h - 50) * 0.16, metal(shade(c, 1.04)))
+        add(root, 'fridge-door-bottom', w - 16, (h - 50) * 0.66, 20, 0,
+          -d / 2 - 10, 50 + (h - 50) * 0.36, metal(shade(c, 1.02)))
+        add(root, 'fridge-gap', w - 20, 10, 22, 0, -d / 2 - 11,
+          h - 50 - (h - 50) * 0.32, paint('#1d2023'))
+        for (const [i, z] of [
+          [0, h - 50 - (h - 50) * 0.18], [1, 50 + (h - 50) * 0.62],
+        ] as const) {
+          add(root, `fridge-handle-${i}`, 28, (h - 50) * 0.16, 34,
+            w / 2 - 80, -d / 2 - 32, z, metal('#c3c9cd'))
+        }
+      } else if (type === 'stove') {
+        add(root, 'stove-plinth', w - 20, 40, d - 20, 0, 0, 20,
+          metal('#151719'))
+        add(root, 'stove-body', w, h - 40, d, 0, 0, 40 + (h - 40) / 2,
+          metal(c))
+        add(root, 'stove-top', w, 26, d, 0, 0, h + 13, screen('#101214'))
+        for (let i = 0; i < 4; i++) {
+          const bx = (i % 2 ? 1 : -1) * w * 0.24
+          const by = (i < 2 ? -1 : 1) * d * 0.24
+          ring(root, `burner-${i}`, 128, 10, bx, by, h + 30,
+            metal('#2c3033'))
+          cyl(root, `burner-in-${i}`, 64, 6, bx, by, h + 27,
+            paint('#191c1f'))
+        }
+        add(root, 'stove-door', w - 50, (h - 40) * 0.42, 18, 0,
+          -d / 2 - 9, 40 + (h - 40) * 0.25, metal('#24282c'))
+        add(root, 'stove-glass', w - 120, (h - 40) * 0.28, 6, 0,
+          -d / 2 - 19, 40 + (h - 40) * 0.25, screen('#101214'))
+        add(root, 'stove-handle', w - 100, 22, 22, 0, -d / 2 - 35,
+          40 + (h - 40) * 0.45, metal('#c3c9cd'))
+        for (let i = 0; i < 4; i++) {
+          ball(root, `stove-knob-${i}`, 38, 38, 18, (i - 1.5) * w * 0.2,
+            -d / 2 - 20, h * 0.72, metal('#c3c9cd'))
+        }
+      } else if (type === 'sink') {
+        add(root, 'sink-body', w, h * 0.82, d, 0, 0, h * 0.41, wood(c))
+        add(root, 'sink-top', w + 20, 44, d + 16, 0, 0, h * 0.82 + 22,
+          ceramic(a))
+        cyl(root, 'sink-basin', Math.min(w * 0.6, d * 0.62), 36, 0, 0,
+          h * 0.86, metal('#c9d0d3'))
+        cyl(root, 'sink-basin-in', Math.min(w * 0.52, d * 0.54), 12, 0,
+          0, h * 0.88, paint('#8f999e'))
+        cyl(root, 'sink-faucet', 30, 260, 0, d * 0.2, h * 0.9, metal())
+        add(root, 'sink-spout', 30, 30, 140, 0, d * 0.2 - 70,
+          h * 0.9 + 110, metal())
+      }
+
+      // Тени только от крупных деталей: сотни мелких болванок роняют FPS.
+      for (const m of root.getChildMeshes()) {
+        // Декор выбирается мышью: id нужен для панели свойств.
+        m.isPickable = true
+        m.metadata = { type: 'prop', propId: p.id }
+        const mat = m.material as StandardMaterial | null
+        if (!mat || mat.alpha < 0.99) continue
+        m.computeWorldMatrix(true)
+        const e = m.getBoundingInfo().boundingBox.extendSizeWorld
+        if (8 * e.x * e.y * e.z > 0.012) this.shadow.addShadowCaster(m)
       }
     }
+    // Новые кастеры появляются после первого рендера карты теней.
+    // Без сброса Babylon может перерисовывать её каждый кадр.
+    const sm = this.shadow.getShadowMap()
+    if (sm) {
+      sm.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE
+      sm.resetRefreshCounter()
+    }
+  }
+
+  /** Показывать только модули выбранной комнаты (папки). */
+  setVisibleInstances(ids: Set<string> | null): void {
+    this.visibleIds = ids && ids.size ? new Set(ids) : null
+    this.applyInstanceVisibility()
+  }
+
+  /** Показывать только декор текущей комнаты. */
+  setVisibleProps(ids: Set<string> | null): void {
+    this.visiblePropIds = ids && ids.size ? new Set(ids) : null
+    this.applyPropVisibility()
+  }
+
+  private applyPropVisibility(): void {
+    if (this.objectId) return
+    for (const [id, root] of this.propRoots) {
+      root.setEnabled(!this.visiblePropIds || this.visiblePropIds.has(id))
+    }
+  }
+
+  private applyInstanceVisibility(): void {
+    if (this.objectId) return
+    for (const [id, root] of this.roots) {
+      root.setEnabled(!this.visibleIds || this.visibleIds.has(id))
+    }
+    this.applyPropVisibility()
+  }
+
+  /** Текущее положение «человека» в плане, мм. */
+  walkerPosition(): { x: number; y: number; yaw: number; eye: number } | null {
+    if (this.mode === 'orbit') return null
+    return {
+      x: this.walk.position.x / MM,
+      y: this.walk.position.z / MM,
+      yaw: (this.walk.rotation.y * 180) / Math.PI,
+      eye: this.walk.position.y,
+    }
+  }
+
+  /** Сколько мешей сейчас в сцене (для HUD производительности). */
+  meshCount(): number {
+    return this.scene.meshes.length
+  }
+
+  private lowWalls = false
+  private lastDraws = 0
+  private lastFrameId = 0
+
+  /** Метрики сцены для замера производительности (не зависят от GPU). */
+  perfStats(): {
+    meshes: number; active: number; materials: number; textures: number;
+    triangles: number; drawCalls: number; renderer: string;
+  } {
+    const scene = this.scene
+    let triangles = 0
+    for (const m of scene.meshes) {
+      const total = m.getTotalIndices?.() ?? 0
+      if (total > 0) triangles += total / 3
+    }
+    const engine = scene.getEngine() as unknown as {
+      _drawCalls?: { current?: number }
+    }
+    let renderer = ''
+    try {
+      const gl = engine as unknown as {
+        _gl?: WebGL2RenderingContext | WebGLRenderingContext
+      }
+      const ctx = gl._gl
+      if (ctx) {
+        const ext = ctx.getExtension('WEBGL_debug_renderer_info')
+        renderer = String(ctx.getParameter(
+          ext ? ext.UNMASKED_RENDERER_WEBGL : ctx.RENDERER,
+        ) || '')
+      }
+    } catch {
+      renderer = ''
+    }
+    // _drawCalls.current — накопительный счётчик; приводим к «на кадр».
+    const frameId = scene.getFrameId()
+    const frames = Math.max(1, frameId - (this.lastFrameId || frameId - 1))
+    const perFrame = Math.max(0, (engine._drawCalls?.current ?? 0) - this.lastDraws)
+    this.lastDraws = engine._drawCalls?.current ?? 0
+    this.lastFrameId = frameId
+    return {
+      meshes: scene.meshes.length,
+      active: scene.getActiveMeshes().length,
+      materials: scene.materials.length,
+      textures: scene.textures.length,
+      triangles: Math.round(triangles),
+      drawCalls: Math.round(perFrame / frames),
+      renderer,
+    }
+  }
+
+  /** Ограничить нагрузку на слабом GPU. */
+  setPerformance(weak: boolean): void {
+    this.engine.setHardwareScalingLevel(weak ? 1.35 : 1)
   }
 
   /** Пересобрать/обновить мебель. */
@@ -442,7 +987,7 @@ export class BabylonRenderer {
       )
       if (this.instSig.get(inst.id) !== sig) {
         this.instSig.set(inst.id, sig)
-        this.rebuildInstance(inst, root, objs)
+        this.rebuildInstance(inst, root, objs, derived[inst.id]?.operations ?? [])
         rebuilt = true
       }
       root.position.set(inst.x * MM, (inst.z || 0) * MM, inst.y * MM)
@@ -462,17 +1007,29 @@ export class BabylonRenderer {
           this.partMeta.delete(k)
         }
       }
+      this.partsByInst.delete(id)
     }
+    this.animDirty = true
     if (rebuilt || matsSig !== this.matsSig) {
       this.matsSig = matsSig
       this.applyMaterials(instances, derived, materials, materialVars)
     }
     if (rebuilt) {
       this.applyQualityToMeshes()
-      const sm = this.shadow.getShadowMap()
+        const sm = this.shadow.getShadowMap()
       if (sm) {
         sm.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE
         sm.resetRefreshCounter()
+      }
+    }
+  }
+
+  /** Показать/скрыть ручки и другую фурнитуру в 3D. */
+  setHardwareVisible(visible: boolean): void {
+    this.hardwareVisible = visible
+    for (const root of this.roots.values()) {
+      for (const mesh of root.getChildMeshes()) {
+        if (mesh.metadata?.hardware) mesh.setEnabled(visible)
       }
     }
   }
@@ -481,6 +1038,7 @@ export class BabylonRenderer {
     inst: Instance,
     root: TransformNode,
     objs: SceneObject[],
+    operations: AssemblyOperation[] = [],
   ): void {
     const prefix = `${inst.id}:`
     for (const k of [...this.parts.keys()]) {
@@ -493,11 +1051,19 @@ export class BabylonRenderer {
       this.parts.delete(k)
       this.partMeta.delete(k)
     }
+    this.partsByInst.delete(inst.id)
     root.getChildMeshes().forEach((m) => m.dispose())
     for (const k of [...this.materials.keys()]) {
       if (!k.startsWith(`${inst.id}:`)) continue
       this.materials.get(k)?.dispose()
       this.materials.delete(k)
+    }
+    const handleHoles = new Map<string, { x: number; y: number }[]>()
+    for (const op of operations) {
+      if (op.kind !== 'handle' || !op.part) continue
+      const list = handleHoles.get(op.part) ?? []
+      list.push({ x: op.x, y: op.y })
+      handleHoles.set(op.part, list)
     }
     objs.forEach((o, part) => {
       const key = `${inst.id}:${part}`
@@ -509,9 +1075,14 @@ export class BabylonRenderer {
       mesh.isPickable = true
       mesh.receiveShadows = true
       mesh.metadata = { instanceId: inst.id, part }
-      const mat = this.materialFor(`${inst.id}:${ROLE_MAT[o.role || 'corpus'] || o.role || 'corpus'}`)
-      mesh.material = mat
-      if (o.role !== 'drawer' && o.role !== 'leg') {
+      // Временный материал до applyMaterials; один на все детали,
+      // иначе кэш растёт на каждый модуль и роль.
+      mesh.material = this.materialFor('part-default')
+      // Рёбра — самая дорогая часть сборки (лишняя геометрия на каждую
+      // деталь). Рисуем их только у крупных деталей: на телефоне сборка
+      // сцены из-за них занимала секунды.
+      if (['corpus', 'facade', 'worktop', 'plinth'].includes(o.role || 'corpus')
+        && o.kind !== 'drawer' && o.kind !== 'leg') {
         mesh.enableEdgesRendering(0.999)
         mesh.edgesWidth = 0.9
         mesh.edgesColor = new Color4(0.03, 0.04, 0.05, 0.72)
@@ -547,6 +1118,42 @@ export class BabylonRenderer {
       }
       this.parts.set(key, mesh)
       this.partMeta.set(key, meta)
+      const keys = this.partsByInst.get(inst.id) ?? []
+      keys.push(key)
+      this.partsByInst.set(inst.id, keys)
+      // Ручка: две операции kind=handle дают межцентровое и высоту.
+      // Меш — ребёнок двери/фасада, поэтому ручка едет вместе с открытием.
+      const holes = o.op_part ? handleHoles.get(o.op_part) : undefined
+      if ((o.kind === 'door' || o.kind === 'drawerfront') && holes?.length) {
+        const xs = holes.map((h) => h.x)
+        const left = Math.min(...xs)
+        const right = Math.max(...xs)
+        const y = holes.reduce((sum, h) => sum + h.y, 0) / holes.length
+        const length = Math.max(64, right - left + 40)
+        const hm = this.materialFor('hardware')
+        hm.diffuseColor = matColor('#aeb6bc')
+        hm.specularColor = new Color3(0.55, 0.6, 0.64)
+        hm.roughness = 0.35
+        const handle = CreateBox(
+          `${key}:handle`,
+          {
+            width: length * MM,
+            height: 16 * MM,
+            depth: 20 * MM,
+          },
+          this.scene,
+        )
+        handle.parent = mesh
+        handle.position.set(
+          ((left + right) / 2 - o.sx / 2) * MM,
+          (-o.sy / 2 - 14) * MM,
+          (y - o.sz / 2) * MM,
+        )
+        handle.material = hm
+        handle.isPickable = false
+        handle.metadata = { instanceId: inst.id, part, hardware: true }
+        handle.setEnabled(this.hardwareVisible)
+      }
       if (this.quality === 'realistic' &&
         ['corpus', 'facade', 'worktop', 'plinth'].includes(o.role || 'corpus')) {
         this.shadow.addShadowCaster(mesh)
@@ -567,6 +1174,33 @@ export class BabylonRenderer {
     m.backFaceCulling = false
     this.materials.set(key, m)
     return m
+  }
+
+  /** Процедурная текстура для материала без загруженного фото. */
+  private proceduralTexture(
+    src: SurfaceMaterial,
+    repeat: number,
+  ): DynamicTexture | null {
+    const canvas = textureFor(src)
+    if (!canvas) return null
+    const key = `${src.pattern}|${src.color}|${src.accent || ''}|${repeat}`
+    const hit = this.procTextures.get(key)
+    if (hit) return hit
+    const tex = new DynamicTexture(
+      key,
+      { width: canvas.width, height: canvas.height },
+      this.scene,
+      true,
+    )
+    const ctx = tex.getContext() as unknown as CanvasRenderingContext2D
+    ctx.drawImage(canvas, 0, 0)
+    tex.update()
+    tex.wrapU = Texture.WRAP_ADDRESSMODE
+    tex.wrapV = Texture.WRAP_ADDRESSMODE
+    tex.uScale = repeat
+    tex.vScale = repeat
+    this.procTextures.set(key, tex)
+    return tex
   }
 
   private textureFor(url: string, repeat: number): Texture {
@@ -601,15 +1235,29 @@ export class BabylonRenderer {
           ? resolveObjectMaterial(materials, materialVars, inst, obj,
               meta.part)
           : materials.corpus
-        const schematic = this.quality === 'schematic'
-        const textured = !schematic && !!src?.texture
-        // Ключ включает деталь: у корпуса, полок и боковин могут быть
-        // разные глобальные переменные при одной роли материала.
-        const matKey = `${inst.id}:${meta.part}:${mk}`
+        // «Каркас» и «Чертёж» — упрощённый вид канваса: без текстур,
+        // но с фактическим цветом материала — как было в «Каркасе».
+        const flat = this.quality === 'schematic' || this.quality === 'blueprint'
+        const textured = !flat && !!src?.texture
+        const face = Math.max(meta.base.sx, meta.base.sz, meta.base.sy)
+        const repeat = face / (src?.texScale || 600)
+        // Материал общий по содержимому (цвет + текстура + повтор), а не по
+        // детали: иначе 300+ материалов = 300+ состояний и медленный рендер.
+        const qRepeat = src?.pattern === 'solid' || !src
+          ? 0
+          : Math.max(0.25, Math.round(repeat * 2) / 2)
+        const matKey = flat
+          ? `schem|${src?.color || ''}|${src?.accent || ''}|${mk}`
+          : `r|${src?.pattern || 'solid'}|${src?.color || ''}|` +
+            `${src?.accent || ''}|${src?.texture || ''}|${qRepeat}`
         const fa = this.materialFor(matKey)
-        if (schematic) {
-          // «Каркас» — без текстур, но с фактическим цветом материала:
-          // иначе смена цвета выглядит как «не реагирует».
+        const sig = (fa as StandardMaterial & { __sig?: string }).__sig
+        if (sig === matKey) {
+          mesh.material = fa
+          continue
+        }
+        ;(fa as StandardMaterial & { __sig?: string }).__sig = matKey
+        if (flat) {
           const grey: Record<string, string> = {
             corpus: '#b8bcc1', facade: '#8f969d', worktop: '#7d848b',
             plinth: '#6e757c', back: '#d3d7db', drawer: '#9aa0a6',
@@ -620,17 +1268,17 @@ export class BabylonRenderer {
           fa.emissiveColor = matColor(src?.accent || base).scale(0.04)
           fa.diffuseTexture = null
         } else {
-          fa.diffuseColor = matColor(src?.color || '#999999')
-          fa.emissiveColor = matColor(src?.accent || src?.color || '#222222').scale(0.08)
-          if (textured) {
-            const face = Math.max(meta.base.sx, meta.base.sz, meta.base.sy)
-            fa.diffuseTexture = this.textureFor(
-              src.texture as string,
-              face / (src.texScale || 600),
-            )
-          } else {
-            fa.diffuseTexture = null
-          }
+          const texture = textured && src?.texture
+            ? this.textureFor(src.texture, repeat)
+            : src
+              ? this.proceduralTexture(src, repeat)
+              : null
+          // Текстура уже содержит цвет; белый diffuse не затемняет её.
+          fa.diffuseColor = texture
+            ? new Color3(1, 1, 1)
+            : matColor(src?.color || '#999999')
+          fa.emissiveColor = matColor(src?.accent || src?.color || '#222222').scale(0.06)
+          fa.diffuseTexture = texture
         }
         mesh.material = fa
         fa.markAsDirty(Material.AllDirtyFlag)
@@ -640,13 +1288,26 @@ export class BabylonRenderer {
 
   private buildRoom(room: Room, materials: Materials): void {
     const pts = outlinePoints(room)
-    const schematic = this.quality === 'schematic'
+    // В «Каркасе»/«Чертеже» не создаём текстуры комнаты.
+    const schematic = this.quality === 'schematic' || this.quality === 'blueprint'
     const floorMat = this.materialFor('floor')
     const fm = materials.floor
-    floorMat.diffuseColor = matColor(schematic ? '#aeb2b6' : (fm?.color || '#8b7a63'))
+    const floorTex = !schematic && fm
+      ? this.proceduralTexture(
+          fm,
+          Math.max(2, Math.max(room.w, room.d) / (fm.texScale || 1000)),
+        )
+      : null
+    floorMat.diffuseColor = floorTex
+      ? new Color3(1, 1, 1)
+      : matColor(schematic ? '#aeb2b6' : (fm?.color || '#8b7a63'))
+    floorMat.diffuseTexture = floorTex
     floorMat.specularColor = new Color3(0.02, 0.02, 0.02)
     floorMat.roughness = 0.9
-    floorMat.backFaceCulling = false
+    floorMat.backFaceCulling = true
+    // Низ цоколя и пол тоже совпадают по плоскости — уводим пол на 1 unit.
+    floorMat.zOffset = 1
+    floorMat.zOffsetUnits = 1
     floorMat.emissiveColor = matColor(fm?.color || '#8b7a63').scale(0.08)
     if (room.floor?.enabled !== false) {
       const floors: Mesh[] = []
@@ -725,7 +1386,11 @@ export class BabylonRenderer {
     wallMat.diffuseColor = matColor(schematic ? '#c3c6c9'
       : (materials.wall?.color || '#d5d1c9'))
     wallMat.emissiveColor = matColor(schematic ? '#c3c6c9' : '#d5d1c9').scale(0.16)
-    wallMat.backFaceCulling = false
+    wallMat.backFaceCulling = true
+    // Стена и задняя стенка модуля стоят в одной плоскости: без смещения
+    // глубины на стыке мерцает текстура («мебель входит в стену»).
+    wallMat.zOffset = 1
+    wallMat.zOffsetUnits = 1
     const walls = roomWalls(room)
     for (const seg of walls) {
       this.buildWall(seg, room, wallT, wallMat)
@@ -785,10 +1450,24 @@ export class BabylonRenderer {
       merged.receiveShadows = true
       merged.parent = this.roomRoot
       merged.isPickable = true
-      merged.metadata = { type: 'wall', wallIndex: seg.index }
+      merged.metadata = {
+        type: 'wall',
+        wallIndex: seg.index,
+        // Нужен прогулке: по сегменту считается расстояние до стены и
+        // попадание в проём (открытая дверь — проход, закрытая — нет).
+        seg: {
+          ax: seg.a.x, ay: seg.a.y,
+          bx: seg.b.x, by: seg.b.y,
+          t: wallT,
+        },
+      }
       this.walls.push({
         mesh: merged,
         normal: { x: seg.nx, y: seg.ny },
+        index: seg.index,
+        a: { x: seg.a.x, y: seg.a.y },
+        b: { x: seg.b.x, y: seg.b.y },
+        t: wallT,
         // центр берём из сегмента, а не из (возможно не обновлённого)
         // bounding box после MergeMeshes
         center: new Vector3(
@@ -964,11 +1643,42 @@ export class BabylonRenderer {
       )
     }
     if (!this.walls.length) return
-    if (this.wallMode === 'low') {
+    // В прогулке стены всегда на месте: иначе «разрез» прячет их
+    // и кажется, что камера проходит сквозь текстуры.
+    if (this.mode === 'first') {
       for (const w of this.walls) w.mesh.setEnabled(true)
+      this.ceilingMesh?.setEnabled(true)
       return
     }
+    if (this.wallMode === 'low') {
+      // «Низкие стены»: не просто показать все, а реально опустить их,
+      // иначе снаружи стена закрывает комнату (серый экран).
+      // roomH уже в миллиметрах.
+      if (!this.lowWalls) {
+        this.lowWalls = true
+        const low = Math.min(1, 1100 / Math.max(1, this.roomH))
+        for (const w of this.walls) {
+          w.mesh.scaling.y = low
+          // Мерж-меши у стен с проёмами имеют разный «нуль»: после сжатия
+          // выравниваем низ каждой стены по полу.
+          w.mesh.computeWorldMatrix(true)
+          const minY = w.mesh.getBoundingInfo().boundingBox.minimumWorld.y
+          w.mesh.position.y -= minY
+        }
+      }
+      for (const w of this.walls) w.mesh.setEnabled(true)
+      this.ceilingMesh?.setEnabled(false)
+      return
+    }
+    if (this.lowWalls) {
+      this.lowWalls = false
+      for (const w of this.walls) {
+        w.mesh.scaling.y = 1
+        w.mesh.position.y = 0
+      }
+    }
     for (const w of this.walls) {
+      w.mesh.scaling.y = 1
       const dir = cam.position.subtract(w.center)
       const facing = w.normal.x * dir.x + w.normal.y * dir.z
       // стена, обращённая к камере, прячется в разрезе
@@ -976,59 +1686,57 @@ export class BabylonRenderer {
     }
   }
 
+  /** Пересчитать видимость и анимации; можно звать точечно (флаги UI). */
+  markAnimDirty(): void {
+    this.animDirty = true
+  }
+
   private tickAnim(): void {
-    const schematic = this.quality === 'schematic'
-    const byInst = new Map<string, {
-      inst: Instance
-      hasDoors: boolean
-      doorOpen: boolean
-    }>()
-    for (const inst of state.project.instances) {
+    // Анимация идёт только у одного модуля за раз. Если ничего не играет
+    // и правок не было — на кадре делать нечего: раньше здесь каждый кадр
+    // обходились все части всех модулей (на Redmi это 25-60 % ядра).
+    const playing = animState.playing
+    if (this.wasPlaying && !playing) this.animDirty = true
+    this.wasPlaying = playing
+    if (!playing && !this.animDirty) return
+    this.animDirty = false
+
+    const targets = playing
+      ? state.project.instances.filter((i) => i.id === animState.instanceId)
+      : state.project.instances
+    for (const inst of targets) {
+      const keys = this.partsByInst.get(inst.id)
+      if (!keys?.length) continue
       const objs = derived[inst.id]?.objects ?? []
       let hasDoors = false
       let doorOpen = false
       for (let part = 0; part < objs.length; part++) {
-        const o = objs[part]
-        if (o.kind !== 'door') continue
+        if (objs[part].kind !== 'door') continue
         hasDoors = true
         if ((partAnimValues(inst, part)?.open ?? 0) > 1) doorOpen = true
       }
-      byInst.set(inst.id, { inst, hasDoors, doorOpen })
-    }
-    for (const [key, meta] of this.partMeta) {
-      const mesh = this.parts.get(key)
-      if (!mesh) continue
-      if (schematic) {
-        mesh.setEnabled(meta.role !== 'facade')
-        continue
-      }
-      const info = byInst.get(meta.instanceId)
-      let on = ui.facades || meta.role !== 'facade'
-      if (!on) {
-        mesh.setEnabled(false)
-        mesh.isPickable = false
-        continue
-      }
-      if (meta.kind === 'drawerbox') {
-        // при скрытых фасадах показываем короба даже задвинутыми
-        if (ui.facades) {
-          const a = info ? partAnimValues(info.inst, meta.part) : undefined
-          on = (a?.slide ?? 0) > 1
+      for (const key of keys) {
+        const meta = this.partMeta.get(key)
+        const mesh = this.parts.get(key)
+        if (!meta || !mesh) continue
+        // Фасады показываем всегда, если пользователь явно не выключил
+        // их кнопкой. Это одинаково для «Полного», «Каркаса» и «Чертежа».
+        let on = ui.facades || meta.role !== 'facade'
+        if (!on) {
+          mesh.setEnabled(false)
+          mesh.isPickable = false
         } else {
-          on = true
+          if (meta.kind === 'drawerbox') {
+            on = ui.facades
+              ? ((partAnimValues(inst, meta.part)?.slide ?? 0) > 1)
+              : true
+          } else if (ui.facades && hasDoors && !doorOpen &&
+            (meta.name.includes('Полка') || meta.name.includes('Перегородка'))) {
+            on = false
+          }
+          mesh.setEnabled(on)
+          mesh.isPickable = on
         }
-      } else if (ui.facades && info?.hasDoors && !info.doorOpen &&
-        (meta.name.includes('Полка') || meta.name.includes('Перегородка'))) {
-        on = false
-      }
-      mesh.setEnabled(on)
-      mesh.isPickable = on
-    }
-    for (const inst of state.project.instances) {
-      const info = byInst.get(inst.id)
-      if (!info) continue
-      for (const [key, meta] of this.partMeta) {
-        if (meta.instanceId !== inst.id) continue
         const anim = partAnimValues(inst, meta.part)
         if (!anim) continue
         if (meta.pivot) {
@@ -1037,22 +1745,33 @@ export class BabylonRenderer {
         }
         if (meta.kind === 'drawerfront' || meta.kind === 'drawerbox') {
           const slide = anim.slide ?? 0
-          const mesh = this.parts.get(key)
-          if (mesh) {
-            mesh.position.z = (meta.base.y + meta.base.sy / 2) * MM - slide * MM
-          }
+          mesh.position.z = (meta.base.y + meta.base.sy / 2) * MM - slide * MM
         }
       }
     }
     if (this.selectedIds.size || this.selectedWall != null ||
-        this.selectedOpening || this.selectedItem) this.updateSelectionBox()
+        this.selectedOpening || this.selectedItem || this.selectedPart != null) {
+      this.updateSelectionBox()
+    }
   }
 
   setSelected(ids: string[] | string): void {
     this.selectedIds = new Set(Array.isArray(ids) ? ids : ids ? [ids] : [])
+    if (this.selectedPartInst && !this.selectedIds.has(this.selectedPartInst)) {
+      this.selectedPartInst = null
+      this.selectedPart = null
+    }
     this.selectedWall = null
     this.selectedItem = null
     this.selectedOpening = null
+    this.selectedProp = null
+    this.updateSelectionBox()
+  }
+
+  /** Выбрать конкретную деталь модуля (дверь, полку, боковину). */
+  setSelectedPart(instanceId: string | null, part: number | null): void {
+    this.selectedPartInst = part == null ? null : instanceId
+    this.selectedPart = part
     this.updateSelectionBox()
   }
 
@@ -1060,6 +1779,7 @@ export class BabylonRenderer {
     this.selectedWall = index
     this.selectedItem = itemId
     this.selectedOpening = null
+    this.selectedProp = null
     this.selectedIds = new Set()
     this.updateSelectionBox()
   }
@@ -1068,11 +1788,17 @@ export class BabylonRenderer {
     this.selectedOpening = id
     this.selectedWall = null
     this.selectedItem = null
+    this.selectedProp = null
     this.selectedIds = new Set()
     this.updateSelectionBox()
   }
 
   private selectionMeshes(): Mesh[] {
+    // Деталь важнее модуля: подсвечиваем ровно её, а не весь корпус.
+    if (this.selectedPartInst && this.selectedPart != null) {
+      const m = this.parts.get(`${this.selectedPartInst}:${this.selectedPart}`)
+      return m && m.isEnabled() ? [m] : []
+    }
     if (this.selectedItem) {
       const m = this.wallItemMeshes.get(this.selectedItem)
       return m ? [m] : []
@@ -1082,6 +1808,9 @@ export class BabylonRenderer {
       return w ? [w.mesh] : []
     }
     if (this.selectedOpening) return this.openingMeshes.get(this.selectedOpening) ?? []
+    if (this.selectedProp) {
+      return this.selectedProp.getChildMeshes() as Mesh[]
+    }
     const out: Mesh[] = []
     for (const id of this.selectedIds) {
       const root = this.roots.get(id)
@@ -1091,8 +1820,52 @@ export class BabylonRenderer {
     return out
   }
 
+  private applySelectionGlow(meshes: Mesh[]): void {
+    const partMode = this.selectedPartInst != null && this.selectedPart != null
+    // Снять прошлую подсветку.
+    for (const [m, prev] of this.edgeSaved) {
+      if (partMode && meshes.includes(m)) continue
+      m.edgesWidth = prev.width
+      m.edgesColor = prev.color
+    }
+    for (const [m, prev] of this.outlineSaved) {
+      if (partMode && meshes.includes(m)) continue
+      m.renderOutline = prev.on
+      m.outlineColor = prev.color
+      m.outlineWidth = prev.width
+    }
+    this.edgeSaved.clear()
+    this.outlineSaved.clear()
+    // Жирный контур — только для конкретной детали. Целый модуль в обычном
+    // просмотре не обводим по всем компонентам: остаётся только аккуратная
+    // экранная рамка, чтобы не искажать общий вид.
+    if (!partMode) return
+    const next = new Map<Mesh, { width: number; color: Color4 }>()
+    const nextOutline = new Map<Mesh, { on: boolean; color: Color3; width: number }>()
+    for (const m of meshes) {
+      next.set(m, {
+        width: m.edgesWidth ?? 0.9,
+        color: (m.edgesColor ?? new Color4(0, 0, 0, 1)) as Color4,
+      })
+      if (!m.edgesRenderer) m.enableEdgesRendering(0.999)
+      m.edgesWidth = 3.4
+      m.edgesColor = new Color4(1, 0.62, 0.08, 1)
+      nextOutline.set(m, {
+        on: m.renderOutline,
+        color: m.outlineColor.clone(),
+        width: m.outlineWidth,
+      })
+      m.renderOutline = true
+      m.outlineColor.set(1, 0.58, 0.08)
+      m.outlineWidth = 0.015
+    }
+    this.edgeSaved = next
+    this.outlineSaved = nextOutline
+  }
+
   private updateSelectionBox(): void {
     const meshes = this.selectionMeshes()
+    this.applySelectionGlow(meshes)
     if (!meshes.length) {
       this.selectionBox.setEnabled(false)
       return
@@ -1100,6 +1873,9 @@ export class BabylonRenderer {
     let min = new Vector3(Infinity, Infinity, Infinity)
     let max = new Vector3(-Infinity, -Infinity, -Infinity)
     for (const m of meshes) {
+      // Без свежей мировой матрицы bounding boxWorld устаревший: объект
+      // уезжал из кадра, а цель камеры оказывалась ниже центра.
+      m.computeWorldMatrix(true)
       const bb = m.getBoundingInfo().boundingBox
       min = Vector3.Minimize(min, bb.minimumWorld)
       max = Vector3.Maximize(max, bb.maximumWorld)
@@ -1120,14 +1896,29 @@ export class BabylonRenderer {
     this.selectionBox.setEnabled(true)
   }
 
-  setQuality(mode: 'realistic' | 'schematic'): void {
+  setQuality(mode: 'realistic' | 'schematic' | 'blueprint'): void {
     this.quality = mode
     const schematic = mode === 'schematic'
-    this.engine.setHardwareScalingLevel(schematic ? 1.25 : 1)
-    this.scene.shadowsEnabled = !schematic
-    this.scene.imageProcessingConfiguration.contrast = schematic ? 1.0 : 1.12
-    this.scene.imageProcessingConfiguration.exposure = schematic ? 1.0 : 1.05
-    this.scene.clearColor = schematic
+    const blueprint = mode === 'blueprint'
+    // Ограничиваем плотность пикселей: iPhone 13 отдаёт DPR 3, и canvas
+    // рисуется в 9 раз больше площади. На глаз разницы с DPR 2 нет, а
+    // заливка — главное узкое место на телефонах (docs/36).
+    let dprCap = Math.max(1, (window.devicePixelRatio || 1) / 2)
+    // Слабый телефон: ещё ниже плотность пикселей — заливка тут дороже всего.
+    try {
+      const coarse = window.matchMedia('(pointer: coarse)').matches
+      const cores = navigator.hardwareConcurrency || 8
+      if (coarse && cores <= 6) dprCap = Math.max(dprCap, 1.5)
+    } catch { /* ignore */ }
+    this.engine.setHardwareScalingLevel(
+      dprCap * (schematic || blueprint ? 1.25 : 1),
+    )
+    this.scene.shadowsEnabled = !schematic && !blueprint
+    this.scene.imageProcessingConfiguration.contrast =
+      blueprint ? 1.0 : schematic ? 1.0 : 1.12
+    this.scene.imageProcessingConfiguration.exposure =
+      blueprint ? 1.0 : schematic ? 1.0 : 1.05
+    this.scene.clearColor = schematic || blueprint
       ? new Color4(0.30, 0.32, 0.35, 1)
       : new Color4(0.055, 0.066, 0.08, 1)
     const hadRoom = !!this.roomSig
@@ -1140,21 +1931,109 @@ export class BabylonRenderer {
     )
     if (hadRoom) this.syncRoom(state.project.room, state.project.materials)
     for (const m of this.parts.values()) {
-      m.receiveShadows = !schematic
-      m.edgesWidth = schematic ? 0.55 : 0.9
+      m.receiveShadows = !schematic && !blueprint
+      m.edgesWidth = schematic || blueprint ? 0.55 : 0.9
     }
     this.applyQualityToMeshes()
   }
 
   private applyQualityToMeshes(): void {
     const schematic = this.quality === 'schematic'
+    const blueprint = this.quality === 'blueprint'
     for (const meta of this.partMeta.values()) {
       const key = `${meta.instanceId}:${meta.part}`
       const mesh = this.parts.get(key)
       if (!mesh) continue
-      mesh.setEnabled(!(schematic && meta.role === 'facade'))
+      // Видимость фасадов решает ui.facades, а не режим отрисовки.
+      mesh.setEnabled(ui.facades || meta.role !== 'facade')
     }
-    for (const m of this.wallDecor) m.setEnabled(!schematic)
+    for (const m of this.wallDecor) m.setEnabled(!schematic && !blueprint)
+    this.markAnimDirty()
+  }
+
+  /** Включить/выключить чертёжный режим камеры (фиксированные ракурсы). */
+  setBlueprint(on: boolean): void {
+    this.blueprint = on
+    if (on) {
+      this.setMode('orbit')
+      this.orbit.detachControl()
+      this.projection = 'ortho'
+      this.applyProjection()
+      this.setBlueprintPivot(this.bpPivot)
+      this.setBlueprintView(this.bpView)
+    } else {
+      this.projection = 'persp'
+      this.orbit.mode = Camera.PERSPECTIVE_CAMERA
+      this.orbit.attachControl(this.canvas, true)
+      this.applyProjection()
+    }
+  }
+
+  setBlueprintView(name: 'iso' | 'front' | 'side' | 'top'): void {
+    this.bpView = name
+    const map = {
+      iso: [(-34 * Math.PI) / 180, (90 - 30) * (Math.PI / 180)],
+      front: [0, Math.PI / 2],
+      side: [(-90 * Math.PI) / 180, Math.PI / 2],
+      top: [0, 0.001],
+    } as const
+    const [alpha, beta] = map[name]
+    this.orbit.alpha = alpha
+    this.orbit.beta = beta
+    this.projection = 'ortho'
+    this.orbit.mode = Camera.ORTHOGRAPHIC_CAMERA
+    this.updateOrtho()
+  }
+
+  setBlueprintPivot(kind: 'room' | 'object'): void {
+    this.bpPivot = kind
+    if (kind === 'object') {
+      const id = [...this.selectedIds][0] ?? this.objectId
+      const root = id ? this.roots.get(id) : null
+      const meshes = root?.getChildMeshes() ?? []
+      if (meshes.length) {
+        let min = new Vector3(Infinity, Infinity, Infinity)
+        let max = new Vector3(-Infinity, -Infinity, -Infinity)
+        for (const m of meshes) {
+          m.computeWorldMatrix(true)
+          const bb = m.getBoundingInfo().boundingBox
+          min = Vector3.Minimize(min, bb.minimumWorld)
+          max = Vector3.Maximize(max, bb.maximumWorld)
+        }
+        const c = min.add(max).scale(0.5)
+        this.orbit.target.copyFrom(c)
+        const size = max.subtract(min)
+        this.orbit.radius = Math.max(1.2, size.length() * 1.4)
+        this.updateOrtho()
+        return
+      }
+      // Нет выбранного объекта — работаем от комнаты, но не падаем.
+      this.bpPivot = 'room'
+    }
+    const b = this.roomBounds
+    this.orbit.target.set(
+      ((b.minX + b.maxX) / 2),
+      Math.min(1.4, (this.roomH * MM) / 2),
+      ((b.minY + b.maxY) / 2),
+    )
+    this.orbit.radius = Math.max(2.4, Math.hypot(
+      b.maxX - b.minX, b.maxY - b.minY, this.roomH * MM,
+    ) * 0.84)
+    this.updateOrtho()
+  }
+
+  blueprintZoom(factor: number): void {
+    if (!this.blueprint) return
+    this.orbit.radius = Math.min(40, Math.max(0.35, this.orbit.radius * factor))
+    this.updateOrtho()
+  }
+
+  blueprintState(): {
+    on: boolean
+    view: 'iso' | 'front' | 'side' | 'top'
+    pivot: 'room' | 'object'
+  } {
+    return { on: this.blueprint, view: this.bpView, pivot: this.bpPivot }
   }
 
   setWallMode(mode: 'cutaway' | 'low'): void {
@@ -1166,20 +2045,403 @@ export class BabylonRenderer {
     this.orbit.beta = (betaDeg * Math.PI) / 180
   }
 
+  /**
+   * Режимы камеры: обзор и прогулка. Прогулка оставлена в коде, но в
+   * интерфейсе отключена (см. docs/39-walk-disabled.md); свободный полёт
+   * удалён — конфигуратору он не нужен.
+   */
   setMode(mode: 'orbit' | 'first' | 'fly'): void {
+    if (mode === this.mode) return
+    const from = this.mode
     this.mode = mode
     if (mode === 'orbit') {
+      this.seated = null
+      // Возвращаемся к обзору вокруг места, где была камера прогулки,
+      // иначе орбита остаётся в старой точке и «прыгает» через комнату.
+      if (from === 'first') {
+        const fwd = this.walk.getDirection(new Vector3(0, 0, 1))
+        const target = this.walk.position.add(fwd.scale(1.8))
+        this.orbit.target.copyFrom(target)
+        this.orbit.radius = Math.max(1.6, Math.min(6, this.orbit.radius))
+        this.applyProjection()
+      }
       this.scene.activeCamera = this.orbit
       this.orbit.attachControl(this.canvas, true)
       this.walk.detachControl()
     } else {
-      const p = this.orbit.position
-      this.walk.position.copyFrom(p)
-      this.walk.position.y = mode === 'first' ? 1.6 : Math.max(0.4, p.y)
-      this.walk.setTarget(this.orbit.target)
+      // Ставим камеру в комнату, а не туда, где случайно оказалась орбита.
+      const b = this.roomBounds
+      const cx = (b.minX + b.maxX) / 2
+      const cz = (b.minY + b.maxY) / 2
+      const eye = mode === 'first' ? this.walkEye : 1.9
+      if (from === 'orbit') {
+        const dir = this.orbit.getDirection(new Vector3(0, 0, 1))
+        dir.y = 0
+        if (dir.lengthSquared() < 1e-8) dir.set(0, 0, -1)
+        dir.normalize()
+        this.walk.position.set(cx, eye, cz)
+        this.walk.setTarget(new Vector3(
+          cx + dir.x * 2.5, eye, cz + dir.z * 2.5,
+        ))
+      } else {
+        this.walk.position.y = eye
+      }
+      this.seated = null
+      this.walkGrounded = mode === 'first'
+      this.walkVy = 0
       this.scene.activeCamera = this.walk
       this.orbit.detachControl()
       this.walk.attachControl(this.canvas, true)
+    }
+  }
+
+  /** Поставить «человека» в точку комнаты (мм) с направлением взгляда. */
+  placeWalker(xmm: number, ymm: number, yawDeg = 0, eye = 1.6): void {
+    this.walkEye = eye
+    this.seated = null
+    this.walkGrounded = true
+    this.walkVy = 0
+    this.walk.position.set(xmm * MM, eye, ymm * MM)
+    const a = (yawDeg * Math.PI) / 180
+    this.walk.setTarget(new Vector3(
+      xmm * MM + Math.sin(a) * 2,
+      eye,
+      ymm * MM + Math.cos(a) * 2,
+    ))
+    this.scene.activeCamera = this.walk
+    this.orbit.detachControl()
+    this.walk.attachControl(this.canvas, true)
+    this.mode = 'first'
+  }
+
+  /** Стена/перегородка мешает пройти в точку (x,z) — мм. */
+  private walkBlocked(xmm: number, ymm: number): boolean {
+    const radius = 220
+    for (const w of this.walls) {
+      if (w.kind !== 'wall') continue
+      // сегмент стены по центру: восстановим из нормали и центра нельзя,
+      // поэтому используем сохранённый сегмент в metadata
+      const seg = (w.mesh.metadata as {
+        seg?: { ax: number; ay: number; bx: number; by: number; t: number }
+      } | undefined)?.seg
+      if (!seg) continue
+      const dx = seg.bx - seg.ax
+      const dy = seg.by - seg.ay
+      const len2 = dx * dx + dy * dy
+      if (len2 < 1) continue
+      const t = Math.max(0, Math.min(1,
+        ((xmm - seg.ax) * dx + (ymm - seg.ay) * dy) / len2))
+      const px = seg.ax + dx * t
+      const py = seg.ay + dy * t
+      if (Math.hypot(xmm - px, ymm - py) > seg.t / 2 + radius) continue
+      // проём: можно пройти
+      const openings = state.project.room.openings ?? []
+      const idx = (w.mesh.metadata as { wallIndex?: number }).wallIndex
+      const along = t * Math.sqrt(len2)
+      const inOpening = openings.some((o) => {
+        if (Number(o.wall) !== idx) return false
+        if (along < Number(o.x) + 60) return false
+        if (along > Number(o.x) + Number(o.w) - 60) return false
+        if (o.kind === 'arch') return true
+        // Закрытая дверь (angle < 30°) — препятствие, открытая — проход.
+        return o.kind === 'door' && (Number(o.angle ?? 80) > 30)
+      })
+      if (!inOpening) return true
+    }
+    return false
+  }
+
+  /**
+   * Границы прогулки: прямоугольник текущей комнаты и препятствия
+   * (мебель/декор) в плане, мм. Пустой rect отключает ограничение.
+   */
+  setWalkArea(
+    rect: { x: number; y: number; w: number; d: number } | null,
+    obstacles: { x: number; y: number; w: number; d: number }[] = [],
+    name = '',
+  ): void {
+    this.walkRect = rect
+    this.walkObstacles = obstacles
+    this.walkRoomName = name
+  }
+
+  /** Имя комнаты под камерой прогулки (для HUD). */
+  currentRoomName(): string {
+    return this.walkRoomName
+  }
+
+  private walkBlockedByRoom(xmm: number, ymm: number): boolean {
+    const r = this.walkRect
+    if (!r) return false
+    const pad = this.walkRadius
+    return (
+      xmm < r.x + pad ||
+      xmm > r.x + r.w - pad ||
+      ymm < r.y + pad ||
+      ymm > r.y + r.d - pad
+    )
+  }
+
+  private walkBlockedByFurniture(xmm: number, ymm: number): boolean {
+    const pad = this.walkRadius
+    for (const o of this.walkObstacles) {
+      if (
+        xmm > o.x - pad && xmm < o.x + o.w + pad &&
+        ymm > o.y - pad && ymm < o.y + o.d + pad
+      ) return true
+    }
+    return false
+  }
+
+  /** Можно ли поставить камеру в точку (мм) — для спавна/подсказок. */
+  canStandAt(xmm: number, ymm: number): boolean {
+    return this.canStand(xmm, ymm)
+  }
+
+  private canStand(xmm: number, ymm: number): boolean {
+    // «Прогулка» — человек: комната, мебель и стены (режим отключён в UI).
+    if (this.mode === 'first') {
+      if (this.walkBlockedByRoom(xmm, ymm)) return false
+      if (this.walkBlockedByFurniture(xmm, ymm)) return false
+    }
+    return !this.walkBlocked(xmm, ymm)
+  }
+
+  /**
+   * Движение камеры от джойстика/клавиш.
+   * forward/strafe/vertical — −1…1, dt — секунды.
+   * В обзоре сдвигается цель орбиты, в прогулке/полёте — сама камера.
+   */
+  moveCamera(
+    forward: number,
+    strafe: number,
+    vertical: number,
+    dt: number,
+    fast = false,
+  ): void {
+    if (this.seated) return
+    const f = Math.max(-1, Math.min(1, forward))
+    const s = Math.max(-1, Math.min(1, strafe))
+    const v = Math.max(-1, Math.min(1, vertical))
+    if (!f && !s && !v) return
+    const speed = (this.mode === 'orbit' ? 1.8 : this.mode === 'fly' ? 3.4 : 2.4) * (fast ? 2.2 : 1)
+    const step = speed * Math.min(0.05, Math.max(0, dt))
+
+    if (this.mode === 'orbit') {
+      const fwd = this.orbit.target.subtract(this.orbit.position)
+      fwd.y = 0
+      if (fwd.lengthSquared() < 1e-8) fwd.set(0, 0, 1)
+      fwd.normalize()
+      // right = up × forward. Для взгляда на −Z это −X, т.е. именно
+      // экранная правая сторона (раньше здесь был обратный вектор).
+      const right = new Vector3(fwd.z, 0, -fwd.x)
+      this.orbit.target.addInPlace(fwd.scale(f * step))
+      this.orbit.target.addInPlace(right.scale(s * step))
+      this.orbit.target.y = Math.min(
+        Math.max(0.05, this.roomH + 2),
+        Math.max(0.05, this.orbit.target.y + v * step),
+      )
+      // Замыкаем вид в комнате: цель орбиты не уезжает за её стены.
+      const wr = this.walkRect
+      if (wr) {
+        const pad = 150 * MM
+        this.orbit.target.x = Math.min(
+          Math.max(wr.x * MM + pad, this.orbit.target.x),
+          (wr.x + wr.w) * MM - pad,
+        )
+        this.orbit.target.z = Math.min(
+          Math.max(wr.y * MM + pad, this.orbit.target.z),
+          (wr.y + wr.d) * MM - pad,
+        )
+      }
+      this.applyProjection()
+      return
+    }
+
+    const fwd = this.walk.getDirection(new Vector3(0, 0, 1))
+    fwd.y = 0
+    if (fwd.lengthSquared() < 1e-8) fwd.set(0, 0, 1)
+    fwd.normalize()
+    const right = this.walk.getDirection(new Vector3(1, 0, 0))
+    right.y = 0
+    if (right.lengthSquared() < 1e-8) right.set(1, 0, 0)
+    right.normalize()
+
+    // Скользим вдоль стены/мебели: сначала полный шаг, затем только по X
+    // или только по Z. Так камера не застревает на углах.
+    const dx = f * step * fwd.x + s * step * right.x
+    const dz = f * step * fwd.z + s * step * right.z
+    const px = this.walk.position.x
+    const pz = this.walk.position.z
+    const free = (mx: number, mz: number) => this.canStand(
+      (px + mx) / MM, (pz + mz) / MM)
+    if (free(dx, dz)) {
+      this.walk.position.x = px + dx
+      this.walk.position.z = pz + dz
+    } else if (Math.abs(dx) > 1e-6 && free(dx, 0)) {
+      this.walk.position.x = px + dx
+    } else if (Math.abs(dz) > 1e-6 && free(0, dz)) {
+      this.walk.position.z = pz + dz
+    }
+    if (this.mode === 'fly') {
+      this.walk.position.y = Math.min(
+        Math.max(0.12, this.roomH + 3),
+        Math.max(0.12, this.walk.position.y + v * step),
+      )
+    } else if (this.walkGrounded) {
+      // Высоту в прогулке ведёт гравитация (прыжок), а не кнопки.
+      this.walk.position.y = this.walkEye
+    }
+  }
+
+  /** Мышиный обзор в прогулке: без зажатой кнопки, сразу за курсором. */
+  look(dx: number, dy: number): void {
+    if (this.seated) {
+      this.walk.rotation.y += dx * 0.0021
+      this.walk.rotation.x = Math.min(1.35, Math.max(-1.35,
+        this.walk.rotation.x + dy * 0.0021))
+      return
+    }
+    if (this.mode !== 'first' && this.mode !== 'fly') return
+    this.walk.rotation.y += dx * 0.0021
+    // rotation.x положительный — взгляд вниз; ограничиваем, чтобы не
+    // переворачивалась камера.
+    this.walk.rotation.x = Math.min(1.35, Math.max(-1.35,
+      this.walk.rotation.x + dy * 0.0021))
+  }
+
+  /** Прыжок в прогулке (пробел). */
+  jump(): void {
+    if (this.mode !== 'first' || this.seated) return
+    if (!this.walkGrounded) return
+    this.walkVy = 3.6
+    this.walkGrounded = false
+  }
+
+  private tickWalk(): void {
+    if (this.mode !== 'first' || this.seated) return
+    if (!this.walkGrounded) {
+      const dt = Math.min(0.05, this.engine.getDeltaTime() / 1000)
+      this.walkVy -= 9.81 * dt
+      this.walk.position.y += this.walkVy * dt
+      if (this.walk.position.y <= this.walkEye) {
+        this.walk.position.y = this.walkEye
+        this.walkVy = 0
+        this.walkGrounded = true
+      }
+    } else if (Math.abs(this.walk.position.y - this.walkEye) > 1e-4) {
+      this.walk.position.y = this.walkEye
+    }
+  }
+
+  /** Сесть/лечь: камера на уровне сидящего/лежащего, взгляд свободный. */
+  sitAt(xmm: number, ymm: number, yawDeg: number, eye: number, id: string, kind: string): void {
+    this.seated = { id, kind, eye }
+    this.walkGrounded = true
+    this.walkVy = 0
+    this.walk.position.set(xmm * MM, eye, ymm * MM)
+    const a = (yawDeg * Math.PI) / 180
+    this.walk.setTarget(new Vector3(
+      xmm * MM + Math.sin(a) * 2,
+      eye + (kind === 'bed' ? 0.32 : 0),
+      ymm * MM + Math.cos(a) * 2,
+    ))
+    // Лёжа смотрим вверх, а не в пол.
+    if (kind === 'bed') this.walk.rotation.x = -0.95
+    this.scene.activeCamera = this.walk
+  }
+
+  standUp(): void {
+    if (!this.seated) return
+    this.seated = null
+    this.walk.position.y = this.walkEye
+    this.walkGrounded = true
+    this.walkVy = 0
+  }
+
+  isSeated(): boolean {
+    return !!this.seated
+  }
+
+  seatedId(): string | null {
+    return this.seated?.id ?? null
+  }
+
+  setWalkFov(deg: number): void {
+    this.walkFov = Math.min(1.35, Math.max(0.65, (deg * Math.PI) / 180))
+    this.walk.fov = this.walkFov
+  }
+
+  walkFovDeg(): number {
+    return Math.round((this.walkFov * 180) / Math.PI)
+  }
+
+  /** Включить/выключить светильник-декор. */
+  toggleLamp(id: string, x: number, y: number, z: number): boolean {
+    let rec = this.lampLights.get(id)
+    if (!rec) {
+      const light = new PointLight(`lamp:${id}`, new Vector3(x * MM, z * MM, y * MM), this.scene)
+      light.intensity = 0.65
+      light.range = 4.5
+      light.diffuse = new Color3(1, 0.86, 0.62)
+      rec = { light, on: false }
+      this.lampLights.set(id, rec)
+    }
+    rec.on = !rec.on
+    rec.light.setEnabled(rec.on)
+    return rec.on
+  }
+
+  isLampOn(id: string): boolean {
+    return this.lampLights.get(id)?.on ?? false
+  }
+
+  /** Кран: тонкая струя воды из излива. */
+  toggleSink(id: string, x: number, y: number, z: number): boolean {
+    const cur = this.sinkStreams.get(id)
+    if (cur) {
+      const on = !cur.isEnabled()
+      cur.setEnabled(on)
+      return on
+    }
+    const m = CreateCylinder(`sink-stream:${id}`, {
+      diameter: 0.012, height: 0.22, tessellation: 10,
+    }, this.scene)
+    m.position.set(x * MM, (z + 60) * MM, y * MM)
+    const mat = this.materialFor('water')
+    mat.diffuseColor = new Color3(0.55, 0.78, 0.92)
+    mat.emissiveColor = new Color3(0.25, 0.42, 0.55)
+    mat.alpha = 0.55
+    mat.transparencyMode = Material.MATERIAL_ALPHABLEND
+    m.material = mat
+    m.isPickable = false
+    this.sinkStreams.set(id, m)
+    return true
+  }
+
+  isSinkOn(id: string): boolean {
+    return this.sinkStreams.get(id)?.isEnabled() ?? false
+  }
+
+  /** Выключатель: общий свет комнаты. */
+  toggleRoomLight(): boolean {
+    this.roomLightOn = !this.roomLightOn
+    if (this.hemi) this.hemi.intensity = this.roomLightOn ? 0.98 : 0.12
+    if (this.dir) this.dir.intensity = this.roomLightOn ? 0.72 : 0.06
+    return this.roomLightOn
+  }
+
+  roomLightIsOn(): boolean {
+    return this.roomLightOn
+  }
+
+  /** Плавно поднять/опустить камеру на заданную высоту (для кнопок «сброс»). */
+  setCameraHeight(y: number): void {
+    if (this.mode === 'orbit') {
+      this.orbit.target.y = Math.max(0.05, y)
+      this.applyProjection()
+    } else {
+      this.walk.position.y = Math.max(0.12, y)
     }
   }
 
@@ -1205,6 +2467,69 @@ export class BabylonRenderer {
     this.orbit.orthoBottom = -r
     this.orbit.orthoLeft = -r * aspect
     this.orbit.orthoRight = r * aspect
+  }
+
+  /** Ось вращения обзора в точку (мм), если меши ещё не собраны. */
+  setOrbitTarget(xmm: number, ymm: number, zmm: number): void {
+    this.setMode('orbit')
+    this.orbit.target.set(xmm * MM, zmm * MM, ymm * MM)
+    this.applyProjection()
+  }
+
+  /** Ось вращения обзора — центр прямоугольной зоны (комнаты). */
+  setPivotArea(a: { x: number; y: number; w: number; d: number }): void {
+    this.setMode('orbit')
+    this.orbit.target.set(
+      (a.x + a.w / 2) * MM,
+      Math.min(1.3, (this.roomH * MM) / 2),
+      (a.y + a.d / 2) * MM,
+    )
+    this.applyProjection()
+  }
+
+  /** Ось вращения обзора — центр комнаты (или выбранной папки). */
+  setPivotRoom(room: Room): void {
+    const pts = outlinePoints(room)
+    const b = pts.reduce(
+      (a, p) => ({
+        minX: Math.min(a.minX, p.x), maxX: Math.max(a.maxX, p.x),
+        minY: Math.min(a.minY, p.y), maxY: Math.max(a.maxY, p.y),
+      }),
+      { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity },
+    )
+    this.setMode('orbit')
+    this.orbit.target.set(
+      ((b.minX + b.maxX) / 2) * MM,
+      Math.min(1.3, room.h / 2000),
+      ((b.minY + b.maxY) / 2) * MM,
+    )
+    this.applyProjection()
+  }
+
+  /** Ось вращения обзора — центр выбранного объекта мебели. */
+  setPivotObject(instanceId: string): boolean {
+    const root = this.roots.get(instanceId)
+    const meshes = root?.getChildMeshes() ?? []
+    if (!meshes.length) return false
+    let min = new Vector3(Infinity, Infinity, Infinity)
+    let max = new Vector3(-Infinity, -Infinity, -Infinity)
+    for (const m of meshes) {
+      m.computeWorldMatrix(true)
+      const bb = m.getBoundingInfo().boundingBox
+      min = Vector3.Minimize(min, bb.minimumWorld)
+      max = Vector3.Maximize(max, bb.maximumWorld)
+    }
+    if (!Number.isFinite(min.x)) return false
+    this.bpPivot = 'object'
+    this.setMode('orbit')
+    this.orbit.target.copyFrom(min.add(max).scale(0.5))
+    if (this.blueprint) {
+      const size = max.subtract(min)
+      this.orbit.radius = Math.max(1.2, size.length() * 1.45)
+      this.updateOrtho()
+    }
+    this.applyProjection()
+    return true
   }
 
   center(room: Room): void {
@@ -1271,12 +2596,30 @@ export class BabylonRenderer {
     const cy = (minY + maxY) / 2
     const diag = Math.hypot(maxX - minX, maxY - minY, maxZ)
     this.orbit.target.set(cx * MM, (maxZ / 2) * MM, cy * MM)
-    this.orbit.radius = Math.max(2, diag * MM * 0.85)
+    // Узкий экран телефона: горизонтальный угол меньше вертикального,
+    // поэтому комнату считаем по обеим осям, иначе камера «внутри» сцены.
+    const wpx = this.engine.getRenderWidth() || 1
+    const hpx = this.engine.getRenderHeight() || 1
+    const aspect = wpx / Math.max(1, hpx)
+    const halfV = Math.tan(this.orbit.fov / 2)
+    const halfH = halfV * Math.max(0.35, aspect)
+    // diag в миллиметрах — радиус в метрах.
+    const diagM = diag * MM
+    const needed = Math.max(diagM / 2 / halfV, diagM / 2 / halfH) * 0.92
+    // Не уезжаем за габарит комнаты: снаружи стены закрывают вид (серый
+    // экран). На узком экране лучше показать часть комнаты изнутри, чем
+    // внешнюю стену; пользователь может отъехать колесом.
+    const radius = Math.min(needed, diagM * 1.7)
+    this.orbit.radius = Math.max(2, radius)
     this.applyProjection()
   }
 
   /** Объектный режим: камера смотрит анфас, вращается вокруг объекта. */
   enterObjectMode(instanceId: string, leftFraction = 0.38): void {
+    // В объектном режиме камера обязана вращаться, даже если пришли из
+    // «Чертежа» с зафиксированной ортокамерой. Стиль не меняем.
+    this.objectBp = this.blueprint
+    if (this.blueprint) this.setBlueprint(false)
     const root = this.roots.get(instanceId)
     if (!root) return
     const meshes = root.getChildMeshes()
@@ -1294,6 +2637,9 @@ export class BabylonRenderer {
     }
     this.setMode('orbit')
     this.objectId = instanceId
+    // В объектном режиме можно подойти ближе, но не входить в деталь.
+    this.orbit.lowerRadiusLimit = 0.12
+    this.orbit.minZ = 0.01
     // В режиме детали комната и соседние модули только мешают: камера
     // подходит вплотную, и обратные стороны стен дают чёрные плоскости.
     this.roomRoot.setEnabled(false)
@@ -1304,6 +2650,9 @@ export class BabylonRenderer {
     let min = new Vector3(Infinity, Infinity, Infinity)
     let max = new Vector3(-Infinity, -Infinity, -Infinity)
     for (const m of meshes) {
+      // Без свежей мировой матрицы bounding boxWorld устаревший: объект
+      // уезжал из кадра, а цель камеры оказывалась ниже центра.
+      m.computeWorldMatrix(true)
       const bb = m.getBoundingInfo().boundingBox
       min = Vector3.Minimize(min, bb.minimumWorld)
       max = Vector3.Maximize(max, bb.maximumWorld)
@@ -1312,27 +2661,97 @@ export class BabylonRenderer {
     const center = min.add(max).scale(0.5)
     const size = max.subtract(min)
     const wm = root.getWorldMatrix()
-    const right = Vector3.TransformNormal(new Vector3(1, 0, 0), wm).normalize()
-    const up = Vector3.TransformNormal(new Vector3(0, 1, 0), wm).normalize()
-    const front = Vector3.TransformNormal(new Vector3(0, 0, -1), wm).normalize()
-    const maxDim = Math.max(size.x, size.y, size.z, 0.2)
+    // Фасад ищем по створкам: у повёрнутых модулей локальная ось не совпадает
+    // с реальной стороной фасада, и камера оказывалась за спиной шкафа.
+    const facadeSum = new Vector3(0, 0, 0)
+    let facadeN = 0
+    for (const m of meshes) {
+      const part = (m.metadata as { part?: number } | null)?.part
+      const meta = part != null ? this.partMeta.get(`${instanceId}:${part}`) : null
+      if (!meta || meta.role !== 'facade') continue
+      m.computeWorldMatrix(true)
+      facadeSum.addInPlace(m.getBoundingInfo().boundingBox.centerWorld)
+      facadeN++
+    }
+    let front = Vector3.TransformNormal(new Vector3(0, 0, -1), wm).normalize()
+    if (facadeN) {
+      const dir = facadeSum.scale(1 / facadeN).subtract(center)
+      dir.y = 0
+      if (dir.lengthSquared() > 1e-6) front = dir.normalize()
+    }
+    // Экранные оси считаем от направления камеры, а не от локальных осей
+    // модуля: у повёрнутых на 180° модулей локальный +X смотрит в другую
+    // сторону, и объект уезжал под панель конструктора.
+    const worldUp = new Vector3(0, 1, 0)
+    const right = Vector3.Cross(worldUp, front).normalize()
+    const up = Vector3.Cross(front, right).normalize()
+    // Объект должен занимать ~86% свободной (левой) области. Считаем
+    // расстояние по ширине и высоте отдельно и добавляем глубину, чтобы
+    // передняя грань не оказалась за near-плоскостью.
+    this.projection = 'persp'
+    this.applyProjection()
     const aspect = this.engine.getRenderWidth() / Math.max(1, this.engine.getRenderHeight())
     const vfov = this.orbit.fov
     const hfov = 2 * Math.atan(Math.tan(vfov / 2) * aspect)
-    const left = Math.min(1, Math.max(0.2, leftFraction))
+    const left = Math.min(0.95, Math.max(0.2, leftFraction))
     const availHfov = 2 * Math.atan(Math.tan(hfov / 2) * left)
+    const fill = 0.86
     const dist = Math.max(
-      (size.x / 2) / Math.tan(availHfov / 2),
-      (size.y / 2) / Math.tan(vfov / 2),
+      (size.x / 2) / (Math.tan(availHfov / 2) * fill),
+      (size.y / 2) / (Math.tan(vfov / 2) * fill),
       0.3,
-    ) * 1.32 + 0.05
-    this.orbit.target.copyFrom(center)
-    this.orbit.setPosition(
-      center.add(front.scale(dist)).add(up.scale(maxDim * 0.03)),
-    )
+    ) + size.z * 0.5 + 0.06
+
+    // Сдвигаем цель так, чтобы центр объекта встал в центр свободной
+    // (левой) части кадра. Сдвиг считаем по половине ширины кадра на
+    // расстоянии dist; коэффициент 0.85 подобран замером (перспектива
+    // сдвигает чуть меньше расчётного).
+    // Канвас уже сужен до свободной части (см. setCanvasDock), поэтому
+    // цель — ровно центр объекта: вращение идёт вокруг него.
+    const target = center.clone()
+    this.orbit.targetScreenOffset.set(0, 0)
+    this.orbit.target.copyFrom(target)
+    this.orbit.setPosition(target.add(front.scale(dist)))
     this.orbit.radius = dist
-    const shift = Math.max(0, 0.5 - left / 2) * 2 * dist * Math.tan(hfov / 2)
-    this.orbit.targetScreenOffset.set(-shift, 0)
+    this.applyProjection()
+  }
+
+  /** Зум в объектном режиме (кнопки на канвасе и колесо). */
+  zoomBy(factor: number): void {
+    const lo = this.orbit.lowerRadiusLimit ?? 0.12
+    const hi = this.orbit.upperRadiusLimit ?? 40
+    this.orbit.radius = Math.min(hi, Math.max(lo, this.orbit.radius * factor))
+  }
+
+  /** Вписать текущий объект в свободную часть кадра. */
+  fitObject(): void {
+    if (!this.objectId) return
+    this.enterObjectMode(this.objectId, 1)
+  }
+
+  /** Приблизить конкретную деталь (длинная боковина и т.п.). */
+  focusPart(instanceId: string, part: number): void {
+    const mesh = this.parts.get(`${instanceId}:${part}`)
+    if (!mesh) return
+    if (this.objectId !== instanceId) this.enterObjectMode(instanceId, 1)
+    mesh.computeWorldMatrix(true)
+    const bb = mesh.getBoundingInfo().boundingBox
+    const center = bb.centerWorld.clone()
+    const radius = bb.maximumWorld.subtract(bb.minimumWorld).length() / 2
+    const rw = this.engine.getRenderWidth() || 1
+    const rh = this.engine.getRenderHeight() || 1
+    const vf = this.orbit.fov
+    const hf = 2 * Math.atan(Math.tan(vf / 2) * (rw / Math.max(1, rh)))
+    const dist = Math.max(
+      this.orbit.lowerRadiusLimit ?? 0.12,
+      radius / Math.sin(Math.min(vf, hf) / 2) * 1.08,
+    )
+    const dir = this.orbit.position.subtract(this.orbit.target)
+    if (dir.lengthSquared() < 1e-6) dir.set(0, 0, 1)
+    dir.normalize()
+    this.orbit.target.copyFrom(center)
+    this.orbit.setPosition(center.add(dir.scale(dist)))
+    this.orbit.radius = dist
     this.applyProjection()
   }
 
@@ -1347,11 +2766,19 @@ export class BabylonRenderer {
     this.orbit.radius = c.radius
     this.orbit.target.set(c.target[0], c.target[1], c.target[2])
     this.orbit.targetScreenOffset.set(c.offset[0], c.offset[1])
+    this.orbit.lowerRadiusLimit = 0.55
+    this.orbit.minZ = 0.05
     this.projection = c.projection
     this.applyProjection()
     this.setMode(c.mode)
+    if (this.objectBp) {
+      this.objectBp = false
+      this.setBlueprint(true)
+    }
     this.savedCamera = null
     this.objectId = null
+    this.applyInstanceVisibility()
+    this.applyPropVisibility()
   }
 
   /** Показать модуль целиком с выбранного направления (по умолчанию — анфас). */
@@ -1359,14 +2786,53 @@ export class BabylonRenderer {
     instanceId: string,
     view: 'front' | 'iso' | 'side' | 'top' = 'front',
     leftFraction = 1,
+    bottomFraction = 1,
   ): void {
     const root = this.roots.get(instanceId)
     if (!root) return
+    this.frameNode(root, view, leftFraction, bottomFraction)
+  }
+
+  /** Выделить декор рамкой (без движения камеры). */
+  setSelectedProp(propId: string | null): void {
+    this.selectedIds = new Set()
+    this.selectedWall = null
+    this.selectedItem = null
+    this.selectedOpening = null
+    this.selectedProp = propId
+      ? this.scene.getTransformNodeByName(`prop:${propId}`)
+      : null
+    this.updateSelectionBox()
+  }
+
+  /** Показать декор в 3D (ошибки расстановки по декоративным объектам). */
+  focusProp(propId: string, view: 'front' | 'iso' | 'side' | 'top' = 'iso'): void {
+    const root = this.scene.getTransformNodeByName(`prop:${propId}`)
+    if (!root) return
+    this.selectedIds = new Set()
+    this.selectedWall = null
+    this.selectedItem = null
+    this.selectedOpening = null
+    this.selectedProp = root
+    this.updateSelectionBox()
+    this.frameNode(root, view, 1)
+  }
+
+  /** Кадрирование произвольной ветки (модуль, декор). */
+  private frameNode(
+    root: TransformNode,
+    view: 'front' | 'iso' | 'side' | 'top',
+    leftFraction: number,
+    bottomFraction = 1,
+  ): void {
     const meshes = root.getChildMeshes()
     if (!meshes.length) return
     let min = new Vector3(Infinity, Infinity, Infinity)
     let max = new Vector3(-Infinity, -Infinity, -Infinity)
     for (const m of meshes) {
+      // Без свежей мировой матрицы bounding boxWorld устаревший: объект
+      // уезжал из кадра, а цель камеры оказывалась ниже центра.
+      m.computeWorldMatrix(true)
       const bb = m.getBoundingInfo().boundingBox
       min = Vector3.Minimize(min, bb.minimumWorld)
       max = Vector3.Maximize(max, bb.maximumWorld)
@@ -1375,9 +2841,32 @@ export class BabylonRenderer {
     const center = min.add(max).scale(0.5)
     const size = max.subtract(min)
     const wm = root.getWorldMatrix()
-    const right = Vector3.TransformNormal(new Vector3(1, 0, 0), wm).normalize()
-    const up = Vector3.TransformNormal(new Vector3(0, 1, 0), wm).normalize()
-    const front = Vector3.TransformNormal(new Vector3(0, 0, -1), wm).normalize()
+    // Фасад ищем по створкам: у повёрнутых модулей локальная ось не совпадает
+    // с реальной стороной фасада, и камера оказывалась за спиной шкафа.
+    const facadeSum = new Vector3(0, 0, 0)
+    let facadeN = 0
+    for (const m of meshes) {
+      const part = (m.metadata as { part?: number } | null)?.part
+      const instId = [...this.roots.entries()]
+        .find(([, r]) => r === root)?.[0] ?? ''
+      const meta = part != null ? this.partMeta.get(`${instId}:${part}`) : null
+      if (!meta || meta.role !== 'facade') continue
+      m.computeWorldMatrix(true)
+      facadeSum.addInPlace(m.getBoundingInfo().boundingBox.centerWorld)
+      facadeN++
+    }
+    let front = Vector3.TransformNormal(new Vector3(0, 0, -1), wm).normalize()
+    if (facadeN) {
+      const dir = facadeSum.scale(1 / facadeN).subtract(center)
+      dir.y = 0
+      if (dir.lengthSquared() > 1e-6) front = dir.normalize()
+    }
+    // Экранные оси считаем от направления камеры, а не от локальных осей
+    // модуля: у повёрнутых на 180° модулей локальный +X смотрит в другую
+    // сторону, и объект уезжал под панель конструктора.
+    const worldUp = new Vector3(0, 1, 0)
+    const right = Vector3.Cross(worldUp, front).normalize()
+    const up = Vector3.Cross(front, right).normalize()
     const maxDim = Math.max(size.x, size.y, size.z, 0.2)
     const aspect = this.engine.getRenderWidth() / Math.max(1, this.engine.getRenderHeight())
     const vfov = this.orbit.fov
@@ -1406,8 +2895,14 @@ export class BabylonRenderer {
 
     // сдвигаем цель вправо, чтобы объект встал в левую видимую часть
     const screenRight = view === 'side' ? front : right
-    const shift = Math.max(0, 0.5 - left / 2) * 2 * dist * Math.tan(hfov / 2) * 1.35
-    const target = center.add(screenRight.scale(shift))
+    const shift = 0 // DEBUG: без сдвига
+    // Нижняя панель/шторка закрывает часть экрана: поднимаем объект в
+    // свободную область, смещая цель вниз по мировой «вверх».
+    const bottom = Math.min(1, Math.max(0.3, bottomFraction))
+    const shiftY = Math.max(0, 0.5 - bottom / 2) * 2 * dist * Math.tan(vfov / 2)
+    const target = center
+      .add(screenRight.scale(shift))
+      .subtract(up.scale(shiftY))
 
     this.orbit.targetScreenOffset.set(0, 0)
     this.orbit.target.copyFrom(target)
@@ -1438,12 +2933,13 @@ export class BabylonRenderer {
   }
 
   pick(x: number, y: number): {
-    type: 'instance' | 'wall' | 'opening' | 'wallitem'
+    type: 'instance' | 'wall' | 'opening' | 'wallitem' | 'prop'
     instanceId?: string
     part?: number
     wallIndex?: number
     openingId?: string
     itemId?: string
+    propId?: string
   } | null {
     const p = this.scene.pick(
       x, y,
@@ -1460,12 +2956,43 @@ export class BabylonRenderer {
         part: md.part as number | undefined,
       }
     }
+    if (md.propId) {
+      return { type: 'prop', propId: String(md.propId) }
+    }
     return md as unknown as {
-      type: 'wall' | 'opening' | 'wallitem'
+      type: 'wall' | 'opening' | 'wallitem' | 'prop'
       wallIndex?: number
       openingId?: string
       itemId?: string
     }
+  }
+
+  /** Обновить контуры выбранного (после пересборки мешей). */
+  refreshSelectionGlow(): void {
+    this.applySelectionGlow(this.selectionMeshes())
+  }
+
+  /** Экранная рамка вокруг выбранного объекта/детали (CSS px). */
+  selectionScreenBounds(): { x: number; y: number; w: number; h: number } | null {
+    const meshes = this.selectionMeshes()
+    if (!meshes.length) return null
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    for (const m of meshes) {
+      m.computeWorldMatrix(true)
+      const bb = m.getBoundingInfo().boundingBox
+      for (const c of bb.vectorsWorld) {
+        const p = this.project(c.x / MM, c.z / MM, c.y / MM)
+        minX = Math.min(minX, p.x)
+        minY = Math.min(minY, p.y)
+        maxX = Math.max(maxX, p.x)
+        maxY = Math.max(maxY, p.y)
+      }
+    }
+    if (!Number.isFinite(minX)) return null
+    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
   }
 
   project(x: number, y: number, z: number): { x: number; y: number } {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AssemblyOperation, EdgeSide } from '../api'
 
 const props = withDefaults(defineProps<{
@@ -18,7 +18,213 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{ (e: 'pick', id: string): void }>()
 
-const PAD = 34
+const PAD = 48
+
+// --- зум и панорама схемы ------------------------------------------------
+// Длинные детали (боковина пенала 2196 мм) в масштабе «вся деталь» дают
+// дырки по 1–2 px: кликнуть невозможно. Зум меняет viewBox вокруг курсора.
+const svgEl = ref<SVGSVGElement | null>(null)
+const view = ref({ x: -PAD, y: -PAD, w: 0, h: 0 })
+const boxSize = ref({ w: 0, h: 0 })
+let ro: ResizeObserver | null = null
+/** Экранных пикселей на миллиметр при текущем масштабе. */
+const pxScale = computed(() => {
+  const { w, h } = boxSize.value
+  const v = view.value
+  if (!w || !h || !v.w) return 1
+  return Math.min(w / v.w, h / v.h)
+})
+/** Подписи размеров не мельче 10 px на экране при любом масштабе. */
+const labelFont = computed(() => Math.max(18, 10 / pxScale.value))
+const fitW = () => props.w + PAD * 2
+const MIN_W = () => Math.max(80, fitW() / 14)
+const MAX_W = () => fitW() * 1.15
+const zoomed = computed(() => view.value.w < fitW() - 0.5)
+
+function fit(): void {
+  view.value = { x: -PAD, y: -PAD, w: fitW(), h: props.h + PAD * 2 }
+}
+
+/** Не даём утащить деталь из кадра: центр вида остаётся над деталью. */
+function clampView(v: { x: number; y: number; w: number; h: number }) {
+  const cx = Math.min(props.w + PAD, Math.max(-PAD, v.x + v.w / 2))
+  const cy = Math.min(props.h + PAD, Math.max(-PAD, v.y + v.h / 2))
+  return { ...v, x: cx - v.w / 2, y: cy - v.h / 2 }
+}
+
+function svgPoint(clientX: number, clientY: number): { x: number; y: number } {
+  const el = svgEl.value
+  if (!el) return { x: 0, y: 0 }
+  const rect = el.getBoundingClientRect()
+  const v = view.value
+  // viewBox вписан в контейнер с сохранением пропорций (meet)
+  const scale = Math.min(rect.width / v.w, rect.height / v.h)
+  const offX = (rect.width - v.w * scale) / 2
+  const offY = (rect.height - v.h * scale) / 2
+  return {
+    x: v.x + (clientX - rect.left - offX) / scale,
+    y: v.y + (clientY - rect.top - offY) / scale,
+  }
+}
+
+function zoomAt(clientX: number, clientY: number, factor: number): void {
+  const v = view.value
+  const p = svgPoint(clientX, clientY)
+  const minW = MIN_W()
+  const maxW = MAX_W()
+  const nextW = Math.min(maxW, Math.max(minW, v.w * factor))
+  const k = nextW / v.w
+  view.value = clampView({
+    x: p.x - (p.x - v.x) * k,
+    y: p.y - (p.y - v.y) * k,
+    w: nextW,
+    h: v.h * k,
+  })
+}
+
+/** Обратное к svgPoint: точка детали → координаты на экране. */
+function clientPoint(x: number, y: number): { x: number; y: number } | null {
+  const el = svgEl.value
+  if (!el) return null
+  const rect = el.getBoundingClientRect()
+  const v = view.value
+  const scale = Math.min(rect.width / v.w, rect.height / v.h)
+  const offX = (rect.width - v.w * scale) / 2
+  const offY = (rect.height - v.h * scale) / 2
+  return {
+    x: rect.left + offX + (x - v.x) * scale,
+    y: rect.top + offY + (y - v.y) * scale,
+  }
+}
+
+/** Ближайшее к центру кадра отверстие — цель для кнопки «＋». */
+function nearestHole() {
+  const v = view.value
+  const cx = v.x + v.w / 2
+  const cy = v.y + v.h / 2
+  let best: (AssemblyOperation & { sy: number }) | null = null
+  let dist = Infinity
+  for (const h of holes.value) {
+    const d = (h.x - cx) ** 2 + (h.sy - cy) ** 2
+    if (d < dist) {
+      dist = d
+      best = h
+    }
+  }
+  return best
+}
+
+function zoomCenter(factor: number): void {
+  const el = svgEl.value
+  if (!el) return
+  // Приближаемся к отверстию: выбранному, под курсором или ближайшему
+  // к центру. Иначе в кадр попадает пустая середина длинной детали.
+  const hole = factor < 1
+    ? selectedHole.value
+      ?? (hover.value?.kind === 'hole'
+        ? holes.value.find((h) => h.id === hover.value?.op.id) ?? null
+        : null)
+      ?? nearestHole()
+    : null
+  if (hole) {
+    const c = clientPoint(hole.x, hole.sy)
+    if (c) {
+      zoomAt(c.x, c.y, factor)
+      const v = view.value
+      view.value = clampView({ ...v, x: hole.x - v.w / 2, y: hole.sy - v.h / 2 })
+      return
+    }
+  }
+  const r = el.getBoundingClientRect()
+  zoomAt(r.left + r.width / 2, r.top + r.height / 2, factor)
+}
+
+function onWheel(e: WheelEvent): void {
+  const d = Math.max(-300, Math.min(300, e.deltaY))
+  zoomAt(e.clientX, e.clientY, Math.max(0.6, Math.min(1.7, Math.exp(d * 0.0012))))
+}
+
+// панорама одним пальцем/мышью; клик по дырке не ломаем (порог 4 px)
+let pan: { id: number; x: number; y: number; moved: number; captured?: boolean } | null = null
+let pinch: { dist: number } | null = null
+// после перетаскивания клик по дырке не должен срабатывать
+let suppressClick = 0
+
+function onDown(e: PointerEvent): void {
+  if (e.pointerType === 'touch' && e.isPrimary === false) return
+  if (!zoomed.value) return
+  // Захват включаем только когда началось перетаскивание: иначе клик
+  // по отверстию уходит в SVG и координаты не показать.
+  pan = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: 0 }
+}
+
+function onMove(e: PointerEvent): void {
+  if (!pan || pan.id !== e.pointerId) return
+  const el = svgEl.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  const v = view.value
+  const scale = Math.min(rect.width / v.w, rect.height / v.h)
+  const dx = (e.clientX - pan.x) / scale
+  const dy = (e.clientY - pan.y) / scale
+  pan.x = e.clientX
+  pan.y = e.clientY
+  pan.moved += Math.abs(dx) + Math.abs(dy)
+  if (pan.moved > 4 && !pan.captured) {
+    pan.captured = true
+    ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
+  }
+  view.value = clampView({ ...v, x: v.x - dx, y: v.y - dy })
+}
+
+function onUp(e: PointerEvent): void {
+  if (pan && pan.id === e.pointerId) {
+    if (pan.moved > 4) suppressClick = Date.now() + 250
+    pan = null
+  }
+  pinch = null
+  void e
+}
+
+/** Пинч двумя пальцами. */
+function onTouchMove(e: TouchEvent): void {
+  if (e.touches.length !== 2) {
+    pinch = null
+    // в масштабе «вся деталь» не мешаем обычной прокрутке страницы
+    if (!zoomed.value) return
+    e.preventDefault()
+    return
+  }
+  e.preventDefault()
+  pan = null
+  // после пинча случайный клик по отверстию не нужен
+  suppressClick = Date.now() + 350
+  const [a, b] = [e.touches[0], e.touches[1]]
+  const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
+  if (pinch) {
+    const factor = pinch.dist / Math.max(1, dist)
+    zoomAt((a.clientX + b.clientX) / 2, (a.clientY + b.clientY) / 2, factor)
+  }
+  pinch = { dist }
+}
+
+function measureBox(): void {
+  const el = svgEl.value
+  if (!el) return
+  const r = el.getBoundingClientRect()
+  boxSize.value = { w: r.width, h: r.height }
+}
+
+onMounted(() => {
+  fit()
+  measureBox()
+  if (typeof ResizeObserver !== 'undefined') {
+    ro = new ResizeObserver(measureBox)
+    if (svgEl.value) ro.observe(svgEl.value)
+  }
+})
+watch(() => [props.part, props.w, props.h], fit)
+
 
 const BIG_KINDS = new Set([
   'shelf_pin', 'fastener_face', 'hinge_cup', 'handle', 'slide_mount',
@@ -30,8 +236,10 @@ const holes = computed(() =>
     ...o,
     // координаты присадки: y от низа детали, SVG — сверху
     sy: props.h - o.y,
-    // используемые (реальные) отверстия — заметнее технической сетки
-    r: Math.max(BIG_KINDS.has(o.kind) ? 10 : 7, o.dia / 2),
+    // используемые (реальные) отверстия — заметнее технической сетки.
+    // На экране кружок не меньше ~7 px: иначе в масштабе всей длинной
+    // детали по нему не попасть, а координаты не посмотреть.
+    r: Math.max(BIG_KINDS.has(o.kind) ? 10 : 7, o.dia / 2, 3.4 / pxScale.value),
   })),
 )
 
@@ -92,6 +300,16 @@ const hover = ref<{
   op: AssemblyOperation & { edge_side?: string }
   side?: string
 } | null>(null)
+const pinned = ref(false)
+let pinTimer = 0
+
+const tipStyle = computed(() => {
+  if (!hover.value) return {}
+  const w = Math.min(300, Math.max(160, window.innerWidth - 16))
+  const left = Math.max(8, Math.min(hover.value.x + 14, window.innerWidth - w - 8))
+  const top = Math.max(8, Math.min(hover.value.y + 14, window.innerHeight - 190))
+  return { left: `${left}px`, top: `${top}px`, maxWidth: `${w}px` }
+})
 
 function showTip(
   e: MouseEvent,
@@ -106,7 +324,23 @@ function moveTip(e: MouseEvent): void {
   hover.value = { ...hover.value, x: e.clientX, y: e.clientY }
 }
 function hideTip(): void {
+  if (pinned.value) return
   hover.value = null
+}
+onBeforeUnmount(() => {
+  window.clearTimeout(pinTimer)
+  ro?.disconnect()
+})
+function pickHole(e: MouseEvent, op: AssemblyOperation): void {
+  if (Date.now() < suppressClick) return
+  emit('pick', op.id)
+  pinned.value = true
+  hover.value = { x: e.clientX, y: e.clientY, kind: 'hole', op }
+  window.clearTimeout(pinTimer)
+  pinTimer = window.setTimeout(() => {
+    pinned.value = false
+    hover.value = null
+  }, 2600)
 }
 const HOVER_KIND: Record<string, string> = {
   fastener_face: 'Крепёж: пласть',
@@ -180,12 +414,26 @@ const frontLabel = computed(() => {
 
 <template>
   <figure class="dmap">
+    <div class="dmap__zoom" role="group" aria-label="Масштаб схемы">
+      <button class="dmap__zoom-btn" title="Отдалить" @click="zoomCenter(1.5)">−</button>
+      <button class="dmap__zoom-btn" title="Вся деталь" @click="fit()">⌂</button>
+      <button class="dmap__zoom-btn" title="Приблизить" @click="zoomCenter(0.66)">＋</button>
+    </div>
     <svg
       class="dmap__svg"
-      :viewBox="`${-PAD} ${-PAD} ${w + PAD * 2} ${h + PAD * 2}`"
+      :class="{ 'dmap__svg--pan': zoomed }"
+      :viewBox="`${view.x} ${view.y} ${view.w} ${view.h}`"
       :style="{ aspectRatio: `${w + PAD * 2} / ${h + PAD * 2}` }"
       role="img"
-      :aria-label="`Карта присадки: ${part}`"
+      :aria-label="`Карта присадки: ${part} (колесо — зум, перетаскивание — панорама)`"
+      ref="svgEl"
+      @wheel.prevent="onWheel"
+      @pointerdown="onDown"
+      @pointermove="onMove"
+      @pointerup="onUp"
+      @pointercancel="onUp"
+      @touchmove="onTouchMove"
+      @dblclick.prevent="fit()"
     >
       <rect
         :x="0" :y="0" :width="w" :height="h" rx="2"
@@ -220,7 +468,7 @@ const frontLabel = computed(() => {
           :stroke-dasharray="o.requires_pattern && o.id !== highlight ? '2 1.6' : undefined"
           opacity="0.92"
           :style="interactive ? 'cursor:pointer' : ''"
-          @click="emit('pick', o.id)"
+          @click="pickHole($event, o)"
           @mouseenter="showTip($event, 'hole', o)"
           @mousemove="moveTip"
           @mouseleave="hideTip"
@@ -232,25 +480,25 @@ const frontLabel = computed(() => {
       <g v-if="selectedHole" class="dmap__dims">
         <line
           :x1="0" :y1="selectedHole.sy" :x2="selectedHole.x" :y2="selectedHole.sy"
-          stroke="#e8b25a" stroke-width="0.8" stroke-dasharray="3 2"
+          stroke="#e8b25a" stroke-width="2" stroke-dasharray="4 3"
         />
         <line
           :x1="selectedHole.x" :y1="h" :x2="selectedHole.x" :y2="selectedHole.sy"
-          stroke="#e8b25a" stroke-width="0.8" stroke-dasharray="3 2"
+          stroke="#e8b25a" stroke-width="2" stroke-dasharray="4 3"
         />
         <line
           :x1="selectedHole.x" :y1="selectedHole.sy" :x2="w" :y2="selectedHole.sy"
-          stroke="rgba(127,180,223,0.8)" stroke-width="0.7" stroke-dasharray="2 3"
+          stroke="rgba(127,180,223,0.9)" stroke-width="1.8" stroke-dasharray="3 3"
         />
         <line
           :x1="selectedHole.x" :y1="selectedHole.sy" :x2="selectedHole.x" :y2="0"
-          stroke="rgba(127,180,223,0.8)" stroke-width="0.7" stroke-dasharray="2 3"
+          stroke="rgba(127,180,223,0.9)" stroke-width="1.8" stroke-dasharray="3 3"
         />
       </g>
 
       <g v-for="(o, i) in edgeOps" :key="`eo${i}`">
         <circle
-          :cx="o.mx" :cy="o.my" r="11"
+          :cx="o.mx" :cy="o.my" :r="Math.max(11, 5 / pxScale)"
           fill="rgba(10,13,16,0.55)" stroke="#e8b25a"
           stroke-width="1.6" stroke-dasharray="3 2"
           style="cursor:help"
@@ -264,10 +512,29 @@ const frontLabel = computed(() => {
       <text
         v-if="frontLabel" :x="w / 2" :y="h + 25"
         text-anchor="middle" class="dmap__front"
+        :style="{ fontSize: `${labelFont}px` }"
       >{{ frontLabel }}</text>
-      <text :x="w / 2" :y="-14" text-anchor="middle" class="dmap__dim">{{ w }} мм</text>
-      <text :x="-16" :y="h / 2" text-anchor="middle" class="dmap__dim"
-        :transform="`rotate(-90 -16 ${h / 2})`">{{ h }} мм</text>
+      <g v-if="!zoomed" class="dmap__size" aria-hidden="true">
+        <line :x1="0" :y1="-26" :x2="w" :y2="-26"
+          stroke="#e8b25a" stroke-width="3" stroke-linecap="round" />
+        <line :x1="0" :y1="-32" :x2="0" :y2="-20"
+          stroke="#e8b25a" stroke-width="3" stroke-linecap="round" />
+        <line :x1="w" :y1="-32" :x2="w" :y2="-20"
+          stroke="#e8b25a" stroke-width="3" stroke-linecap="round" />
+        <line :x1="-30" :y1="0" :x2="-30" :y2="h"
+          stroke="#e8b25a" stroke-width="3" stroke-linecap="round" />
+        <line :x1="-36" :y1="0" :x2="-24" :y2="0"
+          stroke="#e8b25a" stroke-width="3" stroke-linecap="round" />
+        <line :x1="-36" :y1="h" :x2="-24" :y2="h"
+          stroke="#e8b25a" stroke-width="3" stroke-linecap="round" />
+      </g>
+      <template v-if="!zoomed">
+        <text :x="w / 2" :y="-14" text-anchor="middle" class="dmap__dim"
+          :style="{ fontSize: `${labelFont}px` }">{{ w }} мм</text>
+        <text :x="-16" :y="h / 2" text-anchor="middle" class="dmap__dim"
+          :transform="`rotate(-90 -16 ${h / 2})`"
+          :style="{ fontSize: `${labelFont}px` }">{{ h }} мм</text>
+      </template>
     </svg>
 
     <div v-if="selectedHole" class="dmap__measure">
@@ -288,26 +555,31 @@ const frontLabel = computed(() => {
       <span v-if="edgeOps.length" class="dmap__key">
         <i class="dmap__key--hole"></i>◌ отверстие в торце (сверлить с торца)
       </span>
+      <span class="dmap__key dmap__key--hint">
+        колесо / пинч / ＋ — приблизить, тянуть — сдвинуть
+      </span>
     </figcaption>
 
-    <div
-      v-if="hover"
-      class="dmap__tip"
-      :style="{ left: `${hover.x + 14}px`, top: `${hover.y + 14}px` }"
-    >
-      <b>{{ HOVER_KIND[hover.op.kind] || hover.op.kind }}</b>
-      <span>{{ hover.op.hardware }}</span>
-      <span v-if="hover.op.dia">
-        Ø{{ hover.op.dia }} × {{ hover.op.depth }} мм
-      </span>
-      <span v-if="hover.kind === 'edge'">
-        Сверлить с торца: {{ hover.side }} · x{{ hover.op.x }} y{{ hover.op.y }}
-      </span>
-      <span v-else>
-        пласть: x{{ hover.op.x }} · y{{ hover.op.y }}
-        <template v-if="hover.op.face"> · {{ hover.op.face }}</template>
-      </span>
-      <span v-if="hover.op.note" class="dmap__tip-note">{{ hover.op.note }}</span>
-    </div>
+    <Teleport to="body">
+      <div
+        v-if="hover"
+        class="dmap__tip"
+        :style="tipStyle"
+      >
+        <b>{{ HOVER_KIND[hover.op.kind] || hover.op.kind }}</b>
+        <span>{{ hover.op.hardware }}</span>
+        <span v-if="hover.op.dia">
+          Ø{{ hover.op.dia }} × {{ hover.op.depth }} мм
+        </span>
+        <span v-if="hover.kind === 'edge'">
+          Сверлить с торца: {{ hover.side }} · x{{ hover.op.x }} y{{ hover.op.y }}
+        </span>
+        <span v-else>
+          пласть: x{{ hover.op.x }} · y{{ hover.op.y }}
+          <template v-if="hover.op.face"> · {{ hover.op.face }}</template>
+        </span>
+        <span v-if="hover.op.note" class="dmap__tip-note">{{ hover.op.note }}</span>
+      </div>
+    </Teleport>
   </figure>
 </template>

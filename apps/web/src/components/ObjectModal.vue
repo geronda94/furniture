@@ -6,6 +6,7 @@ import ModuleWorkbench from './ModuleWorkbench.vue'
 import ContextProps from './ContextProps.vue'
 import {
   closeObjectModal,
+  focusObject,
   deleteInstance,
   deleteSelection,
   duplicateInstance,
@@ -37,6 +38,13 @@ let viewRo: ResizeObserver | null = null
 
 const inst = selectedInstance
 const full = computed(() => ui.object.mode === 'full' && !!inst.value)
+const partAbs = computed(() => {
+  if (!inst.value || part.value == null) return null
+  const info = moduleInfo(inst.value, derived[inst.value.id]?.objects ?? [])
+  return info ? relationsFor(info, part.value) : null
+})
+const quickExpanded = ref(false)
+const quickCollapsed = computed(() => !!inst.value && !full.value && !quickExpanded.value)
 const partEl = computed(() => {
   if (!inst.value || partSelection.instanceId !== inst.value.id) return null
   if (partSelection.part == null) return null
@@ -79,7 +87,11 @@ const subtitle = computed(() => {
   if (group.value.length) return 'групповые действия'
   if (inst.value) {
     const p = inst.value.params
-    return `${p.W}×${p.H}×${p.D}${p.mount === 'wall' ? ' · навесной' : ''}`
+    const floor = (p.mount || 'floor') !== 'wall'
+    const totalH = p.H + (floor ? Math.max(0, p.plinthH || 0) +
+      Math.max(0, p.worktopT || 0) : 0)
+    return `${p.W}×${totalH}×${p.D} · корпус ${p.H}` +
+      (p.mount === 'wall' ? ' · навесной' : '')
   }
   if (wall.value) return `${Math.round(wall.value.len)} мм`
   if (state.openingId) return 'на стене'
@@ -92,7 +104,9 @@ function viewBody(): HTMLElement | null {
 }
 
 function dockFraction(): number {
-  return 0.58
+  // На широком экране доска занимает ~2/3: хватает на картинку, меню и
+  // список, при этом слева остаётся видимая часть 3D/плана.
+  return 0.68
 }
 
 function leftFraction(): number {
@@ -106,7 +120,7 @@ function updateDock(): void {
   const body = viewBody()
   if (!body) return
   const r = body.getBoundingClientRect()
-  const width = Math.max(420, Math.min(r.width * dockFraction(), r.width - 64))
+  const width = Math.min(r.width - 24, Math.max(640, r.width * dockFraction()))
   dock.value = {
     left: r.left + r.width - width,
     top: r.top,
@@ -139,6 +153,13 @@ function syncPlacement(): void {
 
 function close(): void {
   closeObjectModal()
+}
+
+/** Показать модуль в 3D с учётом места под нижней шторкой на телефоне. */
+function showIn3D(): void {
+  if (!inst.value) return
+  const phone = window.matchMedia('(max-width: 900px)').matches
+  focusObject(inst.value.id, 'iso', 1, phone ? 0.62 : 1)
 }
 function back(): void {
   setObjectModalMode('quick')
@@ -178,7 +199,10 @@ watch(
     else nextTick(syncPlacement)
   },
 )
-watch(() => ui.object.mode, () => nextTick(syncPlacement))
+watch(() => ui.object.mode, () => {
+  quickExpanded.value = false
+  nextTick(syncPlacement)
+})
 </script>
 
 <template>
@@ -189,7 +213,10 @@ watch(() => ui.object.mode, () => nextTick(syncPlacement))
         class="modal__win object-modal"
         role="dialog"
         aria-modal="true"
-        :class="{ 'object-modal--full': full }"
+        :class="{
+          'object-modal--full': full,
+          'object-modal--quick-collapsed': quickCollapsed,
+        }"
         :style="[dragStyle, full
           ? {
               left: `${dock.left}px`,
@@ -214,6 +241,20 @@ watch(() => ui.object.mode, () => nextTick(syncPlacement))
           >←</button>
           <span class="modal__title">{{ title }}</span>
           <span class="modal__sub">{{ subtitle }}</span>
+          <div v-if="inst" class="om-mode" role="group" aria-label="Режим инспектора">
+            <button
+              class="om-mode__btn"
+              :class="{ 'om-mode__btn--on': !full }"
+              title="Быстрые действия и положение"
+              @click="back"
+            >Быстро</button>
+            <button
+              class="om-mode__btn"
+              :class="{ 'om-mode__btn--on': full }"
+              title="Детали, раскрой, сборка и материалы"
+              @click="toFull"
+            >Детально</button>
+          </div>
           <div class="modal__tools">
             <button
               v-if="inst"
@@ -229,9 +270,39 @@ watch(() => ui.object.mode, () => nextTick(syncPlacement))
               title="Показывать или скрыть фасады"
               @click="ui.facades = !ui.facades"
             >Фасады</button>
+            <button
+              v-if="inst && !full"
+              class="btn btn--ghost btn--sm om-collapse"
+              :title="quickExpanded ? 'Свернуть' : 'Развернуть'"
+              :aria-expanded="quickExpanded"
+              @click="quickExpanded = !quickExpanded"
+            >{{ quickExpanded ? '⌄' : '⌃' }}</button>
             <button class="btn btn--ghost btn--sm" title="Закрыть (Esc)" @click="close">×</button>
           </div>
         </header>
+
+        <!-- КОМПАКТНАЯ СТРОКА ДЛЯ ТЕЛЕФОНА -->
+        <div v-if="inst && !full" class="om-compact">
+          <button class="btn btn--sm btn--primary" @click="toFull">Детали →</button>
+          <button class="btn btn--sm" @click="showIn3D">
+            Показать
+          </button>
+          <button
+            class="btn btn--sm"
+            :class="{ 'btn--primary': kindIsOpen(inst, 'door') }"
+            :disabled="!inst.params.doors"
+            @click="toggleDoors(inst.id)"
+          >Двери</button>
+          <button
+            class="btn btn--sm"
+            :class="{ 'btn--primary': kindIsOpen(inst, 'drawer') }"
+            :disabled="!inst.params.drawers"
+            @click="toggleDrawers(inst.id)"
+          >Ящики</button>
+          <button class="btn btn--sm" @click="quickExpanded = !quickExpanded">
+            {{ quickExpanded ? 'Свернуть' : 'Ещё' }}
+          </button>
+        </div>
 
         <!-- БЫСТРЫЕ ДЕЙСТВИЯ: МОДУЛЬ -->
         <div v-if="inst && !full" class="om">
@@ -246,6 +317,16 @@ watch(() => ui.object.mode, () => nextTick(syncPlacement))
               <li v-if="partRel.left"><span>← {{ partRel.left.label }}</span><b>{{ partRel.left.distance }} мм</b></li>
               <li v-if="partRel.right"><span>→ {{ partRel.right.label }}</span><b>{{ partRel.right.distance }} мм</b></li>
             </ul>
+            <div v-if="partAbs" class="om__abs">
+              <span>от краёв плиты:</span>
+              <b>← {{ partAbs.toLeft }}</b>
+              <b>→ {{ partAbs.toRight }}</b>
+              <b>↓ {{ partAbs.toBottom }}</b>
+              <b>↑ {{ partAbs.toTop }}</b>
+              <b>⇤ {{ partAbs.toFront }}</b>
+              <b>⇥ {{ partAbs.toBack }}</b>
+              <em>мм</em>
+            </div>
           </div>
 
           <div class="om__label">Положение <span class="dim">в комнате, мм</span></div>

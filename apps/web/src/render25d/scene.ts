@@ -53,6 +53,15 @@ function hexToRgb(hex: string): [number, number, number] {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
 }
 
+function grayOf(color: string): string {
+  const [r, g, b] = hexToRgb(color)
+  // Мягкий серый clay: светлее дерева, без цветового сдвига.
+  const y = 0.299 * r + 0.587 * g + 0.114 * b
+  const v = Math.max(150, Math.min(225, 145 + y * 0.32))
+  const c = Math.round(v)
+  return `rgb(${c},${c},${c})`
+}
+
 export function shade(color: string, k: number): string {
   const [r, g, b] = hexToRgb(color)
   const c = (v: number) => Math.max(0, Math.min(255, Math.round(v * k)))
@@ -139,8 +148,10 @@ function makeFace(
   const intensity =
     style === 'realistic'
       ? 0.7 + 0.24 * key + 0.06 * fill
-      : 0.62 + 0.38 * key
-
+      : style === 'clay'
+        ? 0.54 + 0.46 * key + 0.04 * fill
+        : 0.62 + 0.38 * key
+  const base = style === 'clay' ? grayOf(material.color) : material.color
   const projPts = pts.map((_, i) => proj.point(world[i]))
   return {
     pts,
@@ -155,7 +166,9 @@ function makeFace(
     uvOrigin,
     uvU,
     uvV,
-    color: shade(material.color, intensity),
+    color: shade(base, intensity),
+    colorTop: style === 'clay' ? shade(base, intensity * 1.08) : undefined,
+    colorBottom: style === 'clay' ? shade(base, intensity * 0.9) : undefined,
     material,
     kind,
     objectId,

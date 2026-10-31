@@ -4,6 +4,8 @@ import type { SceneObject } from '../render25d/types'
 export interface ElementInfo {
   index: number
   name: string
+  /** уникальное имя детали в операциях присадки */
+  opPart?: string
   /** имя для списка: «Полка 2», «Фасад дверь (левая)» */
   title: string
   /** номер ящика (1..n) для деталей ящика */
@@ -93,6 +95,7 @@ export function moduleInfo(inst: Instance, objects: SceneObject[] | undefined): 
   const elements: ElementInfo[] = objects.map((o, index) => ({
     index,
     name: o.name,
+    opPart: o.op_part,
     title: titleOf(o),
     drawerId:
       o.kind === 'drawerbox' || o.kind === 'drawerfront'
@@ -304,7 +307,9 @@ export function relationsFor(
   const out: PartRelations = {
     toLeft: Math.round(e.x),
     toRight: Math.round(info.W - (e.x + e.w)),
-    toTop: Math.round(info.totalH - (e.z + e.h)),
+    // Для присадки полкодержателей верхняя абсолютная база — нижняя
+    // грань детали, а не её верхняя грань.
+    toTop: Math.round(info.totalH - e.z),
     toBottom: Math.round(e.z),
     toFront: Math.round(e.y),
     toBack: Math.round(info.D - (e.y + e.d)),

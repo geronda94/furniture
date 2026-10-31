@@ -175,5 +175,24 @@ blender -b -P blender_build.py -- ../projects/kitchen-10m/scene3d.json ../projec
 | `docs/15-roadmap.md` | Роадмап и ресёрч SketchUp-плагинов |
 | `docs/16-materials-pricing.md` | Материалы, цены, смета, партнёры |
 | `docs/17-session-handoff.md` | Итоги сессии и перенос на сервер |
-| `docs/18-house-fork.md` | Форк «Дом»: слои, системы, API, MVP, роадмап |
+| `docs/18-connections.md` | Соединения и крепёж: классы, скрытый крепёж, правила |
+| `docs/19-interior-and-library.md` | Интерьер, библиотека объектов, демо-проекты |
+| `docs/20-layout-rules.md` | Расстановка: стены/проёмы/зазоры, проверка и автоплотнение |
+| `docs/21-ux-camera-and-performance-plan.md` | Камера, сенсор, инспектор, производительность |
+| `docs/22-ai-generation-validation.md` | Валидация ИИ-генерации: объёмы, strict-сохранение |
+| `docs/23-verification-2026-10-28.md` | Проверка по критериям и счётчики тестов |
+| `docs/24-long-term-plan.md` | Долгосрочный план работ |
+| `docs/25-full-audit-2026-10-28.md` | Полный аудит: оценки, находки P0–P2 |
+| `docs/26-remediation-plan.md` | План исправлений по аудиту и статусы |
+| `docs/27-house-fork.md` | Форк «Дом»: слои, системы, API, MVP, роадмап |
+| `docs/28-architecture.md` | Границы модулей: движок, API, состояние, компоненты |
+| `docs/29-furniture-standards.md` | ГОСТ/EN: размеры, эргономика, коды валидаторов |
+| `docs/30-user-flow-audit.md` | Путь «комната → готовый проект»: мастер, сводка, выгрузки, разрывы |
+| `docs/31-device-checklist.md` | Проверка на телефоне: FPS, жесты, что записывать |
+| `docs/32-pre-ai-readiness.md` | Что исправить до ИИ-управления: стабильность, UX, контракт, чат |
+| `docs/33-agent-plan.md` | Исполнительный план для агента: гейты, задачи, приёмка, протокол |
+| `docs/34-deploy-and-monitoring.md` | Деплой с откатом и сторож прода (5 минут, алерт) |
+| `docs/35-master-plan.md` | **Единый план работ**: гейты 0–E, инженерные долги, ближайшие шаги |
+| `docs/36-3d-perf-baseline.md` | Замер 3D на эмуляции iPhone/Pixel: draw calls, треугольники, FPS |
+| `docs/37-performance-analysis.md` | Полный анализ ПК/Android/iOS: где подвисает и что чинить |
 | `docs/glossary.md` | Глоссарий терминов |

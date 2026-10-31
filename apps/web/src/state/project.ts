@@ -4,9 +4,12 @@ import {
   apiHandles,
   apiHardware,
   apiListProjects,
+  apiProjectLayout,
   apiPutProject,
+  apiValidateProject,
   apiRestoreVersion,
   apiSolve,
+  apiSolveBatch,
   type HandleInfo,
   type RunnerInfo,
   type SolveResponse,
@@ -43,1219 +46,68 @@ import type {
 } from '../render25d/types'
 import { outlinePoints, pointInPoly, roomBounds, roomWallLength, roomWalls } from '../render25d/room'
 import {
+  cornersOf,
+  distanceToSeg,
+  footprintOf,
+  insideOrEdge,
+  overlaps,
+  wallFaces,
+  zSpan,
+  normalizeRot,
+} from './geometry'
+import type { Box2, Box3, WallFace } from './geometry'
+
+// Совместимость: эти помощники исторически импортировали из state/project.
+export { wallFaces, zSpan, normalizeRot } from './geometry'
+export type { WallFace } from './geometry'
+import {
   partGroupKey,
   partUid,
   resolveMaterial,
   resolveObjectMaterial,
 } from '../material/vars'
 
-export type Frame = 'inset' | 'overlay'
-export type Hardware = 'blum' | 'hettich' | 'gtv'
-export type BackKind = 'dvp' | 'same' | 'cardboard' | 'none'
-export type Reinforce = 'auto' | 'on' | 'off'
-
-/** Политика кромки: типы по видимости + переопределения по деталям. */
-export interface EdgePolicy {
-  /** тип/толщина для видимых кромок (pvc_2, abs_2, …) */
-  visible?: string
-  /** тип/толщина для скрытых кромок (pvc_04, …) */
-  hidden?: string
-  /** имя детали (можно с * на конце) → сторона → auto|none|тип */
-  byPart?: Record<string, Record<string, string>>
-  /** показывать ли кромку в BOM/превью (данные не удаляются) */
-  show?: boolean
-}
-
-/** Блок компоновки фасадов сверху вниз. height=0 — высота по остатку. */
-export interface FrontBlock {
-  type: 'doors' | 'drawers'
-  count: number
-  height: number
-}
-
-export interface Params {
-  W: number
-  H: number
-  D: number
-  doors: number
-  drawers: number
-  shelves: number
-  frame: Frame
-  hardware: Hardware
-  /** id направляющих ящиков из specs/hardware.yaml */
-  runners: string
-  /** высоты фасадов ящиков, мм (последний добирает остаток) */
-  drawerHeights?: number[]
-  /** толщина ЛДСП, мм */
-  t: number
-  /** задняя стенка: ДВП / тот же ЛДСП / картон / нет */
-  back: BackKind
-  /** толщина задней стенки, мм */
-  backT: number
-  /** крыша корпуса */
-  roof: boolean
-  /** царги: auto — только когда нужны, on — всегда, off — нет */
-  reinforce: Reinforce
-  /** произвольная компоновка фасадов сверху вниз */
-  fronts?: FrontBlock[]
-  /** напольный или навесной модуль */
-  mount: 'floor' | 'wall'
-  /** прямоугольные вырезы в столешнице, мм от левого/переднего края */
-  cutouts?: { x: number; y: number; w: number; h: number }[]
-  /** высота цоколя, мм (0 — без цоколя) */
-  plinthH: number
-  /** толщина столешницы, мм (0 — без столешницы) */
-  worktopT: number
-  /** зазоры фасадов, мм (наследуются из глобальных переменных проекта) */
-  gapSide: number
-  gapBetween: number
-  gapTop: number
-  gapBottom: number
-  /** явные внутренние перегородки (0 — без перегородок) */
-  dividers: number
-  /** id ручки из specs/hardware.yaml */
-  handle: string
-  /** материал фасадов: ЛДСП или МДФ */
-  facadeMaterial?: 'ldsp' | 'mdf'
-  /** тип фасада: гладкий, фрезерованный, с ручкой, push, профиль */
-  facadeStyle?: 'flat' | 'milled' | 'handle' | 'push' | 'profile'
-  /** id крепежа корпуса: confirmat | minifix | dowel */
-  fastener?: string
-  /** id опоры полок: system32 | lock-pin | minifix-shelf | dowel-shelf */
-  shelfSupport?: string
-  /** id газового патрона (пусто — без патрона) */
-  gasStrut?: string
-  /** id крепления опор/колёс из specs/hardware.yaml.legs */
-  legMount?: string
-  /** скрытый крепёж корпуса: авто выбирает минификс вместо евровинта */
-  hiddenFasteners?: boolean
-  /** переопределения крепежа по классу соединения */
-  connectionOverrides?: Record<string, string>
-  /** политика кромки: типы и переопределения по деталям */
-  edges?: EdgePolicy
-  /** сверлить ряды System 32 на боковинах */
-  system32?: boolean
-}
-
-/** Глобальные переменные проекта: значения по умолчанию для всех модулей. */
-export interface ProjectGlobals {
-  t: number
-  back: BackKind
-  backT: number
-  roof: boolean
-  reinforce: Reinforce
-  frame: Frame
-  hardware: Hardware
-  runners: string
-  plinthH: number
-  worktopT: number
-  gapSide: number
-  gapBetween: number
-  gapTop: number
-  gapBottom: number
-  /** применять изменения сразу ко всем модулям без собственных переопределений */
-  autoApply: boolean
-}
-
-export type ManagedParam =
-  | 't' | 'back' | 'backT' | 'roof' | 'reinforce' | 'frame'
-  | 'hardware' | 'runners' | 'plinthH' | 'worktopT'
-  | 'gapSide' | 'gapBetween' | 'gapTop' | 'gapBottom'
-
-export const MANAGED_PARAMS: ManagedParam[] = [
-  't', 'back', 'backT', 'roof', 'reinforce', 'frame',
-  'hardware', 'runners', 'plinthH', 'worktopT',
-  'gapSide', 'gapBetween', 'gapTop', 'gapBottom',
-]
-
-export const defaultGlobals = (): ProjectGlobals => ({
-  t: 16,
-  back: 'dvp',
-  backT: 4,
-  roof: true,
-  reinforce: 'auto',
-  frame: 'inset',
-  hardware: 'blum',
-  runners: 'tandem-21',
-  plinthH: 100,
-  worktopT: 38,
-  gapSide: 2,
-  gapBetween: 3,
-  gapTop: 2,
-  gapBottom: 2,
-  autoApply: true,
-})
-
-export interface Instance {
-  id: string
-  product: string
-  name?: string
-  x: number
-  y: number
-  /** высота над полом, мм (навесная мебель) */
-  z: number
-  rot: number
-  /** напольная мебель: Z залочен, пока не разлочат */
-  zLocked: boolean
-  params: Params
-  /** переопределения параметров относительно глобальных переменных проекта */
-  overrides?: ManagedParam[]
-  /** материалы только для этого модуля (перекрывают материалы проекта) */
-  materials?: Materials
-  /** зона/этаж: к модулю применяются переменные с той же зоной */
-  zone?: string
-  /** материал конкретной детали (ключ — индекс; legacy) */
-  partMaterials?: Record<string, Material>
-  /** материал всех одинаковых деталей (группа: имя+секция+ящик) */
-  partMaterialGroups?: Record<string, Material>
-  /** материал конкретной детали (ключ — устойчивый uid: группа+позиция) */
-  partOverrides?: Record<string, Material>
-  /** выполненные шаги сборки (индексы) */
-  assemblyDone?: number[]
-  /** анимация субобъектов: ключ (door:N | drawer:N) → набор каналов */
-  anim?: Record<string, ChannelSet>
-  /** @deprecated миграция старых проектов */
-  legacyDoorsOpen?: boolean
-  legacyDrawersOpen?: boolean
-}
-
-export interface ModulePreset {
-  key: string
-  label: string
-  hint: string
-  /** группа каталога: Тумбы, Ящики, Мойки, Комбинированные */
-  group: string
-  params: Partial<Params>
-}
-
-export const MODULE_PRESETS: ModulePreset[] = [
-  {
-    key: 'base600',
-    label: 'Тумба 600',
-    hint: '1 дверь',
-    group: 'Тумбы',
-    params: { W: 600, H: 720, D: 560, doors: 1, drawers: 0, shelves: 1 },
-  },
-  {
-    key: 'base800',
-    label: 'Тумба 800',
-    hint: '2 двери',
-    group: 'Тумбы',
-    params: { W: 800, H: 720, D: 560, doors: 2, drawers: 0, shelves: 2 },
-  },
-  {
-    key: 'drawers600',
-    label: 'Ящики 600',
-    hint: '3 ящика',
-    group: 'Ящики',
-    params: { W: 600, H: 720, D: 560, doors: 0, drawers: 3, shelves: 0 },
-  },
-  {
-    key: 'drawers-cabinet',
-    label: 'Тумба с ящиками',
-    hint: '3 ящика · фурнитура',
-    group: 'Ящики',
-    params: {
-      W: 600,
-      H: 720,
-      D: 560,
-      doors: 0,
-      drawers: 3,
-      shelves: 0,
-      runners: 'tandem-21',
-    },
-  },
-  {
-    key: 'sink800',
-    label: 'Мойка 800',
-    hint: '2 двери',
-    group: 'Мойки',
-    params: { W: 800, H: 720, D: 560, doors: 2, drawers: 0, shelves: 1 },
-  },
-  {
-    key: 'wardrobe1200',
-    label: 'Шкаф 1200',
-    hint: 'высокий · 3 двери',
-    group: 'Шкафы',
-    params: { W: 1200, H: 2400, D: 600, doors: 3, shelves: 5 },
-  },
-  {
-    key: 'chest900',
-    label: 'Комод 900',
-    hint: '3 ящика',
-    group: 'Комоды',
-    params: { W: 900, H: 900, D: 500, doors: 0, drawers: 3, shelves: 0 },
-  },
-  {
-    key: 'nightstand',
-    label: 'Тумба 450',
-    hint: '1 дверь · 550',
-    group: 'Тумбы',
-    params: { W: 450, H: 550, D: 400, doors: 1, shelves: 1 },
-  },
-  {
-    key: 'tall600',
-    label: 'Пенал 600',
-    hint: 'высокий · 2 двери',
-    group: 'Пеналы',
-    params: { W: 600, H: 2100, D: 560, doors: 2, shelves: 4 },
-  },
-  {
-    key: 'open600',
-    label: 'Открытая 600',
-    hint: 'без фасадов',
-    group: 'Открытые',
-    params: { W: 600, H: 720, D: 560, doors: 0, drawers: 0, shelves: 3 },
-  },
-  {
-    key: 'island',
-    label: 'Остров 1200',
-    hint: 'без цоколя · 2 двери',
-    group: 'Острова',
-    params: { W: 1200, H: 720, D: 700, doors: 2, shelves: 2, plinthH: 0 },
-  },
-  {
-    key: 'wall600',
-    label: 'Навесной 600',
-    hint: '2 двери · на стену',
-    group: 'Навесные',
-    params: { W: 600, H: 720, D: 300, doors: 2, shelves: 2, mount: 'wall' },
-  },
-  {
-    key: 'wall800',
-    label: 'Навесной 800',
-    hint: '2 двери · глубина 300',
-    group: 'Навесные',
-    params: { W: 800, H: 720, D: 300, doors: 2, shelves: 3, mount: 'wall' },
-  },
-  {
-    key: 'mix900',
-    label: 'Микс 900',
-    hint: 'ящик + 2 двери',
-    group: 'Комбинированные',
-    params: { W: 900, H: 720, D: 560, doors: 2, drawers: 1, shelves: 2 },
-  },
-  {
-    key: 'tech-fridge',
-    label: 'Ниша под холодильник',
-    hint: 'открытый корпус 700×1900, без фасада',
-    group: 'Техника',
-    params: { W: 700, H: 1900, D: 650, doors: 0, drawers: 0, shelves: 0,
-      plinthH: 0, worktopT: 0, back: 'none', roof: true },
-  },
-  {
-    key: 'tech-oven',
-    label: 'Ниша под духовку',
-    hint: 'открытая ниша 600×600',
-    group: 'Техника',
-    params: { W: 600, H: 600, D: 560, doors: 0, drawers: 0, shelves: 1,
-      plinthH: 0, worktopT: 0, back: 'none', roof: true },
-  },
-  {
-    key: 'tech-microwave',
-    label: 'Ниша под СВЧ',
-    hint: 'открытая ниша 600×450',
-    group: 'Техника',
-    params: { W: 600, H: 450, D: 560, doors: 0, drawers: 0, shelves: 1,
-      plinthH: 0, worktopT: 0, back: 'none', roof: true },
-  },
-  {
-    key: 'tech-cooktop',
-    label: 'Тумба под варочную панель',
-    hint: '3 ящика + вырез в столешнице',
-    group: 'Техника',
-    params: { W: 600, H: 720, D: 560, doors: 0, drawers: 3, shelves: 0,
-      cutouts: [{ x: 60, y: 90, w: 480, h: 360 }] },
-  },
-  {
-    key: 'tech-sink',
-    label: 'Тумба под мойку',
-    hint: '2 двери + вырез под мойку',
-    group: 'Техника',
-    params: { W: 800, H: 720, D: 560, doors: 2, drawers: 0, shelves: 1,
-      cutouts: [{ x: 150, y: 100, w: 500, h: 400 }] },
-  },
-  {
-    key: 'base400',
-    label: 'Тумба 400',
-    hint: '1 дверь · узкая',
-    group: 'Тумбы',
-    params: { W: 400, H: 720, D: 560, doors: 1, shelves: 1 },
-  },
-  {
-    key: 'base500',
-    label: 'Тумба 500',
-    hint: '1 дверь',
-    group: 'Тумбы',
-    params: { W: 500, H: 720, D: 560, doors: 1, shelves: 2 },
-  },
-  {
-    key: 'base900',
-    label: 'Тумба 900',
-    hint: '2 двери',
-    group: 'Тумбы',
-    params: { W: 900, H: 720, D: 560, doors: 2, shelves: 2 },
-  },
-  {
-    key: 'base1000',
-    label: 'Тумба 1000',
-    hint: '2 двери',
-    group: 'Тумбы',
-    params: { W: 1000, H: 720, D: 560, doors: 2, shelves: 2 },
-  },
-  {
-    key: 'sink600',
-    label: 'Мойка 600',
-    hint: '1 дверь · под мойку',
-    group: 'Мойки',
-    params: { W: 600, H: 720, D: 560, doors: 1, shelves: 0 },
-  },
-  {
-    key: 'sink900',
-    label: 'Мойка 900',
-    hint: '2 двери · под мойку',
-    group: 'Мойки',
-    params: { W: 900, H: 720, D: 560, doors: 2, shelves: 0 },
-  },
-  {
-    key: 'drawers450',
-    label: 'Ящики 450',
-    hint: '3 ящика · узкие',
-    group: 'Ящики',
-    params: { W: 450, H: 720, D: 560, doors: 0, drawers: 3, shelves: 0 },
-  },
-  {
-    key: 'drawers800',
-    label: 'Ящики 800',
-    hint: '4 ящика',
-    group: 'Ящики',
-    params: { W: 800, H: 720, D: 560, doors: 0, drawers: 4, shelves: 0 },
-  },
-  {
-    key: 'wall400',
-    label: 'Навесной 400',
-    hint: '1 дверь · на стену',
-    group: 'Навесные',
-    params: { W: 400, H: 720, D: 300, doors: 1, shelves: 2, mount: 'wall' },
-  },
-  {
-    key: 'wall900',
-    label: 'Навесной 900',
-    hint: '2 двери · на стену',
-    group: 'Навесные',
-    params: { W: 900, H: 720, D: 300, doors: 2, shelves: 3, mount: 'wall' },
-  },
-  {
-    key: 'wardrobe1500',
-    label: 'Шкаф 1500',
-    hint: '3 двери · высокий',
-    group: 'Шкафы',
-    params: { W: 1500, H: 2400, D: 600, doors: 3, shelves: 5 },
-  },
-  {
-    key: 'wardrobe1800',
-    label: 'Шкаф 1800',
-    hint: '4 двери · высокий',
-    group: 'Шкафы',
-    params: { W: 1800, H: 2400, D: 600, doors: 4, shelves: 6 },
-  },
-  {
-    key: 'tall400',
-    label: 'Пенал 400',
-    hint: 'высокий · 1 дверь',
-    group: 'Пеналы',
-    params: { W: 400, H: 2100, D: 560, doors: 1, shelves: 4 },
-  },
-  {
-    key: 'open400',
-    label: 'Открытая 400',
-    hint: 'без фасадов',
-    group: 'Открытые',
-    params: { W: 400, H: 720, D: 560, doors: 0, drawers: 0, shelves: 3 },
-  },
-  {
-    key: 'open800',
-    label: 'Открытая 800',
-    hint: 'без фасадов',
-    group: 'Открытые',
-    params: { W: 800, H: 720, D: 560, doors: 0, drawers: 0, shelves: 3 },
-  },
-  {
-    key: 'island1500',
-    label: 'Остров 1500',
-    hint: 'без цоколя · 3 двери',
-    group: 'Острова',
-    params: { W: 1500, H: 720, D: 700, doors: 3, shelves: 2, plinthH: 0 },
-  },
-]
-
-export type RoomBase = { w: number; d: number; h: number }
-
-export interface RoomDims extends RoomBase {
-  wallT: number
-  openings: Opening[]
-  outline?: [number, number][]
-  partitions?: { a: [number, number]; b: [number, number]; wallT?: number }[]
-  floor: RoomSurface
-  ceiling: RoomSurface
-  wallItems: WallItem[]
-}
-
-export interface SavedView {
-  id: string
-  name: string
-  camera: Camera
-  wallMode: 'cutaway' | 'low'
-  viewMode: ViewStyle
-}
-
-export interface Folder {
-  id: string
-  name: string
-  ids: string[]
-}
-
-export interface LogEntry {
-  time: string
-  label: string
-}
-
-export interface Finish {
-  id: string
-  name: string
-  kind: 'floor' | 'ceiling' | 'wall'
-  x: number
-  y: number
-  w: number
-  d: number
-  material: string
-  color: string
-  tileW: number
-  tileH: number
-  grout: number
-  waste: number
-  price_m2: number
-}
-
-export interface Project {
-  schema: string
-  name: string
-  /** id цеха из specs/shops.yaml (или профиль specs/<id>.yaml) */
-  shop: string
-  /** рынок/валюта из specs/markets.yaml */
-  market: string
-  /** поставщик фурнитуры из specs/suppliers.yaml */
-  supplier: string
-  room: RoomDims
-  instances: Instance[]
-  folders: Folder[]
-  globals: ProjectGlobals
-  materials: Materials
-  materialVars: MaterialVariable[]
-  /** отделка: плитка, ламинат, паркет и т.д. с расчётом площади/плитки */
-  finishes?: Finish[]
-  /** явный список зон/этажей (пустые зоны тоже можно завести) */
-  zones?: string[]
-  /** декоративная мебель/сантехника демо-сцены (вне BOM) */
-  props?: Prop[]
-  /** как показывать стены при открытии проекта */
-  wallMode?: 'cutaway' | 'low'
-  /** стартовый ракурс 3D для демо-проекта, градусы */
-  camera3d?: { alpha: number; beta: number }
-  views: SavedView[]
-  log?: LogEntry[]
-}
-
-export const PROJECT_SCHEMA = 'furniture/project@0'
-
-export const DEFAULT_MATERIALS: Materials = {
-  corpus: {
-    name: 'ЛДСП Дуб натуральный',
-    color: '#d9c3a3',
-    accent: '#b7956c',
-    pattern: 'wood',
-    texScale: 650,
-  },
-  facade: {
-    name: 'ЛДСП Графит',
-    color: '#3b434b',
-    accent: '#2b3238',
-    pattern: 'solid',
-  },
-  worktop: {
-    name: 'Столешница графит',
-    color: '#24282c',
-    accent: '#181b1e',
-    pattern: 'stone',
-    texScale: 1200,
-  },
-  plinth: {
-    name: 'Цоколь антрацит',
-    color: '#171a1d',
-    accent: '#0e1012',
-    pattern: 'solid',
-  },
-  back: {
-    name: 'ДВП светлая',
-    color: '#efede7',
-    accent: '#ddd9d0',
-    pattern: 'solid',
-  },
-  drawer: {
-    name: 'Ящик металл',
-    color: '#9aa0a6',
-    accent: '#7c8288',
-    pattern: 'metal',
-  },
-  floor: {
-    name: 'Пол — дуб',
-    color: '#8b7a63',
-    accent: '#6a5c49',
-    pattern: 'wood',
-    texScale: 1100,
-  },
-  ceiling: {
-    name: 'Потолок',
-    color: '#efeee9',
-    accent: '#ddd9d0',
-    pattern: 'solid',
-  },
-  leg: {
-    name: 'Ножка',
-    color: '#1b1c1e',
-    accent: '#101112',
-    pattern: 'solid',
-  },
-}
-
-export const MATERIAL_ROLES: { key: string; label: string }[] = [
-  { key: 'corpus', label: 'Корпус' },
-  { key: 'facade', label: 'Фасады' },
-  { key: 'worktop', label: 'Столешница' },
-  { key: 'plinth', label: 'Цоколь' },
-  { key: 'back', label: 'Задняя стенка' },
-  { key: 'drawer', label: 'Ящики' },
-  { key: 'floor', label: 'Пол' },
-  { key: 'ceiling', label: 'Потолок' },
-]
-
-/** Параметры модуля, которые берутся из глобальных переменных проекта. */
-export function globalsToParams(g: ProjectGlobals): Pick<Params, ManagedParam> {
-  return {
-    t: g.t,
-    back: g.back,
-    backT: g.backT,
-    roof: g.roof,
-    reinforce: g.reinforce,
-    frame: g.frame,
-    hardware: g.hardware,
-    runners: g.runners,
-    plinthH: g.plinthH,
-    worktopT: g.worktopT,
-    gapSide: g.gapSide,
-    gapBetween: g.gapBetween,
-    gapTop: g.gapTop,
-    gapBottom: g.gapBottom,
-  }
-}
-
-export const defaultParams = (): Params => ({
-  W: 600,
-  H: 720,
-  D: 560,
-  doors: 1,
-  drawers: 0,
-  shelves: 2,
-  frame: 'inset',
-  hardware: 'blum',
-  runners: 'tandem-21',
-  t: 16,
-  back: 'dvp',
-  backT: 4,
-  roof: true,
-  reinforce: 'auto',
-  mount: 'floor',
-  plinthH: 100,
-  worktopT: 38,
-  gapSide: 2,
-  gapBetween: 3,
-  gapTop: 2,
-  gapBottom: 2,
-  dividers: 0,
-  handle: 'bar-128',
-})
-
-/** Разумное число дверей по ширине (для новых модулей и смены ширины). */
-export function suggestDoors(W: number): number {
-  if (W <= 500) return 1
-  if (W <= 1000) return 2
-  if (W <= 1500) return 3
-  return Math.min(6, Math.max(1, Math.ceil(W / 550)))
-}
-
-export function defaultProject(): Project {
-  return {
-    schema: PROJECT_SCHEMA,
-    name: 'Кухня — демо',
-    shop: 'shop-ro-bucuresti',
-    market: 'ro',
-    supplier: 'generic',
-    room: {
-      w: 3600,
-      d: 2800,
-      h: 2700,
-      wallT: 100,
-      floor: { enabled: true, material: 'floor', t: 0 },
-      ceiling: { enabled: false, material: 'ceiling', t: 0 },
-      wallItems: [],
-      openings: [
-        {
-          id: 'o1',
-          kind: 'window',
-          wall: 0,
-          x: 200,
-          w: 1200,
-          z0: 900,
-          z1: 2200,
-        },
-        {
-          id: 'o2',
-          kind: 'door',
-          wall: 3,
-          x: 800,
-          w: 900,
-          z0: 0,
-          z1: 2100,
-        },
-      ],
-    },
-    instances: [
-      {
-        id: 'i1',
-        product: 'base-cabinet',
-        name: 'Тумба 800',
-        x: 400,
-        y: 2240,
-        z: 0,
-        rot: 0,
-        zLocked: true,
-        params: defaultParams(),
-      },
-    ],
-    folders: [],
-    globals: defaultGlobals(),
-    materials: JSON.parse(JSON.stringify(DEFAULT_MATERIALS)),
-    materialVars: [],
-    finishes: [],
-    zones: [],
-    props: [],
-    wallMode: 'cutaway',
-    views: [],
-    log: [],
-  }
-}
-
-function clamp(v: number, lo: number, hi: number): number {
-  return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : lo
-}
-
-function sanitizeParams(p: Params): Params {
-  const fronts = Array.isArray(p.fronts)
-    ? p.fronts
-        .filter((b) => b && (b.type === 'doors' || b.type === 'drawers'))
-        .slice(0, 12)
-        .map((b) => ({
-          type: b.type,
-          count: clamp(Math.round(b.count), 1, 6),
-          height: clamp(Math.round(Number(b.height) || 0), 0, 2000),
-        }))
-    : []
-  const cutouts = Array.isArray(p.cutouts)
-    ? p.cutouts
-        .filter((c) => c && Number(c.w) > 0 && Number(c.h) > 0)
-        .slice(0, 8)
-        .map((c) => ({
-          x: clamp(Math.round(Number(c.x) || 0), 0, 3000),
-          y: clamp(Math.round(Number(c.y) || 0), 0, 1200),
-          w: clamp(Math.round(Number(c.w) || 0), 20, 3000),
-          h: clamp(Math.round(Number(c.h) || 0), 20, 1200),
-        }))
-    : []
-  const back: BackKind = (['dvp', 'same', 'cardboard', 'none'] as const)
-    .includes(p.back)
-    ? p.back
-    : 'dvp'
-  const reinforce: Reinforce = (['auto', 'on', 'off'] as const)
-    .includes(p.reinforce)
-    ? p.reinforce
-    : 'auto'
-  return {
-    W: clamp(Math.round(p.W), 200, 3000),
-    H: clamp(Math.round(p.H), 200, 2600),
-    D: clamp(Math.round(p.D), 200, 900),
-    doors: clamp(Math.round(p.doors), 0, 6),
-    drawers: clamp(Math.round(p.drawers), 0, 6),
-    shelves: clamp(Math.round(p.shelves), 0, 8),
-    dividers: clamp(Math.round(Number(p.dividers) || 0), 0, 4),
-    handle: String(p.handle || 'bar-128'),
-    fastener: String(p.fastener || 'auto'),
-    facadeMaterial: p.facadeMaterial === 'mdf' ? 'mdf' : 'ldsp',
-    facadeStyle: (['flat', 'milled', 'handle', 'push', 'profile'] as const)
-      .includes(p.facadeStyle as never) ? p.facadeStyle : 'handle',
-    connectionOverrides: (p.connectionOverrides && typeof p.connectionOverrides === 'object')
-      ? Object.fromEntries(
-          Object.entries(p.connectionOverrides)
-            .filter(([k]) => ['carcass', 'divider', 'drawer'].includes(k))
-            .map(([k, v]) => [k, String(v)]),
-        )
-      : undefined,
-    hiddenFasteners: p.hiddenFasteners === true,
-    edges: (p.edges && typeof p.edges === 'object')
-      ? JSON.parse(JSON.stringify(p.edges)) as EdgePolicy
-      : undefined,
-    shelfSupport: String(p.shelfSupport || 'system32'),
-    gasStrut: String(p.gasStrut || ''),
-    legMount: String(p.legMount || 'leg-plate-60'),
-    system32: p.system32 !== false,
-    frame: p.frame === 'overlay' ? 'overlay' : 'inset',
-    hardware: (['blum', 'hettich', 'gtv'] as const).includes(p.hardware)
-      ? p.hardware
-      : 'blum',
-    runners: p.runners || 'tandem-21',
-    t: [10, 16, 18, 22].includes(Number(p.t)) ? Number(p.t) : 16,
-    back,
-    backT: clamp(Math.round(Number(p.backT) || 4), 1, 18),
-    roof: p.roof !== false,
-    reinforce,
-    mount: p.mount === 'wall' ? 'wall' : 'floor',
-    plinthH: clamp(Math.round(Number(p.plinthH ?? 100)), 0, 300),
-    worktopT: clamp(Math.round(Number(p.worktopT ?? 38)), 0, 80),
-    gapSide: clamp(Number(p.gapSide ?? 2), 0, 10),
-    gapBetween: clamp(Number(p.gapBetween ?? 3), 1, 8),
-    gapTop: clamp(Number(p.gapTop ?? 2), 0, 10),
-    gapBottom: clamp(Number(p.gapBottom ?? 2), 0, 10),
-    fronts: fronts.length ? fronts : undefined,
-    cutouts: cutouts.length ? cutouts : undefined,
-    drawerHeights:
-      Array.isArray(p.drawerHeights) && p.drawerHeights.length
-        ? p.drawerHeights
-            .map((v) => clamp(Math.round(Number(v)), 100, 600))
-            .filter((v) => v > 0)
-        : undefined,
-  }
-}
-
-function normalizeMaterialVars(raw: unknown): MaterialVariable[] {
-  if (!Array.isArray(raw)) return []
-  const parts = new Set<MaterialPart>([
-    'carcass', 'sides', 'shelf', 'divider', 'door', 'drawerFront',
-    'drawerBox', 'back', 'worktop', 'plinth', 'leg',
-  ])
-  return raw
-    .filter((v) => v && typeof v === 'object')
-    .slice(0, 60)
-    .map((v, i): MaterialVariable | null => {
-      const r = v as Partial<MaterialVariable>
-      const material = sanitizeMaterial(r.material)
-      if (!material) return null
-      const scope: MaterialScope = r.scope === 'floor' || r.scope === 'wall'
-        ? r.scope : 'all'
-      const selected = Array.isArray(r.parts)
-        ? [...new Set(r.parts.filter((p): p is MaterialPart => parts.has(p as MaterialPart)))]
-        : []
-      return {
-        id: String(r.id || `mv${i + 1}`),
-        name: String(r.name || `Переменная ${i + 1}`),
-        enabled: r.enabled !== false,
-        scope,
-        zone: String(r.zone || '').trim() || undefined,
-        parts: selected.length ? selected : ['carcass' as MaterialPart],
-        material,
-      }
-    })
-    .filter((v): v is MaterialVariable => !!v)
-}
-
-export function wallLength(wall: WallIndex, room: RoomDims): number {
-  return roomWallLength(room as Room, wall)
-}
-
-function clampOpening(o: Opening, room: RoomDims): Opening {
-  const L = wallLength(o.wall, room)
-  const w = clamp(Math.round(o.w), 200, Math.min(L, 6000))
-  const x = clamp(Math.round(o.x), 0, Math.max(0, L - w))
-  const z0 = clamp(Math.round(o.z0), 0, room.h - 200)
-  const z1 = clamp(Math.round(o.z1), z0 + 100, room.h)
-  return { ...o, x, w, z0, z1 }
-}
-
-function normalizeOpenings(
-  raw: Opening[] | undefined,
-  room: RoomDims,
-): Opening[] {
-  const src = Array.isArray(raw) ? raw : []
-  return src
-    .filter((o) => o && (o.kind === 'window' || o.kind === 'door' || o.kind === 'arch'))
-    .map((o) =>
-      clampOpening(
-        {
-          id: o.id || `o${Math.random().toString(36).slice(2, 7)}`,
-          kind: o.kind,
-          wall: Math.max(0, Math.round(Number(o.wall) || 0)),
-          x: Number(o.x) || 0,
-          w: Number(o.w) || 900,
-          z0: Number(o.z0) || 0,
-          z1: Number(o.z1) || 2100,
-          open: !!o.open,
-          hinge: o.hinge === 'right' ? 'right' : 'left',
-          angle: clamp(Number(o.angle) || 80, 0, 120),
-          wallT: clamp(Math.round(Number(o.wallT) || room.wallT), 40, 400),
-          frameT: clamp(Math.round(Number(o.frameT) || 70), 20, 300),
-          sillDepth: clamp(Math.round(Number(o.sillDepth) || 250), 40, 800),
-          casing: clamp(Math.round(Number(o.casing) || 70), 0, 300),
-          material: String(o.material || 'ПВХ'),
-          price: Math.max(0, Number(o.price) || 0),
-        },
-        room,
-      ),
-    )
-}
-
-function sanitizeMaterial(raw: unknown): Material | null {
-  if (!raw || typeof raw !== 'object') return null
-  const m = raw as Partial<Material>
-  const color = typeof m.color === 'string' && /^#[0-9a-f]{3,8}$/i.test(m.color)
-    ? m.color
-    : '#b9b7b1'
-  const pattern = (['solid', 'wood', 'stone', 'metal'] as const)
-    .includes(m.pattern as Material['pattern'])
-    ? (m.pattern as Material['pattern'])
-    : 'solid'
-  return {
-    name: String(m.name || 'Материал'),
-    color,
-    accent: typeof m.accent === 'string' ? m.accent : color,
-    pattern,
-    texture: typeof m.texture === 'string' && m.texture ? m.texture : undefined,
-    texScale: Number(m.texScale) > 0 ? Number(m.texScale) : undefined,
-  }
-}
-
-function normalizeMaterials(raw: unknown): Materials {
-  const out: Materials = { ...DEFAULT_MATERIALS }
-  if (!raw || typeof raw !== 'object') return out
-  for (const [role, value] of Object.entries(raw as Record<string, unknown>)) {
-    const m = sanitizeMaterial(value)
-    if (m) out[role] = m
-  }
-  return out
-}
-
-/** Переопределения материалов модуля: только заданные роли, без дефолтов. */
-function normalizeMaterialOverrides(raw: unknown): Materials | undefined {
-  if (!raw || typeof raw !== 'object') return undefined
-  const out: Materials = {}
-  for (const [role, value] of Object.entries(raw as Record<string, unknown>)) {
-    const m = sanitizeMaterial(value)
-    if (m) out[role] = m
-  }
-  return Object.keys(out).length ? out : undefined
-}
-
-function normalizeGlobals(raw: unknown): ProjectGlobals {
-  const g = { ...defaultGlobals(), ...((raw ?? {}) as Partial<ProjectGlobals>) }
-  return {
-    t: [10, 16, 18, 22].includes(Number(g.t)) ? Number(g.t) : 16,
-    back: (['dvp', 'same', 'cardboard', 'none'] as const).includes(g.back)
-      ? g.back : 'dvp',
-    backT: clamp(Math.round(Number(g.backT) || 4), 1, 18),
-    roof: g.roof !== false,
-    reinforce: (['auto', 'on', 'off'] as const).includes(g.reinforce)
-      ? g.reinforce : 'auto',
-    frame: g.frame === 'overlay' ? 'overlay' : 'inset',
-    hardware: (['blum', 'hettich', 'gtv'] as const).includes(g.hardware)
-      ? g.hardware : 'blum',
-    runners: String(g.runners || 'tandem-21'),
-    plinthH: clamp(Math.round(Number(g.plinthH ?? 100)), 0, 300),
-    worktopT: clamp(Math.round(Number(g.worktopT ?? 38)), 0, 80),
-    gapSide: clamp(Number(g.gapSide ?? 2), 0, 10),
-    gapBetween: clamp(Number(g.gapBetween ?? 3), 1, 8),
-    gapTop: clamp(Number(g.gapTop ?? 2), 0, 10),
-    gapBottom: clamp(Number(g.gapBottom ?? 2), 0, 10),
-    autoApply: g.autoApply !== false,
-  }
-}
-
-function normalizeProject(raw: unknown): Project {
-  const d = (raw ?? {}) as Partial<Project>
-  const base = defaultProject()
-  const globals = normalizeGlobals(d.globals)
-  const instances = (d.instances?.length ? d.instances : base.instances).map(
-    (i, idx) => ({
-      id: i.id || `i${Math.random().toString(36).slice(2, 7)}`,
-      product: i.product || 'base-cabinet',
-      name: i.name || `Модуль ${idx + 1}`,
-      x: Math.round(Number(i.x) || 0),
-      y: Math.round(Number(i.y) || 0),
-      z: Math.round(Number(i.z) || 0),
-      rot: Number(i.rot) || 0,
-      zLocked: i.zLocked !== false,
-      params: sanitizeParams({
-        ...defaultParams(),
-        ...globalsToParams(globals),
-        ...(i.params || {}),
-      }),
-      overrides: (() => {
-        if (Array.isArray(i.overrides)) {
-          return i.overrides.filter((k): k is ManagedParam =>
-            MANAGED_PARAMS.includes(k as ManagedParam))
-        }
-        // старые проекты: сохраняем отличие от глобальных как переопределение
-        const raw = (i.params ?? {}) as unknown as Record<string, unknown>
-        const base = globalsToParams(globals) as unknown as Record<string, unknown>
-        const diff = MANAGED_PARAMS.filter(
-          (k) => Object.prototype.hasOwnProperty.call(raw, k) && raw[k] !== base[k],
-        )
-        return diff.length ? diff : undefined
-      })(),
-      materials: normalizeMaterialOverrides(i.materials),
-      zone: String(i.zone || '').trim() || undefined,
-      partMaterials: (() => {
-        const raw = i.partMaterials
-        if (!raw || typeof raw !== 'object') return undefined
-        const out: Record<string, Material> = {}
-        for (const [k, v] of Object.entries(raw)) {
-          const mat = sanitizeMaterial(v)
-          if (mat) out[k] = mat
-        }
-        return Object.keys(out).length ? out : undefined
-      })(),
-      partMaterialGroups: (() => {
-        const raw = i.partMaterialGroups
-        if (!raw || typeof raw !== 'object') return undefined
-        const out: Record<string, Material> = {}
-        for (const [k, v] of Object.entries(raw)) {
-          const mat = sanitizeMaterial(v)
-          if (mat) out[k] = mat
-        }
-        return Object.keys(out).length ? out : undefined
-      })(),
-      partOverrides: (() => {
-        const raw = i.partOverrides
-        if (!raw || typeof raw !== 'object') return undefined
-        const out: Record<string, Material> = {}
-        for (const [k, v] of Object.entries(raw)) {
-          const mat = sanitizeMaterial(v)
-          if (mat) out[k] = mat
-        }
-        return Object.keys(out).length ? out : undefined
-      })(),
-      assemblyDone: Array.isArray(i.assemblyDone)
-        ? [...new Set(i.assemblyDone
-            .map((n) => Number(n))
-            .filter((n) => Number.isInteger(n) && n >= 0))].slice(0, 200)
-        : undefined,
-      anim: (i.anim as Record<string, ChannelSet> | undefined) ?? {},
-      ...((i as Instance & { doorsOpen?: boolean }).doorsOpen
-        ? { legacyDoorsOpen: true }
-        : {}),
-      ...((i as Instance & { drawersOpen?: boolean }).drawersOpen
-        ? { legacyDrawersOpen: true }
-        : {}),
-    }),
-  )
-  const roomBase: RoomDims = {
-    w: clamp(Math.round(d.room?.w ?? base.room.w), 1200, 12000),
-    d: clamp(Math.round(d.room?.d ?? base.room.d), 1200, 12000),
-    h: clamp(Math.round(d.room?.h ?? base.room.h), 2000, 4500),
-    wallT: 100,
-    floor: { enabled: true, material: 'floor', t: 0 },
-    ceiling: { enabled: false, material: 'ceiling', t: 0 },
-    wallItems: [],
-    openings: [],
-  }
-  return {
-    schema: PROJECT_SCHEMA,
-    name: d.name || 'Мой проект',
-    shop: d.shop && d.shop !== 'shop-default' ? d.shop : base.shop,
-    market: d.market || base.market,
-    supplier: d.supplier || base.supplier,
-    room: (() => {
-      const rawOutline = Array.isArray(d.room?.outline)
-        ? (d.room!.outline as [number, number][])
-            .filter((p) => Array.isArray(p) && p.length >= 2)
-            .map((p) => [Number(p[0]) || 0, Number(p[1]) || 0] as [number, number])
-        : []
-      const outline = rawOutline.length >= 3 ? rawOutline : undefined
-      const partitions = Array.isArray(d.room?.partitions)
-        ? (d.room!.partitions as RoomDims['partitions'])!
-            .filter((p) => p && Array.isArray(p.a) && Array.isArray(p.b))
-            .map((p) => ({
-              a: [Number(p.a[0]) || 0, Number(p.a[1]) || 0] as [number, number],
-              b: [Number(p.b[0]) || 0, Number(p.b[1]) || 0] as [number, number],
-              wallT: Number(p.wallT) || undefined,
-            }))
-        : undefined
-      const wallItems: WallItem[] = Array.isArray(d.room?.wallItems)
-        ? (d.room!.wallItems as WallItem[])
-            .filter((w) => w && w.id && w.kind)
-            .map((w) => ({
-              id: String(w.id),
-              kind: w.kind,
-              wall: Math.max(0, Math.round(Number(w.wall) || 0)),
-              x: Math.max(0, Number(w.x) || 0),
-              z: Math.max(0, Number(w.z) || 0),
-              w: Math.max(20, Number(w.w) || 600),
-              h: Math.max(20, Number(w.h) || 300),
-              depth: Math.max(5, Number(w.depth) || 20),
-            }))
-        : []
-      const floor: RoomSurface = {
-        enabled: d.room?.floor?.enabled !== false,
-        material: String(d.room?.floor?.material || 'floor'),
-        t: Number(d.room?.floor?.t) || 0,
-      }
-      const ceiling: RoomSurface = {
-        enabled: !!d.room?.ceiling?.enabled,
-        material: String(d.room?.ceiling?.material || 'ceiling'),
-        t: Number(d.room?.ceiling?.t) || 0,
-      }
-      const tmp: RoomDims = {
-        ...roomBase,
-        wallT: clamp(Math.round(d.room?.wallT ?? 100), 40, 300),
-        outline,
-        partitions,
-        floor,
-        ceiling,
-        wallItems,
-        openings: [],
-      }
-      if (outline) {
-        const b = roomBounds(tmp as Room)
-        tmp.w = Math.max(200, Math.round(b.maxX - b.minX))
-        tmp.d = Math.max(200, Math.round(b.maxY - b.minY))
-      }
-      tmp.openings = normalizeOpenings(
-        d.room?.openings ?? base.room.openings,
-        tmp,
-      )
-      return tmp
-    })(),
-    instances,
-    folders: Array.isArray(d.folders)
-      ? d.folders
-          .filter((f) => f && f.id)
-          .map((f) => ({
-            id: String(f.id),
-            name: String(f.name || 'Папка'),
-            ids: (f.ids ?? []).filter((id) =>
-              instances.some((i) => i.id === id),
-            ),
-          }))
-      : [],
-    globals,
-    materials: normalizeMaterials(d.materials),
-    materialVars: normalizeMaterialVars(d.materialVars),
-    finishes: Array.isArray(d.finishes)
-      ? d.finishes
-          .filter((f) => f && f.id)
-          .slice(0, 80)
-          .map((f) => ({
-            id: String(f.id),
-            name: String(f.name || 'Отделка'),
-            kind: f.kind === 'wall' || f.kind === 'ceiling' ? f.kind : 'floor',
-            x: Math.max(0, Number(f.x) || 0),
-            y: Math.max(0, Number(f.y) || 0),
-            w: Math.max(100, Number(f.w) || 1000),
-            d: Math.max(100, Number(f.d) || 1000),
-            material: String(f.material || 'Плитка'),
-            color: String(f.color || '#a9b4bd'),
-            tileW: Math.max(10, Number(f.tileW) || 300),
-            tileH: Math.max(10, Number(f.tileH) || 300),
-            grout: Math.max(0, Number(f.grout) || 2),
-            waste: Math.max(0, Number(f.waste) || 10),
-            price_m2: Math.max(0, Number(f.price_m2) || 0),
-          }))
-      : [],
-    wallMode: d.wallMode === 'low' ? 'low' : 'cutaway',
-    camera3d: (() => {
-      const c = d.camera3d
-      if (!c || typeof c !== 'object') return undefined
-      return {
-        alpha: Number(c.alpha) || -60,
-        beta: Number(c.beta) || 38,
-      }
-    })(),
-    props: (() => {
-      const allowed = new Set<PropType>([
-        'bed', 'sofa', 'armchair', 'chair', 'coffee-table', 'tv',
-        'rug', 'bathtub', 'toilet', 'vanity', 'shower', 'plant',
-        'dresser', 'lamp', 'fridge', 'stove', 'sink',
-      ])
-      return Array.isArray(d.props)
-        ? d.props
-            .filter((p) => p && allowed.has(p.type as PropType))
-            .slice(0, 120)
-            .map((p, i) => ({
-              id: String(p.id || `prop${i + 1}`),
-              type: p.type as PropType,
-              name: String(p.name || 'Декор'),
-              x: Math.round(Number(p.x) || 0),
-              y: Math.round(Number(p.y) || 0),
-              z: Math.round(Number(p.z) || 0),
-              rot: Number(p.rot) || 0,
-              w: Math.max(100, Number(p.w) || 1000),
-              d: Math.max(100, Number(p.d) || 1000),
-              h: Math.max(50, Number(p.h) || 500),
-              color: String(p.color || '#8b8f95'),
-              accent: p.accent ? String(p.accent) : undefined,
-            }))
-        : []
-    })(),
-    zones: (() => {
-      const names = new Set<string>()
-      for (const z of d.zones ?? []) {
-        const s = String(z || '').trim()
-        if (s) names.add(s)
-      }
-      for (const i of d.instances ?? []) {
-        const z = String((i as Instance).zone || '').trim()
-        if (z) names.add(z)
-      }
-      return [...names]
-    })(),
-    log: Array.isArray(d.log)
-      ? d.log
-          .filter((x) => x && typeof x.label === 'string')
-          .slice(-200)
-          .map((x) => ({ time: String(x.time || ''), label: String(x.label) }))
-      : [],
-    views: Array.isArray(d.views)
-      ? d.views
-          .filter((v) => v && v.camera)
-          .map((v, i) => ({
-            id: v.id || `v${i}`,
-            name: v.name || `Вид ${i + 1}`,
-            camera: {
-              yaw: Number(v.camera.yaw) || 0,
-              pitch: Number(v.camera.pitch) || 0,
-              zoom: Number(v.camera.zoom) || 0.2,
-              target: [
-                Number(v.camera.target?.[0]) || 0,
-                Number(v.camera.target?.[1]) || 0,
-                Number(v.camera.target?.[2]) || 0,
-              ] as [number, number, number],
-              projection:
-                v.camera.projection === 'persp' ? 'persp' : 'ortho',
-              distance: Number(v.camera.distance) || 6000,
-              fov: Number(v.camera.fov) || 35,
-            },
-            wallMode: v.wallMode === 'low' ? 'low' : 'cutaway',
-            viewMode: v.viewMode === 'schematic' ? 'schematic' : 'realistic',
-          }))
-      : [],
-  }
-}
+import {
+  DEFAULT_MATERIALS,
+  MANAGED_PARAMS,
+  MATERIAL_ROLES,
+  MODULE_PRESETS,
+  PROJECT_SCHEMA,
+  clamp,
+  clampOpening,
+  defaultGlobals,
+  defaultParams,
+  defaultProject,
+  globalsToParams,
+  normalizeGlobals,
+  normalizeMaterialOverrides,
+  normalizeMaterials,
+  normalizeOpenings,
+  normalizeProject,
+  sanitizeParams,
+  suggestDoors,
+  wallLength,
+} from './defaults'
+import type {
+  BackKind,
+  EdgePolicy,
+  Finish,
+  Folder,
+  Frame,
+  FrontBlock,
+  Hardware,
+  Instance,
+  LogEntry,
+  ManagedParam,
+  ModulePreset,
+  Params,
+  Project,
+  ProjectGlobals,
+  Reinforce,
+  RoomDims,
+  SavedView,
+} from './defaults'
+export * from './defaults'
 
 export const state = reactive({
   project: defaultProject(),
@@ -1266,6 +118,10 @@ export const state = reactive({
   selected: [] as string[],
   /** выбранный проём (окно/дверь) в дереве объектов */
   openingId: null as string | null,
+  /** выбранный декоративный объект (не входит в смету) */
+  propId: null as string | null,
+  /** открыта панель свойств декора */
+  propPanelOpen: false,
   /** выбранная папка в дереве объектов */
   folderId: null as string | null,
   /** выбрана комната (свойства комнаты) */
@@ -1303,8 +159,11 @@ export const state = reactive({
   /** запрос камеры: показать объект целиком с выбранного направления */
   focusToken: 0,
   focusInstanceId: null as string | null,
+  focusPropId: null as string | null,
   focusView: 'front' as 'front' | 'iso' | 'side' | 'top',
   focusLeft: 1,
+  /** доля экрана по высоте, доступная объекту (1 — вся высота) */
+  focusBottom: 1,
   /** доля ширины 3D-канваса, видимая слева в объектном режиме */
   objectLeft: 0.38,
   busy: false,
@@ -1319,10 +178,28 @@ export const state = reactive({
 export const ui = reactive({
   /** открыта модалка «Добавить объект» */
   addOpen: false,
+  /** активная вкладка библиотеки при открытии */
+  addTab: 'furniture' as 'furniture' | 'tech' | 'decor' | 'opening',
+  /** основной вид: 3D или 2D-развёртки стен без WebGL */
+  renderMode: '3d' as '3d' | 'draft',
+  /** в 2D: развёртки стен или план */
+  draftTab: 'walls' as 'walls' | 'plan',
+  /** показывать только модули выбранной комнаты (папки) */
+  onlyRoom: false,
   /** показывать фасады в 3D (можно скрыть для просмотра деталей) */
   facades: true,
   /** показывать ручки/петли/фурнитуру поверх схемы */
   hardware: true,
+  /** угол обзора в прогулке, градусы по вертикали */
+  walkFov: 60,
+  /** режим «Мастер»: только главные действия, без продвинутых панелей */
+  master: (() => {
+    try {
+      return localStorage.getItem('furniture.master') === '1'
+    } catch {
+      return false
+    }
+  })(),
   /** перемещение модулей мышью по 3D-канвасу (по умолчанию выключено) */
   dragMove: false,
   /** размеры поверх 3D-канваса */
@@ -1334,8 +211,14 @@ export const ui = reactive({
   },
   /** мобильная панель «Объекты» открыта */
   panelOpen: false,
+  /** шторка «Вид и сцена» (ракурс, камера, настройки сцены) */
+  viewSheetOpen: false,
   /** меню «Ещё» (файлы, версии, КП, экспорт) */
   moreOpen: false,
+  /** мастер «Быстрый старт» */
+  quickOpen: false,
+  /** сводка «Готовый проект» */
+  resultOpen: false,
   /** модалка проектов на диске */
   projectsOpen: false,
   /** журнал изменений */
@@ -1347,7 +230,7 @@ export const ui = reactive({
   toast: null as null | {
     id: number
     text: string
-    action: 'undo' | null
+    action: 'undo' | 'layout' | null
     kind: 'info' | 'success' | 'error'
   },
   /** модалка настроек проекта */
@@ -1358,6 +241,8 @@ export const ui = reactive({
   quoteOpen: false,
   /** модалка версий проекта */
   versionsOpen: false,
+  /** проверка расстановки мебели */
+  layoutOpen: false,
   /** модалка отделки (плитка/ламинат/паркет) */
   finishOpen: false,
   finishId: null as string | null,
@@ -1365,6 +250,15 @@ export const ui = reactive({
 
 /** Последняя позиция курсора (clientX/clientY) — для привязки плавающих окон. */
 export const pointer = { x: 0, y: 0 }
+
+/** Кэш расчётов действителен только для текущей версии движка. */
+function cacheIsFresh(cache: Record<string, SolveResponse>): boolean {
+  const rows = Object.values(cache)
+  if (!rows.length) return false
+  return rows.every((r) =>
+    (r.objects ?? []).every((o) => !!o.op_part),
+  )
+}
 
 export function openAddModal(): void {
   ui.addOpen = true
@@ -1392,19 +286,62 @@ export function focusObject(
   id: string,
   view: 'front' | 'iso' | 'side' | 'top' = 'front',
   leftFraction = 1,
+  bottomFraction = 1,
 ): void {
   state.focusInstanceId = id
+  state.focusPropId = null
   state.focusView = view
   state.focusLeft = Math.min(1, Math.max(0.2, leftFraction))
+  state.focusBottom = Math.min(1, Math.max(0.3, bottomFraction))
   state.focusToken++
 }
 
 export const derived = reactive<Record<string, SolveResponse>>({})
 
+/** Результат серверной проверки расстановки (план + объёмы + декор). */
+export const layoutState = reactive({
+  errors: 0,
+  warnings: 0,
+  issues: [] as { code: string; level: string; message: string }[],
+  busy: false,
+  checkedAt: 0,
+})
+
+let layoutTimer = 0
+let layoutSeq = 0
+
+export function scheduleLayoutCheck(delay = 800): void {
+  if (layoutTimer) clearTimeout(layoutTimer)
+  layoutTimer = window.setTimeout(() => {
+    layoutTimer = 0
+    void checkLayout()
+  }, delay)
+}
+
+export async function checkLayout(): Promise<void> {
+  if (!state.projectId || state.saveState === 'saving') return
+  const seq = ++layoutSeq
+  layoutState.busy = true
+  try {
+    const r = await apiProjectLayout(state.projectId)
+    if (seq !== layoutSeq) return
+    layoutState.errors = r.errors
+    layoutState.warnings = r.warnings
+    layoutState.issues = r.issues
+    layoutState.checkedAt = Date.now()
+  } catch {
+    /* сеть/сессия — не затираем последний результат */
+  } finally {
+    if (seq === layoutSeq) layoutState.busy = false
+  }
+}
+
 if (import.meta.env.DEV) {
   ;(window as unknown as Record<string, unknown>).__furniture = {
     state,
+    ui,
     derived,
+    layoutState,
     get partSelection() {
       return partSelection
     },
@@ -1420,11 +357,26 @@ export const partSelection = reactive<{
   part: number | null
 }>({ instanceId: null, part: null })
 
+/** Показать декоративный объект в 3D (ошибки расстановки по декору). */
+export function focusProp(propId: string): void {
+  state.focusInstanceId = null
+  state.focusPropId = propId
+  state.focusView = 'iso'
+  state.focusLeft = 1
+  state.focusToken++
+}
+
 export function selectPart(
   instanceId: string,
   part: number | null,
   openModal = true,
 ): void {
+  // Выбор детали — всегда одиночный: активным становится один модуль
+  // и одна деталь внутри него.
+  if (part != null && instanceId) {
+    state.selection = instanceId
+    state.selected = [instanceId]
+  }
   partSelection.instanceId = part == null ? null : instanceId
   partSelection.part = part
   // выбор детали не открывает сразу редактор: сначала простая модалка,
@@ -1714,7 +666,7 @@ function touch(): void {
   state.rev++
 }
 
-function pushHistory(label = 'Изменение'): void {
+export function pushHistory(label = 'Изменение'): void {
   history.undo.push(JSON.stringify(state.project))
   if (history.undo.length > 60) history.undo.shift()
   history.redo.length = 0
@@ -1732,8 +684,352 @@ export function revealProps(): void {
   state.propsToken++
 }
 
+/** Заготовки декора: размеры по умолчанию для библиотеки. */
+export type PropCategory =
+  | 'soft' | 'beds' | 'tables' | 'storage' | 'decor' | 'tech' | 'bath'
+
+export const PROP_GROUPS: { id: PropCategory; label: string }[] = [
+  { id: 'soft', label: 'Мягкая мебель' },
+  { id: 'beds', label: 'Кровати' },
+  { id: 'tables', label: 'Столы и стулья' },
+  { id: 'storage', label: 'Корпусная мебель' },
+  { id: 'tech', label: 'Техника' },
+  { id: 'bath', label: 'Сантехника' },
+  { id: 'decor', label: 'Декор' },
+]
+
+export interface PropPreset {
+  key: string
+  type: PropType
+  name: string
+  category: PropCategory
+  group: string
+  w: number
+  d: number
+  h: number
+  color: string
+  accent?: string
+  icon: string
+}
+
+const G = (id: PropCategory): string =>
+  PROP_GROUPS.find((g) => g.id === id)?.label ?? 'Декор'
+
+const prop = (
+  key: string, type: PropType, name: string, category: PropCategory,
+  w: number, d: number, h: number, color: string, icon: string,
+  accent?: string,
+): PropPreset => ({
+  key, type, name, category, group: G(category),
+  w, d, h, color, accent, icon,
+})
+
+/** Библиотека объектов: категория «Мебель» с субкатегориями + техника/декор. */
+export const PROP_PRESETS: PropPreset[] = [
+  // --- мягкая мебель ---
+  prop('sofa-small', 'sofa', 'Диван 2-местный', 'soft',
+    1600, 900, 850, '#5f6a72', '🛋', '#9aa5ad'),
+  prop('sofa', 'sofa', 'Диван 3-местный', 'soft',
+    2200, 950, 850, '#5f6a72', '🛋', '#9aa5ad'),
+  prop('sofa-compact', 'sofa', 'Диван компакт', 'soft',
+    1200, 850, 820, '#6d7379', '🛋', '#9aa5ad'),
+  prop('armchair', 'armchair', 'Кресло', 'soft',
+    850, 850, 800, '#6b6f64', '🪑', '#a3a795'),
+  prop('armchair-xl', 'armchair', 'Кресло широкое', 'soft',
+    950, 900, 820, '#6b6f64', '🪑', '#a3a795'),
+
+  // --- кровати (ГОСТ 13025.2: 700/800/900, 1100…1800 × 1860–2050) ---
+  prop('bed-90', 'bed', 'Кровать 900', 'beds',
+    900, 2000, 900, '#8d7a66', '🛏', '#c8b6a2'),
+  prop('bed-120', 'bed', 'Кровать 1200', 'beds',
+    1200, 2000, 900, '#8d7a66', '🛏', '#c8b6a2'),
+  prop('bed', 'bed', 'Кровать 1600', 'beds',
+    1600, 2000, 900, '#8d7a66', '🛏', '#c8b6a2'),
+  prop('bed-180', 'bed', 'Кровать 1800', 'beds',
+    1800, 2000, 900, '#8d7a66', '🛏', '#c8b6a2'),
+
+  // --- столы и стулья ---
+  prop('dining-table', 'coffee-table', 'Обеденный стол 1600', 'tables',
+    1600, 900, 750, '#7b6652', '🪵', '#a68b6c'),
+  prop('dining-table-1200', 'coffee-table', 'Обеденный стол 1200', 'tables',
+    1200, 800, 750, '#7b6652', '🪵', '#a68b6c'),
+  prop('coffee-table', 'coffee-table', 'Журнальный стол', 'tables',
+    1100, 650, 420, '#7b6652', '🪵', '#a68b6c'),
+  prop('chair', 'chair', 'Стул', 'tables',
+    450, 480, 850, '#8a6b4f', '🪑', '#b08a63'),
+  prop('bar-chair', 'chair', 'Барный стул', 'tables',
+    450, 500, 1050, '#8a6b4f', '🪑', '#b08a63'),
+
+  // --- корпусная мебель (декор, вне BOM) ---
+  prop('dresser', 'dresser', 'Комод', 'storage',
+    1000, 450, 900, '#7b6652', '🗄', '#a68b6c'),
+  prop('tv-stand', 'dresser', 'ТВ-тумба', 'storage',
+    1800, 450, 500, '#7b6652', '🗄', '#a68b6c'),
+
+  // --- техника ---
+  prop('fridge', 'fridge', 'Холодильник', 'tech',
+    700, 650, 1850, '#c8ccd0', '🧊', '#9aa0a5'),
+  prop('stove', 'stove', 'Плита', 'tech',
+    600, 560, 850, '#2b2f33', '🔥', '#6b7378'),
+  prop('sink', 'sink', 'Мойка', 'tech',
+    800, 560, 850, '#c8ccd0', '🚰', '#9aa0a5'),
+  prop('tv', 'tv', 'Телевизор', 'tech',
+    1500, 90, 850, '#121417', '📺'),
+  prop('hood', 'hood', 'Вытяжка', 'tech',
+    600, 500, 600, '#b9c0c5', '💨', '#7c858c'),
+
+  // --- сантехника ---
+  prop('toilet', 'toilet', 'Унитаз', 'bath',
+    450, 650, 780, '#f0f1ec', '🚽', '#d5d7d0'),
+  prop('bathtub', 'bathtub', 'Ванна', 'bath',
+    1700, 800, 560, '#f0f1ec', '🛁', '#d5d7d0'),
+  prop('vanity', 'vanity', 'Тумба с раковиной', 'bath',
+    1200, 550, 850, '#f0f1ec', '🚿', '#d5d7d0'),
+  prop('shower', 'shower', 'Душевая', 'bath',
+    1000, 900, 2100, '#cfd4d8', '🚿', '#9aa0a5'),
+
+  // --- декор ---
+  prop('lamp', 'lamp', 'Торшер', 'decor',
+    350, 350, 1650, '#e8dcc4', '💡', '#c9b489'),
+  prop('plant', 'plant', 'Растение', 'decor',
+    450, 450, 1200, '#4e7a45', '🪴', '#3d6236'),
+  prop('rug', 'rug', 'Ковёр', 'decor',
+    2000, 1500, 12, '#8d7f70', '🟫'),
+]
+
+export const selectedProp = computed<Prop | null>(() => {
+  if (!state.propId) return null
+  return (state.project.props ?? []).find((p) => p.id === state.propId) ?? null
+})
+
+let propSeq = 0
+
+/** Свободное место под декор: спираль от центра комнаты. */
+function findPropSpot(w: number, d: number): { x: number; y: number } {
+  const room = state.project.room
+  const pad = 120
+  const boxes: { x0: number; y0: number; x1: number; y1: number }[] = []
+  for (const inst of state.project.instances) {
+    const b = footprintOf(inst.x, inst.y, inst.params.W, inst.params.D, inst.rot)
+    boxes.push({ x0: b.x, y0: b.y, x1: b.x + b.w, y1: b.y + b.d })
+  }
+  for (const pr of state.project.props ?? []) {
+    boxes.push({
+      x0: pr.x - pr.w / 2, y0: pr.y - pr.d / 2,
+      x1: pr.x + pr.w / 2, y1: pr.y + pr.d / 2,
+    })
+  }
+  const fits = (x: number, y: number): boolean => {
+    const x0 = x - w / 2, x1 = x + w / 2
+    const y0 = y - d / 2, y1 = y + d / 2
+    if (x0 < pad || y0 < pad) return false
+    if (x1 > room.w - pad || y1 > room.d - pad) return false
+    return !boxes.some((b) =>
+      x1 > b.x0 - 60 && x0 < b.x1 + 60 && y1 > b.y0 - 60 && y0 < b.y1 + 60)
+  }
+  const cx = room.w / 2
+  const cy = room.d / 2
+  if (fits(cx, cy)) return { x: Math.round(cx), y: Math.round(cy) }
+  for (let r = 200; r <= Math.max(room.w, room.d); r += 200) {
+    for (let a = 0; a < 360; a += 30) {
+      const rad = (a * Math.PI) / 180
+      const x = cx + Math.cos(rad) * r
+      const y = cy + Math.sin(rad) * r
+      if (fits(x, y)) return { x: Math.round(x), y: Math.round(y) }
+    }
+  }
+  return { x: Math.round(cx), y: Math.round(cy) }
+}
+
+/** Выбрать декор (с открытием панели или без). */
+export function selectProp(id: string | null, openPanel = true): void {
+  state.propId = id
+  state.selection = null
+  state.selected = []
+  state.openingId = null
+  state.folderId = null
+  state.roomSelected = false
+  state.wallIndex = null
+  state.wallItemId = null
+  state.propPanelOpen = Boolean(id && openPanel)
+  touch()
+}
+
+export function addProp(
+  keyOrType: string,
+  at?: { x: number; y: number; rot?: number },
+): string | null {
+  const preset = PROP_PRESETS.find((p) => p.key === keyOrType)
+    ?? PROP_PRESETS.find((p) => p.type === keyOrType)
+  if (!preset) return null
+  const type = preset.type
+  pushHistory(`Добавлен декор: ${preset.name}`)
+  const room = state.project.room
+  const props = state.project.props ?? []
+  propSeq++
+  let id = `p${Date.now().toString(36)}${propSeq}`
+  while (props.some((p) => p.id === id)) id += 'x'
+  const spot = at ?? findPropSpot(preset.w, preset.d)
+  const x = Math.round(spot.x)
+  const y = Math.round(spot.y)
+  props.push({
+    id,
+    type,
+    name: preset.name,
+    x,
+    y,
+    z: 0,
+    rot: at?.rot ?? 0,
+    w: preset.w,
+    d: preset.d,
+    h: preset.h,
+    color: preset.color,
+    accent: preset.accent,
+  })
+  state.project.props = props
+  state.propId = id
+  state.propPanelOpen = true
+  touch()
+  scheduleSave()
+  scheduleLayoutCheck(1200)
+  return id
+}
+
+export function updateProp(id: string, patch: Partial<Prop>, quiet = false): void {
+  const prop = (state.project.props ?? []).find((p) => p.id === id)
+  if (!prop) return
+  // Размер/поворот: не даём декору войти в стену, мебель или другой декор.
+  const geometry = ['w', 'd', 'h', 'rot', 'z'].some(
+    (k) => Object.prototype.hasOwnProperty.call(patch, k),
+  )
+  if (geometry && prop.type !== 'rug') {
+    const next = { ...prop, ...patch }
+    if (propCollides(next, next.x, next.y)) {
+      notify('Декор не помещается: пересечёт стену, мебель или другой декор', null, 'error')
+      return
+    }
+  }
+  if (!quiet) pushHistory('Изменение декора')
+  Object.assign(prop, patch)
+  touch()
+  scheduleSave()
+}
+
+/** Габарит декора (центр + поворот) в мировых осях. */
+function propBox(
+  x: number, y: number, w: number, d: number, rot: number,
+): Box2 {
+  const a = (rot * Math.PI) / 180
+  const cs = Math.cos(a)
+  const sn = Math.sin(a)
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const [lx, ly] of [
+    [-w / 2, -d / 2], [w / 2, -d / 2], [w / 2, d / 2], [-w / 2, d / 2],
+  ]) {
+    const wx = x + lx * cs - ly * sn
+    const wy = y + lx * sn + ly * cs
+    minX = Math.min(minX, wx)
+    maxX = Math.max(maxX, wx)
+    minY = Math.min(minY, wy)
+    maxY = Math.max(maxY, wy)
+  }
+  return { x: minX, y: minY, w: maxX - minX, d: maxY - minY }
+}
+
+/** Декор не входит в стены, мебель и другой декор (ковёр — покрытие пола). */
+function propCollides(prop: Prop, x: number, y: number): boolean {
+  const flat = propBox(x, y, prop.w, prop.d, prop.rot ?? 0)
+  if (!roomContains(flat.x, flat.y, flat.w, flat.d, 0)) return true
+  const z0 = Number(prop.z) || 0
+  const z1 = z0 + (Number(prop.h) || 0)
+  if (wallBodyHit(flat.x, flat.y, flat.w, flat.d, 0, z0, z1)) return true
+  const box: Box3 = { ...flat, z0, z1 }
+  const props = state.project.props ?? []
+  return state.project.instances.some((i) => overlaps(box, footprint(i)))
+    || props.some((p) => {
+      if (p.id === prop.id) return false
+      if (p.type === 'rug' || prop.type === 'rug') return false
+      const pb = propBox(p.x, p.y, p.w, p.d, p.rot ?? 0)
+      const pz0 = Number(p.z) || 0
+      return overlaps(box, { ...pb, z0: pz0, z1: pz0 + (Number(p.h) || 0) })
+    })
+}
+
+/** Перемещение декора мышью: история пишется один раз на drag. */
+export function moveProp(id: string, x: number, y: number): void {
+  const prop = (state.project.props ?? []).find((p) => p.id === id)
+  if (!prop) return
+  // Ковёр — покрытие пола: его можно класть под мебель.
+  if (prop.type === 'rug') {
+    prop.x = Math.round(x)
+    prop.y = Math.round(y)
+    touch()
+    return
+  }
+  const px = prop.x
+  const py = prop.y
+  for (const [nx, ny] of [[x, y], [x, py], [px, y]]) {
+    if (!propCollides(prop, nx, ny)) {
+      prop.x = Math.round(nx)
+      prop.y = Math.round(ny)
+      touch()
+      return
+    }
+  }
+}
+
+export function rotateProp(id: string, delta: number): void {
+  const prop = (state.project.props ?? []).find((p) => p.id === id)
+  if (!prop) return
+  pushHistory('Поворот декора')
+  prop.rot = ((((prop.rot ?? 0) + delta) % 360) + 360) % 360
+  touch()
+  scheduleSave()
+}
+
+export function duplicateProp(id: string): void {
+  const prop = (state.project.props ?? []).find((p) => p.id === id)
+  if (!prop) return
+  pushHistory('Копия декора')
+  const copy: Prop = {
+    ...prop,
+    id: `${prop.id}-${Date.now().toString(36)}`,
+    x: prop.x + 150,
+    y: prop.y + 150,
+  }
+  state.project.props = [...(state.project.props ?? []), copy]
+  state.propId = copy.id
+  touch()
+  scheduleSave()
+  scheduleLayoutCheck(1200)
+}
+
+export function deleteProp(id: string): void {
+  const props = state.project.props ?? []
+  if (!props.some((p) => p.id === id)) return
+  pushHistory('Удалён декор')
+  state.project.props = props.filter((p) => p.id !== id)
+  if (state.propId === id) {
+    state.propId = null
+    state.propPanelOpen = false
+    state.focusPropId = null
+  }
+  touch()
+  scheduleSave()
+  scheduleLayoutCheck(1000)
+}
+
+/** Показать/скрыть панель декора. */
+export function setPropPanel(open: boolean): void {
+  state.propPanelOpen = open
+}
+
 /** Выбрать модуль, не открывая и не закрывая окно настроек. */
 export function selectQuiet(id: string): void {
+  ensureSolved(id)
   if (state.selection !== id) {
     partSelection.instanceId = null
     partSelection.part = null
@@ -1741,6 +1037,7 @@ export function selectQuiet(id: string): void {
   state.selection = id
   state.selected = [id]
   state.openingId = null
+  state.propId = null
   state.folderId = null
   state.roomSelected = false
   state.wallIndex = null
@@ -1749,10 +1046,12 @@ export function selectQuiet(id: string): void {
 }
 
 export function select(id: string | null): void {
+  if (id) ensureSolved(id)
   if (state.selection !== id) selectPart(id ?? '', null)
   state.selection = id
   state.selected = id ? [id] : []
   state.openingId = null
+  state.propId = null
   state.folderId = null
   state.roomSelected = false
   state.wallIndex = null
@@ -1764,6 +1063,7 @@ export function select(id: string | null): void {
 
 /** Shift/Ctrl+клик: добавить или убрать модуль из выделения. */
 export function toggleSelection(id: string): void {
+  ensureSolved(id)
   const inSet = state.selected.includes(id)
   if (inSet) {
     state.selected = state.selected.filter((x) => x !== id)
@@ -1776,6 +1076,7 @@ export function toggleSelection(id: string): void {
   }
   selectPart(state.selection ?? '', null)
   state.openingId = null
+  state.propId = null
   state.folderId = null
   state.roomSelected = false
   state.wallIndex = null
@@ -1822,6 +1123,7 @@ export function selectWall(index: number, openModal = true): void {
   state.selection = null
   state.selected = []
   state.openingId = null
+  state.propId = null
   state.folderId = null
   state.roomSelected = true
   state.roomNode = 'wall'
@@ -1835,6 +1137,7 @@ export function selectOpening(id: string | null, openModal = true): void {
   state.openingId = id
   state.selection = null
   state.selected = []
+  state.propId = null
   state.folderId = null
   state.roomSelected = false
   state.wallIndex = null
@@ -1846,6 +1149,17 @@ export function selectOpening(id: string | null, openModal = true): void {
 
 export function selectFolder(id: string | null): void {
   state.folderId = id
+  if (id && ui.onlyRoom) {
+    // Освобождаем расчёт скрытых комнат, чтобы не держать весь проект в памяти.
+    const f = state.project.folders.find((x) => x.id === id)
+    if (f) {
+      const keep = new Set(f.ids)
+      for (const inst of state.project.instances) {
+        if (!keep.has(inst.id)) delete derived[inst.id]
+      }
+    }
+    void solveVisible()
+  }
   state.selection = null
   state.selected = []
   state.openingId = null
@@ -1861,6 +1175,7 @@ export function clearSelection(): void {
   state.selected = []
   state.selection = null
   state.openingId = null
+  state.propId = null
   state.folderId = null
   state.roomSelected = false
   state.wallIndex = null
@@ -1908,9 +1223,8 @@ export function moveSelection(
     const flat = footprintOf(p.x, p.y, inst.params.W, inst.params.D, inst.rot)
     const [z0, z1] = zSpan(inst)
     const bb: Box3 = { ...flat, z0, z1 }
-    if (bb.x < -0.01 || bb.y < -0.01) return
-    if (bb.x + bb.w > state.project.room.w + 0.01) return
-    if (bb.y + bb.d > state.project.room.d + 0.01) return
+    if (!roomContains(p.x, p.y, inst.params.W, inst.params.D, inst.rot)) return
+    if (wallBodyHit(p.x, p.y, inst.params.W, inst.params.D, inst.rot, z0, z1)) return
     for (const other of state.project.instances) {
       if (moved.has(other.id)) continue
       if (overlaps(bb, footprint(other))) return
@@ -2090,10 +1404,29 @@ export function pushSelection(
   }
 
   if (!Number.isFinite(dist) || dist < 0.5) return
+  // Останавливаемся не только о модуль, но и о внутреннюю грань стены/проём.
+  const step = 10
+  let safe = 0
+  for (let d = step; d <= dist + 0.01; d += step) {
+    let ok = true
+    for (const inst of insts) {
+      const nx = inst.x + dir[0] * d
+      const ny = inst.y + dir[1] * d
+      const [z0, z1] = zSpan(inst)
+      if (!roomContains(nx, ny, inst.params.W, inst.params.D, inst.rot) ||
+          wallBodyHit(nx, ny, inst.params.W, inst.params.D, inst.rot, z0, z1)) {
+        ok = false
+        break
+      }
+    }
+    if (!ok) break
+    safe = d
+  }
+  if (safe < 0.5) return
   pushHistory()
   for (const inst of insts) {
-    inst.x += dir[0] * dist
-    inst.y += dir[1] * dist
+    inst.x += dir[0] * safe
+    inst.y += dir[1] * safe
   }
   clearGuides()
   touch()
@@ -2243,8 +1576,23 @@ export function duplicateSelection(): void {
 }
 
 let busy = 0
+const solving = new Set<string>()
+/** Один тост про ошибки расстановки до следующего успешного сохранения. */
+let layoutToastShown = false
+
+/** Русское склонение: 1 ошибка, 2 ошибки, 5 ошибок. */
+function plural(n: number, one: string, few: string, many: string): string {
+  const a = Math.abs(n) % 100
+  const b = a % 10
+  if (a > 10 && a < 20) return many
+  if (b === 1) return one
+  if (b >= 2 && b <= 4) return few
+  return many
+}
 
 async function solveOne(inst: Instance): Promise<void> {
+  if (solving.has(inst.id)) return
+  solving.add(inst.id)
   busy++
   state.busy = true
   try {
@@ -2266,22 +1614,156 @@ async function solveOne(inst: Instance): Promise<void> {
   } catch (e) {
     state.error = e instanceof Error ? e.message : String(e)
   } finally {
+    solving.delete(inst.id)
     busy--
     state.busy = busy > 0
   }
 }
 
-export async function solveAll(): Promise<void> {
-  // Не отправляем 20+ одновременных запросов: браузер упирается в лимит
-  // соединений, часть ответов теряется. Небольшая очередь стабильнее.
-  const queue = [...state.project.instances]
-  const workers = Math.min(4, queue.length)
+/** Досчитать один модуль по требованию (выбор, скрытая комната). */
+export function ensureSolved(id: string): void {
+  if (derived[id] || solving.has(id)) return
+  const inst = state.project.instances.find((i) => i.id === id)
+  if (inst) void solveOne(inst)
+}
+
+/**
+ * Ленивая загрузка: считать только модули выбранной комнаты (папки).
+ * Без выбранной папки — обычный solveAll.
+ */
+export async function solveVisible(): Promise<void> {
+  let folder = state.project.folders.find((f) => f.id === state.folderId)
+  if (!folder && ui.onlyRoom) {
+    // если комната ещё не выбрана — берём комнату выбранного/первого модуля
+    const first = state.project.instances.find((i) => i.id === state.selection)
+      ?? state.project.instances[0]
+    folder = first
+      ? state.project.folders.find((f) => f.ids.includes(first.id))
+      : undefined
+    if (folder) state.folderId = folder.id
+  }
+  if (!folder) return
+  const ids = new Set(folder.ids)
+  const queue = state.project.instances.filter(
+    (i) => ids.has(i.id) && !derived[i.id] && !solving.has(i.id),
+  )
+  if (!queue.length) return
+  const workers = Math.min(3, queue.length)
   await Promise.all(Array.from({ length: workers }, async () => {
     while (queue.length) {
       const inst = queue.shift()
       if (inst) await solveOne(inst)
     }
   }))
+}
+
+/**
+ * Пакетный расчёт: один HTTP-запрос на комнату вместо десятков PUT-ов.
+ * Падение одного модуля не мешает остальным.
+ */
+async function solveBatch(instances: Instance[]): Promise<void> {
+  const queue = instances.filter(
+    (i) => !derived[i.id] && !solving.has(i.id),
+  )
+  if (!queue.length) return
+  for (const inst of queue) solving.add(inst.id)
+  busy++
+  state.busy = true
+  const chunkSize = 12
+  try {
+    for (let i = 0; i < queue.length; i += chunkSize) {
+      const chunk = queue.slice(i, i + chunkSize)
+      try {
+        const rows = await apiSolveBatch(
+          chunk.map((inst) => ({
+            id: inst.id,
+            product: inst.product,
+            params: { ...inst.params },
+          })),
+          {
+            market: state.project.market,
+            shop: state.project.shop,
+            supplier: state.project.supplier,
+          },
+        )
+        for (const row of rows) {
+          const inst = chunk[row.index]
+          if (!inst) continue
+          if (row.result) {
+            derived[inst.id] = row.result
+            ensureAnim(inst)
+          } else if (row.error) {
+            state.error = row.error
+          }
+        }
+        touch()
+      } catch (e) {
+        // Если batch недоступен (старый API) — падаем на одиночный расчёт.
+        for (const inst of chunk) {
+          solving.delete(inst.id)
+        }
+        await Promise.all(chunk.map((inst) => solveOne(inst)))
+      }
+    }
+    state.error = ''
+    touch()
+  } finally {
+    for (const inst of queue) solving.delete(inst.id)
+    busy--
+    state.busy = busy > 0
+  }
+}
+
+async function solveMany(
+  instances: Instance[], workers = 3,
+): Promise<void> {
+  if (instances.length > 1) {
+    await solveBatch(instances)
+    return
+  }
+  const queue = instances.filter(
+    (i) => !derived[i.id] && !solving.has(i.id),
+  )
+  const n = Math.min(workers, queue.length)
+  await Promise.all(Array.from({ length: n }, async () => {
+    while (queue.length) {
+      const inst = queue.shift()
+      if (inst) await solveOne(inst)
+    }
+  }))
+}
+
+export async function solveAll(): Promise<void> {
+  // Не отправляем 20+ одновременных запросов: браузер упирается в лимит
+  // соединений, часть ответов теряется. Небольшая очередь стабильнее.
+  await solveMany(state.project.instances, 4)
+}
+
+let backgroundTimer = 0
+
+/**
+ * Первый экран: сначала комната выбранного/первого модуля, остальное — фоном.
+ * В режиме «Только комната» фон не запускается вообще.
+ */
+export async function solveInitial(): Promise<void> {
+  const insts = state.project.instances
+  if (insts.length <= 12) {
+    await solveAll()
+    return
+  }
+  const first = insts.find((i) => i.id === state.selection) ?? insts[0]
+  const folder = state.project.folders.find((f) => f.ids.includes(first.id))
+  if (folder) {
+    // Первый экран — один выбранный модуль, чтобы не ждать всю комнату.
+    await solveMany([first], 1)
+    clearTimeout(backgroundTimer)
+    backgroundTimer = window.setTimeout(() => {
+      if (ui.onlyRoom) void solveVisible()
+      else void solveAll()
+    }, 500)
+  } else {
+    await solveAll()
+  }
 }
 
 const timers = new Map<string, number>()
@@ -2314,9 +1796,23 @@ function scheduleSave(): void {
 let toastSeq = 0
 let toastTimer = 0
 
+export function setMaster(on: boolean): void {
+  ui.master = on
+  try {
+    localStorage.setItem('furniture.master', on ? '1' : '0')
+  } catch {
+    /* приватный режим — просто не запоминаем */
+  }
+  if (on) {
+    ui.renderMode = '3d'
+    ui.panelOpen = false
+  }
+  notify(on ? 'Мастер-режим: только главное' : 'Экспертный режим: все панели', null)
+}
+
 export function notify(
   text: string,
-  action: 'undo' | null = null,
+  action: 'undo' | 'layout' | null = null,
   kind: 'info' | 'success' | 'error' = 'info',
 ): void {
   if (toastTimer) clearTimeout(toastTimer)
@@ -2337,25 +1833,53 @@ export function dismissToast(): void {
  * Сохраняет проект в очередь: два одновременных PUT не могут обогнать друг
  * друга, а новый снимок всегда уходит после предыдущего.
  */
-export async function saveProject(): Promise<boolean> {
+export async function saveProject(force = false): Promise<boolean> {
   if (saveTimer) {
     clearTimeout(saveTimer)
     saveTimer = 0
   }
   const id = state.projectId
   const serialized = JSON.stringify(state.project)
-  state.dirty = false
   state.saveState = 'saving'
   const run = async (): Promise<boolean> => {
     try {
-      await apiPutProject(id, JSON.parse(serialized))
+      const doc = JSON.parse(serialized)
+      if (!force) {
+        // Preflight: не отправляем в БД заведомо невалидную сцену.
+        const pre = await apiValidateProject(doc)
+        layoutState.errors = pre.errors
+        layoutState.warnings = pre.warnings
+        layoutState.issues = pre.issues
+        layoutState.checkedAt = Date.now()
+        if (pre.errors > 0) {
+          if (state.projectId === id) {
+            state.dirty = true
+            state.saveError = `Проект не сохранён: ${pre.errors} ошибок расстановки`
+            state.saveState = 'error'
+            if (!layoutToastShown) {
+              layoutToastShown = true
+              const n = pre.errors
+              notify(
+                `Проект не сохранён: ${n} ${plural(n, 'ошибка', 'ошибки', 'ошибок')} расстановки`,
+                'layout',
+                'error',
+              )
+            }
+          }
+          return false
+        }
+      }
+      await apiPutProject(id, doc)
       if (state.projectId === id) {
+        layoutToastShown = false
+        state.dirty = false
         state.savedAt = new Date().toLocaleTimeString('ru-RU', {
           hour: '2-digit',
           minute: '2-digit',
         })
         state.saveError = ''
-        if (!state.dirty) state.saveState = 'saved'
+        state.saveState = 'saved'
+        scheduleLayoutCheck(300)
       }
       return true
     } catch (e) {
@@ -2378,13 +1902,13 @@ export async function saveProject(): Promise<boolean> {
 }
 
 /** Дождаться сохранения перед сменой проекта/версии. */
-export async function flushSave(): Promise<boolean> {
+export async function flushSave(force = false): Promise<boolean> {
   if (saveTimer) {
     clearTimeout(saveTimer)
     saveTimer = 0
   }
   if (!state.dirty && state.saveState !== 'saving') return true
-  return saveProject()
+  return saveProject(force)
 }
 
 /** Последний шанс сохранить при закрытии вкладки. */
@@ -2540,64 +2064,6 @@ export function setRoom(patch: Partial<RoomDims>, record = true): void {
   scheduleSave()
 }
 
-interface Box2 {
-  x: number
-  y: number
-  w: number
-  d: number
-}
-
-interface Box3 extends Box2 {
-  z0: number
-  z1: number
-}
-
-/** Вертикальный габарит модуля: Z + полная высота (цоколь/столешница). */
-export function zSpan(inst: Instance): [number, number] {
-  const p = inst.params
-  const h = p.mount === 'wall'
-    ? p.H
-    : (p.plinthH || 0) + p.H + (p.worktopT || 0)
-  const z0 = inst.z || 0
-  return [z0, z0 + h]
-}
-
-export function normalizeRot(deg: number): number {
-  const r = Math.round(deg / 90) * 90
-  return ((r % 360) + 360) % 360
-}
-
-/** Габарит повёрнутого модуля в мировых осях (AABB). */
-function footprintOf(
-  x: number,
-  y: number,
-  W: number,
-  D: number,
-  rot: number,
-): Box2 {
-  const a = (rot * Math.PI) / 180
-  const cs = Math.cos(a)
-  const sn = Math.sin(a)
-  let minX = Infinity
-  let minY = Infinity
-  let maxX = -Infinity
-  let maxY = -Infinity
-  for (const [lx, ly] of [
-    [0, 0],
-    [W, 0],
-    [W, D],
-    [0, D],
-  ]) {
-    const wx = x + lx * cs - ly * sn
-    const wy = y + lx * sn + ly * cs
-    if (wx < minX) minX = wx
-    if (wx > maxX) maxX = wx
-    if (wy < minY) minY = wy
-    if (wy > maxY) maxY = wy
-  }
-  return { x: minX, y: minY, w: maxX - minX, d: maxY - minY }
-}
-
 function footprint(inst: Instance): Box3 {
   const d = derived[inst.id]
   const bb = footprintOf(
@@ -2611,51 +2077,47 @@ function footprint(inst: Instance): Box3 {
   return { ...bb, z0, z1 }
 }
 
-/** Пересечение объёмов: по плану И по высоте. Навесной над напольным — ок. */
-function overlaps(a: Box3, b: Box3): boolean {
-  const eps = 0.05
-  return (
-    a.x < b.x + b.w - eps &&
-    a.x + a.w > b.x + eps &&
-    a.y < b.y + b.d - eps &&
-    a.y + a.d > b.y + eps &&
-    a.z0 < b.z1 - 0.5 &&
-    a.z1 > b.z0 + 0.5
-  )
-}
-
 function roomContains(x: number, y: number, W: number, D: number, rot: number): boolean {
   const room = state.project.room
   if (!room.outline?.length) return true
   const pts = outlinePoints(room)
-  const a = (rot * Math.PI) / 180
-  const cs = Math.cos(a)
-  const sn = Math.sin(a)
-  for (const [lx, ly] of [[0, 0], [W, 0], [W, D], [0, D]]) {
-    const wx = x + lx * cs - ly * sn
-    const wy = y + lx * sn + ly * cs
-    if (!pointInPoly(wx, wy, pts)) return false
-  }
-  return true
+  return cornersOf(x, y, W, D, rot).every((p) => insideOrEdge(p.x, p.y, pts, 1.5))
 }
 
-function partitionHits(r: Box2): boolean {
+/** Тело стены или зона проёма под модулем (с учётом высоты Z). */
+function wallBodyHit(
+  x: number, y: number, W: number, D: number, rot: number,
+  z0: number, z1: number,
+): boolean {
   const room = state.project.room
-  const parts = room.partitions ?? []
-  for (const p of parts) {
-    const [ax, ay] = p.a
-    const [bx, by] = p.b
-    const len = Math.hypot(bx - ax, by - ay)
-    if (len < 1) continue
-    const n = Math.max(2, Math.ceil(len / 25))
-    for (let i = 0; i <= n; i++) {
-      const t = i / n
-      const px = ax + (bx - ax) * t
-      const py = ay + (by - ay) * t
-      if (px > r.x - 20 && px < r.x + r.w + 20 &&
-          py > r.y - 20 && py < r.y + r.d + 20) {
-        return true
-      }
+  const pts = cornersOf(x, y, W, D, rot)
+  for (const w of roomWalls(room)) {
+    let sMin = Infinity
+    let sMax = -Infinity
+    let oMin = Infinity
+    let oMax = -Infinity
+    for (const p of pts) {
+      const s = (p.x - w.a.x) * w.dx + (p.y - w.a.y) * w.dy
+      const o = (p.x - w.a.x) * w.nx + (p.y - w.a.y) * w.ny
+      sMin = Math.min(sMin, s)
+      sMax = Math.max(sMax, s)
+      oMin = Math.min(oMin, o)
+      oMax = Math.max(oMax, o)
+    }
+    if (sMax <= 0.5 || sMin >= w.len - 0.5) continue
+    // тело стены: [ -t, 0 ] вдоль нормали
+    if (oMin < -0.5 && oMax > -w.t + 0.5) return true
+    for (const o of room.openings ?? []) {
+      if (o.wall !== w.index) continue
+      const oz0 = Math.max(0, o.z0)
+      const oz1 = Math.max(oz0, o.z1)
+      if (z1 <= oz0 + 20 || z0 >= oz1 - 20) continue
+      const ox0 = Math.max(0, o.x)
+      const ox1 = ox0 + Math.max(0, o.w)
+      if (sMax <= ox0 + 0.5 || sMin >= ox1 - 0.5) continue
+      // дверь требует свободной зоны с обеих сторон, окно — только у стены
+      const reach = o.kind === 'door' ? 420 : 80
+      if (oMax > -w.t - 60 && oMin < reach) return true
     }
   }
   return false
@@ -2670,9 +2132,9 @@ function collides(
   rot = 0,
 ): boolean {
   if (!roomContains(x, y, W, D, rot)) return true
-  const flat = footprintOf(x, y, W, D, rot)
-  if (partitionHits(flat)) return true
   const [z0, z1] = zSpan(inst)
+  if (wallBodyHit(x, y, W, D, rot, z0, z1)) return true
+  const flat = footprintOf(x, y, W, D, rot)
   const r: Box3 = { ...flat, z0, z1 }
   return state.project.instances.some(
     (i) => i.id !== inst.id && overlaps(r, footprint(i)),
@@ -2687,7 +2149,7 @@ function findFreeNear(
   D: number,
 ): { x: number; y: number } {
   const room = state.project.room
-  const step = 50
+  const step = 25
   const cands: { x: number; y: number }[] = []
   for (let r = 1; r <= 10; r++) {
     for (const dx of [-r * step, r * step]) {
@@ -2717,19 +2179,40 @@ function snapPlacement(
   const oy = box.y - y
   const W = box.w
   const D = box.d
-  const SNAP = 30
+  const SNAP = 60
   const others = state.project.instances
     .filter((i) => i.id !== inst.id)
     .map(footprint)
 
+  const b = roomBounds(room)
   const xCands: { value: number; guide: number }[] = [
-    { value: 0, guide: 0 },
-    { value: room.w - W, guide: room.w },
+    { value: b.minX, guide: b.minX },
+    { value: b.maxX - W, guide: b.maxX },
   ]
   const yCands: { value: number; guide: number }[] = [
-    { value: 0, guide: 0 },
-    { value: room.d - D, guide: room.d },
+    { value: b.minY, guide: b.minY },
+    { value: b.maxY - D, guide: b.maxY },
   ]
+  // внутренние грани стен: прижимаем к ним, а не к осевой линии
+  const corners = cornersOf(x, y, W, D, inst.rot)
+  for (const f of wallFaces(room)) {
+    let sMin = Infinity
+    let sMax = -Infinity
+    for (const p of corners) {
+      const s = (p.x - f.ax) * f.dx + (p.y - f.ay) * f.dy
+      sMin = Math.min(sMin, s)
+      sMax = Math.max(sMax, s)
+    }
+    if (sMax < -5 || sMin > f.len + 5) continue
+    if (Math.abs(f.nx) > 0.9) {
+      const v = f.nx > 0 ? f.ax : f.ax - W
+      xCands.push({ value: v, guide: f.ax })
+    }
+    if (Math.abs(f.ny) > 0.9) {
+      const v = f.ny > 0 ? f.ay : f.ay - D
+      yCands.push({ value: v, guide: f.ay })
+    }
+  }
   for (const o of others) {
     xCands.push({ value: o.x, guide: o.x })
     xCands.push({ value: o.x + o.w, guide: o.x + o.w })
@@ -2757,10 +2240,8 @@ function snapPlacement(
 
   const sx = pick(box.x, xCands)
   const sy = pick(box.y, yCands)
-  const maxX = Math.max(0, room.w - W)
-  const maxY = Math.max(0, room.d - D)
-  const nx = clamp(Math.round((sx ? sx.value : box.x) / 10) * 10, 0, maxX)
-  const ny = clamp(Math.round((sy ? sy.value : box.y) / 10) * 10, 0, maxY)
+  const nx = clamp(Math.round((sx ? sx.value : box.x) / 10) * 10, b.minX, b.maxX - W)
+  const ny = clamp(Math.round((sy ? sy.value : box.y) / 10) * 10, b.minY, b.maxY - D)
 
   if (withGuides) {
     state.guides.x = sx ? sx.guide : null
@@ -2916,11 +2397,11 @@ function findFreeSpot(
   const room = state.project.room
   const others = state.project.instances.map(footprint)
   const b = roomBounds(room)
-  for (let y = b.maxY - D; y >= b.minY; y -= 50) {
-    for (let x = b.minX + 50; x <= b.maxX - W - 50; x += 50) {
+  for (let y = b.maxY - D; y >= b.minY; y -= 25) {
+    for (let x = b.minX + 25; x <= b.maxX - W - 25; x += 25) {
       if (!roomContains(x, y, W, D, 0)) continue
+      if (wallBodyHit(x, y, W, D, 0, span[0], span[1])) continue
       const box: Box3 = { x, y, w: W, d: D, z0: span[0], z1: span[1] }
-      if (partitionHits(box)) continue
       if (!others.some((o) => overlaps(box, o))) return { x, y }
     }
   }
@@ -3003,7 +2484,7 @@ export function duplicateInstance(id: string): void {
     id: newId,
     name: `${src.name || 'Модуль'} копия`,
   }
-  const snapped = snapPlacement(inst, src.x + W + 50, src.y, false)
+  const snapped = snapPlacement(inst, src.x + W, src.y, false)
   let fx = snapped.x
   let fy = snapped.y
   if (collides(inst, fx, fy, inst.params.W, inst.params.D)) {
@@ -3720,6 +3201,55 @@ export function addWallItem(kind: WallItemKind, wall: number): void {
   scheduleSave()
 }
 
+/** Предмет на стене не входит в проём и не прячется за модулем. */
+function wallItemBlocked(
+  item: WallItem, x: number, z: number,
+): boolean {
+  const room = state.project.room
+  const walls = roomWalls(room)
+  const seg = walls.find((w) => w.index === item.wall)
+  if (!seg) return true
+  const w = Number(item.w) || 0
+  const h = Number(item.h) || 0
+  if (x < -0.5 || x + w > seg.len + 0.5 || z < -0.5) return true
+  for (const o of room.openings ?? []) {
+    if (o.wall !== seg.index) continue
+    const ox1 = Number(o.x) + Number(o.w)
+    if (x + w > Number(o.x) + 0.5 && x < ox1 - 0.5
+      && z + h > Number(o.z0) + 0.5 && z < Number(o.z1) - 0.5) return true
+  }
+  for (const inst of state.project.instances) {
+    const pts = cornersOf(
+      inst.x, inst.y, inst.params.W, inst.params.D, inst.rot,
+    )
+    let s0 = Infinity
+    let s1 = -Infinity
+    for (const p of pts) {
+      const s = (p.x - seg.a.x) * seg.dx + (p.y - seg.a.y) * seg.dy
+      s0 = Math.min(s0, s)
+      s1 = Math.max(s1, s)
+    }
+    const [iz0, iz1] = zSpan(inst)
+    if (x + w > s0 + 0.5 && x < s1 - 0.5
+      && z + h > iz0 + 0.5 && z < iz1 - 0.5) return true
+  }
+  return false
+}
+
+/** Перетаскивание предмета по развёртке: с проверкой проёма и модулей. */
+export function moveWallItem(id: string, x: number, z: number): void {
+  const room = state.project.room
+  const item = (room.wallItems ?? []).find((w) => w.id === id)
+  if (!item) return
+  const px = Number(item.x) || 0
+  const pz = Number(item.z) || 0
+  for (const [nx, nz] of [[x, z], [x, pz], [px, z]]) {
+    if (wallItemBlocked(item, nx, nz)) continue
+    updateWallItem(id, { x: Math.round(nx), z: Math.round(nz) }, false)
+    return
+  }
+}
+
 export function updateWallItem(
   id: string,
   patch: Partial<WallItem>,
@@ -3984,7 +3514,8 @@ export async function init(): Promise<void> {
       const raw = await apiGetProject(pid) as Record<string, unknown>
       const maybeCache = raw._solutions
       if (maybeCache && typeof maybeCache === 'object') {
-        cached = maybeCache as Record<string, SolveResponse>
+        const c = maybeCache as Record<string, SolveResponse>
+        if (cacheIsFresh(c)) cached = c
       }
       state.project = normalizeProject(raw)
     } catch {
@@ -4003,6 +3534,10 @@ export async function init(): Promise<void> {
   state.saveState = 'saved'
   state.selection = state.project.instances[0]?.id ?? null
   state.selected = state.selection ? [state.selection] : []
+  if (ui.onlyRoom && state.selection) {
+    const f = state.project.folders.find((x) => x.ids.includes(state.selection!))
+    if (f) state.folderId = f.id
+  }
   state.wallMode = state.project.wallMode ?? 'cutaway'
   state.fitToken++
 
@@ -4021,9 +3556,10 @@ export async function init(): Promise<void> {
     }
   } else {
     // Не блокируем вход в проект: 3D и карточки дорисуются по мере solve.
-    void solveAll().then(applyLegacyOpenFlags)
+    void solveInitial().then(applyLegacyOpenFlags)
     touch()
   }
+  scheduleLayoutCheck(700)
 }
 
 export async function listProjects() {
@@ -4050,8 +3586,12 @@ export async function restoreProjectVersion(vid: string): Promise<void> {
   touch()
 }
 
-export async function openProject(id: string): Promise<void> {
-  if (!(await flushSave())) {
+export async function openProject(
+  id: string,
+  skipFlush = false,
+  reuseDerived = false,
+): Promise<void> {
+  if (!skipFlush && !(await flushSave())) {
     throw new Error('Не удалось сохранить текущий проект перед открытием другого')
   }
   const raw = await apiGetProject(id)
@@ -4071,9 +3611,19 @@ export async function openProject(id: string): Promise<void> {
   }
   state.dirty = false
   state.saveState = 'saved'
-  await solveAll()
-  applyLegacyOpenFlags()
-  touch()
+  if (reuseDerived) {
+    for (const inst of state.project.instances) {
+      if (!derived[inst.id]) void solveOne(inst)
+    }
+    applyLegacyOpenFlags()
+    touch()
+  } else {
+    for (const key of Object.keys(derived)) delete derived[key]
+    await solveInitial()
+    applyLegacyOpenFlags()
+    touch()
+  }
+  scheduleLayoutCheck(500)
 }
 
 export async function createProject(name: string): Promise<void> {

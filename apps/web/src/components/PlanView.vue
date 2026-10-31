@@ -21,19 +21,25 @@ import {
   resizeInstance,
   select,
   selectOpening,
+  selectProp,
   selectWall,
   moveSelection,
+  notify,
   selectedInstance,
   setPlacement,
   setRoom,
   state,
   toggleSelection,
   updateOpening,
+  ui,
 } from '../state/project'
 import type { Projector } from '../render25d/camera'
 import { resolveObjectMaterial } from '../material/vars'
 
-const props = defineProps<{ compact?: boolean }>()
+const props = defineProps<{
+  compact?: boolean
+  marker?: { x: number; y: number; yaw?: number } | null
+}>()
 
 const canvasEl = ref<HTMLCanvasElement | null>(null)
 const dragOver = ref(false)
@@ -50,6 +56,8 @@ let touched = false
 let faces: Face[] = []
 let ro: ResizeObserver | null = null
 let planProj: Projector | null = null
+// Снимок для печати: светлый фон и без выделения.
+let printMode = false
 let wallDrag:
   | { kind: 'opening'; id: string; moved: boolean }
   | {
@@ -229,8 +237,9 @@ function draw() {
     room,
     mode: 'plan',
     style: state.viewMode,
-    selection: state.selection,
-    selections: state.selected.length ? state.selected : [],
+    background: printMode ? 'light' : undefined,
+    selection: printMode ? null : state.selection,
+    selections: printMode ? [] : (state.selected.length ? state.selected : []),
     dims: props.compact ? [] : dims,
   })
 
@@ -251,8 +260,10 @@ function draw() {
     ctx.save()
     ctx.globalAlpha = 0.62
     ctx.fillStyle = pr.color || '#8b8f95'
-    ctx.strokeStyle = 'rgba(18, 21, 24, 0.85)'
-    ctx.lineWidth = 1.2
+    ctx.strokeStyle = state.propId === pr.id
+      ? '#e0a33e'
+      : 'rgba(18, 21, 24, 0.85)'
+    ctx.lineWidth = state.propId === pr.id ? 2.4 : 1.2
     ctx.beginPath()
     ctx.moveTo(pts[0].x, pts[0].y)
     for (let k = 1; k < pts.length; k++) ctx.lineTo(pts[k].x, pts[k].y)
@@ -261,12 +272,38 @@ function draw() {
     ctx.stroke()
     ctx.globalAlpha = 1
     if (!props.compact && pr.w * pr.d > 500000) {
-      ctx.fillStyle = 'rgba(235, 238, 240, 0.9)'
+      ctx.fillStyle = printMode ? '#4a4f55' : 'rgba(235, 238, 240, 0.9)'
       ctx.font = '9px ui-sans-serif, system-ui, sans-serif'
       ctx.textAlign = 'center'
       const mid = proj.point([pr.x, pr.y, 0])
       ctx.fillText(pr.name, mid.x, mid.y)
     }
+    ctx.restore()
+  }
+
+  // Положение камеры прогулки: точка + направление взгляда.
+  if (props.marker) {
+    const p = proj.point([props.marker.x, props.marker.y, 0])
+    const a = ((props.marker.yaw ?? 0) * Math.PI) / 180
+    const tip = proj.point([
+      props.marker.x + Math.sin(a) * 650,
+      props.marker.y + Math.cos(a) * 650,
+      0,
+    ])
+    ctx.save()
+    ctx.strokeStyle = '#e0a33e'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.moveTo(p.x, p.y)
+    ctx.lineTo(tip.x, tip.y)
+    ctx.stroke()
+    ctx.fillStyle = '#e0a33e'
+    ctx.beginPath()
+    ctx.arc(p.x, p.y, props.compact ? 4 : 5.5, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = 'rgba(10, 13, 16, 0.9)'
+    ctx.lineWidth = 1.5
+    ctx.stroke()
     ctx.restore()
   }
 
@@ -292,12 +329,14 @@ function draw() {
     ctx.stroke()
     ctx.setLineDash([])
     ctx.globalAlpha = 1
-    ctx.fillStyle = 'rgba(230,235,240,0.9)'
-    ctx.font = '10px ui-sans-serif, system-ui, sans-serif'
-    const mid = proj.point([f.x + f.w / 2, f.y + f.d / 2, 0])
-    ctx.textAlign = 'center'
-    const area = Math.round((f.w * f.d) / 10000) / 100
-    ctx.fillText(`${f.name} · ${area} м²`, mid.x, mid.y)
+    if (!props.compact) {
+      ctx.fillStyle = printMode ? '#4a4f55' : 'rgba(230,235,240,0.9)'
+      ctx.font = '10px ui-sans-serif, system-ui, sans-serif'
+      const mid = proj.point([f.x + f.w / 2, f.y + f.d / 2, 0])
+      ctx.textAlign = 'center'
+      const area = Math.round((f.w * f.d) / 10000) / 100
+      ctx.fillText(`${f.name} · ${area} м²`, mid.x, mid.y)
+    }
     ctx.restore()
   }
 
@@ -392,6 +431,73 @@ function onDrop(e: DragEvent) {
   addInstance(key, p[0] - W / 2, p[1] - D / 2)
 }
 
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (ch) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] as string
+  ))
+}
+
+/** Печать/PDF плана: светлый лист A3 альбомный, без выделения. */
+function printPlan(): void {
+  if (!ctx) return
+  const ratio = 2
+  const pw = 1500
+  const ph = 1000
+  const out = document.createElement('canvas')
+  out.width = pw * ratio
+  out.height = ph * ratio
+  const g = out.getContext('2d')
+  if (!g) return
+  const saved = {
+    ctx, w, h, dpr,
+    camera: { ...state.cameraPlan },
+    selection: state.selection,
+    selected: [...state.selected],
+  }
+  const pts = outlinePoints(state.project.room)
+    .map((q) => [q.x, q.y, 0] as Vec3)
+  ctx = g
+  w = pw
+  h = ph
+  dpr = ratio
+  printMode = true
+  state.cameraPlan = fitCamera({ ...state.cameraPlan }, pts, pw, ph, 0.16)
+  state.selection = null
+  state.selected = []
+  draw()
+  const image = out.toDataURL('image/png')
+  printMode = false
+  ctx = saved.ctx
+  w = saved.w
+  h = saved.h
+  dpr = saved.dpr
+  state.cameraPlan = saved.camera
+  state.selection = saved.selection
+  state.selected = saved.selected
+  invalidate()
+
+  const room = state.project.room
+  const win = window.open('', '_blank', 'width=1200,height=850')
+  if (!win) {
+    notify('Разрешите всплывающие окна для печати', null, 'error')
+    return
+  }
+  win.document.write(`<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<title>План помещения</title>
+<style>
+  @page { size: A3 landscape; margin: 12mm; }
+  body { margin: 0; font: 14px/1.4 system-ui, -apple-system, sans-serif; color: #111; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p { margin: 0 0 10px; color: #555; font-size: 12px; }
+  img { width: 100%; height: auto; display: block; }
+</style></head><body>
+<h1>План помещения</h1>
+<p>${room.w} × ${room.d} мм · ${new Date().toLocaleDateString('ru-RU')}</p>
+<img src="${image}" alt="План помещения" onload="window.print()">
+</body></html>`)
+  win.document.close()
+}
+
 function invalidate() {
   if (raf) return
   raf = requestAnimationFrame(() => {
@@ -449,6 +555,25 @@ function hitPartition(x: number, y: number): number | null {
     const a = planProj.point([seg.a.x, seg.a.y, 0])
     const b = planProj.point([seg.b.x, seg.b.y, 0])
     if (distToSeg(x, y, a, b) < 18) return seg.index
+  }
+  return null
+}
+
+/** Попадание в декор на плане: повёрнутый прямоугольник от центра. */
+function hitProp(x: number, y: number): string | null {
+  const list = state.project.props ?? []
+  if (!list.length) return null
+  const f = screenToFloor(x, y, state.cameraPlan, w, h)
+  for (let i = list.length - 1; i >= 0; i--) {
+    const pr = list[i]
+    const rad = ((pr.rot || 0) * Math.PI) / 180
+    const cs = Math.cos(rad)
+    const sn = Math.sin(rad)
+    const dx = f[0] - pr.x
+    const dy = f[1] - pr.y
+    const lx = dx * cs + dy * sn
+    const ly = -dx * sn + dy * cs
+    if (Math.abs(lx) <= pr.w / 2 && Math.abs(ly) <= pr.d / 2) return pr.id
   }
   return null
 }
@@ -518,6 +643,13 @@ function onDown(e: PointerEvent) {
     }
   }
 
+  const propHit = !props.compact && e.button === 0 ? hitProp(x, y) : null
+  if (propHit) {
+    selectProp(propHit)
+    lastX = e.clientX
+    lastY = e.clientY
+    return
+  }
   const hit = pickObject(faces, x, y)
 
   if (hit && e.button === 0) {
@@ -762,6 +894,7 @@ watch(
   },
 )
 watch(() => state.rev, invalidate)
+watch(() => props.marker, invalidate, { deep: true })
 watch(
   () => state.cameraPlan,
   () => {
@@ -799,7 +932,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="view" :class="{ 'view--mini': props.compact }">
+  <section class="view" :class="{ 'view--mini': props.compact, 'view--plan': !props.compact }">
     <header class="view__head">
       <span class="view__title">
         {{ props.compact ? 'План' : 'План · 1 : 20' }}
@@ -808,6 +941,24 @@ onBeforeUnmount(() => {
         <span v-if="!props.compact" class="dim">
           {{ state.project.room.w }} × {{ state.project.room.d }}
         </span>
+        <button
+          v-if="!props.compact"
+          class="tab"
+          title="Печать или PDF (A3)"
+          @click="printPlan"
+        >Печать</button>
+        <button
+          v-if="!props.compact"
+          class="tab"
+          title="2D-развёртки стен"
+          @click="ui.draftTab = 'walls'"
+        >Стены</button>
+        <button
+          v-if="!props.compact"
+          class="tab"
+          title="Вернуться в 3D"
+          @click="ui.renderMode = '3d'"
+        >3D</button>
       </div>
     </header>
     <div class="view__body" :class="{ 'view__body--drop': dragOver }">

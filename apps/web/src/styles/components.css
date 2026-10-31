@@ -438,6 +438,39 @@
   color: var(--ok);
 }
 
+/* «Следующий шаг»: одна кнопка справа, остальное — подсказка в title */
+.statusbar__next {
+  margin-left: 10px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #14171a;
+  background: var(--accent);
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.statusbar__next:hover {
+  filter: brightness(1.08);
+}
+
+.statusbar__next--error {
+  background: var(--danger);
+  color: #fff;
+}
+
+.statusbar__next--warn {
+  background: #d59a3a;
+  color: #1a1c1f;
+}
+
+.statusbar__next--ok {
+  background: var(--ok);
+  color: #10231a;
+}
+
 .tab-sep {
   width: 1px;
   height: 14px;
@@ -2686,7 +2719,7 @@
   min-height: 280px;
   overflow: hidden;
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr);
+  grid-template-columns: minmax(0, 1.15fr) minmax(250px, 0.85fr);
   gap: 10px;
   min-height: 0;
 }
@@ -2705,6 +2738,142 @@
 
 .wb__visual .module-preview__canvas {
   height: 100%;
+}
+.wb__visual {
+  position: relative;
+}
+
+.wb__visual-inner {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  margin-left: 26px;
+  display: flex;
+}
+
+/* Вертикальная полоса режимов «Объект / Деталь» */
+.wb-mode-rail {
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  z-index: 5;
+  width: 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 3px;
+  background: rgba(15, 17, 20, 0.82);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  backdrop-filter: blur(5px);
+}
+
+.wb-mode-rail__btn {
+  flex: 1 1 0;
+  min-height: 0;
+  padding: 8px 0;
+  color: var(--dim);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.wb-mode-rail__btn span {
+  display: block;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.wb-mode-rail__btn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bg-2);
+}
+
+.wb-mode-rail__btn--on {
+  color: #1b1305;
+  background: var(--accent);
+}
+
+.wb-mode-rail__btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.wb__view-ctl {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 5;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: rgba(15, 17, 20, 0.8);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  backdrop-filter: blur(5px);
+}
+
+.wb__view-btn {
+  width: 26px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.wb__view-btn:hover {
+  color: var(--text);
+  background: var(--bg-2);
+}
+
+.wb__view-btn--on {
+  color: #1b1305;
+  background: var(--accent);
+}
+
+.wb__size {
+  padding: 7px 8px;
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.wb__size .wb__label {
+  margin-bottom: 5px;
+}
+
+.wb__size-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 5px;
+}
+
+.wb-slide-enter-active,
+.wb-slide-leave-active {
+  transition: transform 0.22s ease, opacity 0.22s ease;
+}
+
+.wb-slide-enter-from {
+  transform: translateX(22px);
+  opacity: 0;
+}
+
+.wb-slide-leave-to {
+  transform: translateX(-22px);
+  opacity: 0;
 }
 
 .wb__side {
@@ -2787,9 +2956,10 @@
 }
 
 .view__dims line {
-  stroke: rgba(224, 163, 62, 0.95);
-  stroke-width: 1.4;
+  stroke: #ffc55d;
+  stroke-width: 3;
   stroke-linecap: round;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.85));
 }
 
 .view__dims circle {
@@ -2797,14 +2967,15 @@
 }
 
 .view__dims text {
-  font: 10px ui-sans-serif, system-ui, sans-serif;
+  font: 700 13px/1 ui-sans-serif, system-ui, sans-serif;
   font-variant-numeric: tabular-nums;
-  fill: #f7f2e7;
-  stroke: rgba(8, 10, 12, 0.9);
-  stroke-width: 3px;
-  paint-order: stroke;
+  fill: #fff8e8;
+  stroke: rgba(5, 7, 9, 0.95);
+  stroke-width: 4.5px;
+  paint-order: stroke fill;
   text-anchor: middle;
   dominant-baseline: middle;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.8));
 }
 
 .wb__side-chain {
@@ -2930,6 +3101,12 @@
   color: var(--text);
 }
 
+.matcard__brand {
+  font-size: 9px;
+  color: var(--accent);
+  letter-spacing: 0.02em;
+}
+
 .matcard__meta {
   font-size: 9.5px;
   color: var(--dim);
@@ -2945,8 +3122,27 @@
 
 .matlib__url-row {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 6px;
+}
+
+.matlib__file {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.matlib__file input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.matlib__hint {
+  color: var(--dim);
+  font-size: 9.5px;
+  line-height: 1.4;
 }
 
 .wb__cost-line {
@@ -3837,4 +4033,312 @@ input[type='number'].numfield__input {
 .modal--versions,
 .modal--quote {
   z-index: 70;
+}
+
+/* ---------- камера, прогулка и чертёж 2.5D ---------- */
+.cam-switch {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px 7px 9px;
+  color: var(--text);
+  background: rgba(18, 21, 25, 0.9);
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(8px);
+  cursor: pointer;
+}
+
+.cam-switch:hover {
+  border-color: var(--accent);
+}
+
+.cam-switch--first,
+.cam-switch--fly {
+  border-color: rgba(224, 163, 62, 0.75);
+  background: rgba(38, 32, 20, 0.92);
+}
+
+.cam-switch__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  color: #14171a;
+  background: var(--accent);
+  font-size: 14px;
+}
+
+.cam-switch__text {
+  font-weight: 650;
+  font-size: 12.5px;
+}
+
+.cam-switch__hint {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.cam-toast {
+  position: absolute;
+  left: 50%;
+  top: 18%;
+  z-index: 7;
+  display: grid;
+  justify-items: center;
+  gap: 3px;
+  padding: 14px 22px;
+  text-align: center;
+  color: #fff;
+  background: rgba(18, 21, 25, 0.9);
+  border: 1px solid rgba(224, 163, 62, 0.7);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.cam-toast__icon {
+  font-size: 26px;
+  color: var(--accent);
+}
+
+.cam-toast b {
+  font-size: 20px;
+  letter-spacing: 0.02em;
+}
+
+.cam-toast small {
+  max-width: 320px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.cam-toast-enter-active,
+.cam-toast-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.cam-toast-enter-from,
+.cam-toast-leave-to {
+  opacity: 0;
+  transform: translate(-50%, -8px);
+}
+
+.bp-bar {
+  position: absolute;
+  left: 50%;
+  top: 54px;
+  z-index: 6;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  max-width: min(760px, calc(100% - 24px));
+  padding: 5px 7px;
+  background: rgba(245, 241, 232, 0.94);
+  border: 1px solid rgba(31, 42, 49, 0.32);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  transform: translateX(-50%);
+}
+
+.bp-bar__group {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.bp-bar .tab {
+  min-height: 26px;
+  padding: 0 8px;
+  color: #24313a;
+  background: rgba(255, 255, 255, 0.45);
+  border-color: rgba(31, 42, 49, 0.24);
+  font-size: 11px;
+}
+
+.bp-bar .tab--active {
+  color: #f7f3ea;
+  background: #26343d;
+  border-color: #26343d;
+}
+
+.bp-bar__label,
+.bp-bar__hint {
+  color: #4d5a62;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.walk-hud {
+  position: absolute;
+  left: 50%;
+  bottom: 76px;
+  z-index: 6;
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding: 6px 12px;
+  color: var(--text);
+  background: rgba(18, 21, 25, 0.82);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.walk-hud__main {
+  font-size: 11.5px;
+}
+
+.walk-hud__main b {
+  color: var(--accent);
+}
+
+.walk-hud__lock {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.minimap__pos {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  z-index: 2;
+  padding: 2px 6px;
+  color: var(--muted);
+  background: rgba(18, 21, 25, 0.86);
+  border-radius: 4px;
+  font-size: 9.5px;
+}
+
+.minimap__pos b {
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.minimap__room {
+  margin-left: 5px;
+  color: var(--text);
+}
+
+.minimap--walk {
+  border-color: rgba(224, 163, 62, 0.55);
+}
+
+.view__fov {
+  display: grid;
+  gap: 4px;
+  padding-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.view__fov b {
+  color: var(--accent);
+}
+
+.view__fov input {
+  width: 100%;
+}
+
+@media (max-width: 900px) {
+  .cam-switch {
+    left: 8px;
+    top: 8px;
+    padding: 5px 9px 5px 6px;
+  }
+
+  .cam-switch__hint {
+    display: none;
+  }
+
+  .cam-toast {
+    top: 12%;
+    padding: 10px 16px;
+  }
+
+  .cam-toast b {
+    font-size: 16px;
+  }
+
+  .bp-bar {
+    top: 52px;
+    max-width: calc(100% - 16px);
+    gap: 4px;
+  }
+
+  .bp-bar__hint {
+    display: none;
+  }
+
+  .walk-hud {
+    bottom: 88px;
+  }
+}
+
+/* Место в верхней полосе: камера слева, стены — правее, чертёж — ниже */
+.wallmode {
+  left: 268px;
+  top: 12px;
+}
+
+.view__perf {
+  top: 52px;
+  left: 12px;
+}
+
+@media (max-width: 900px) {
+  .wallmode {
+    left: 8px;
+    top: 48px;
+  }
+
+  .view__dock {
+    top: 52px;
+  }
+
+  .cam-switch {
+    z-index: 18;
+  }
+}
+
+/* Чёткая экранная рамка выбранного объекта/детали */
+.view__sel {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 5;
+  overflow: visible;
+}
+
+.view__sel rect {
+  fill: none;
+  stroke: #ffbe55;
+  stroke-width: 2.6;
+  stroke-dasharray: 9 5;
+  filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.9));
+}
+
+.view__dims-badge {
+  fill: rgba(10, 13, 16, 0.86);
+  stroke-width: 1.2;
+}
+
+/* Мягкая подкраска граней, к которым относятся размеры */
+.view__dims-edge {
+  stroke-width: 5;
+  stroke-linecap: round;
+  opacity: 0.3;
 }

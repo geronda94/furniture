@@ -7,6 +7,8 @@ export interface Pt {
 
 export interface SceneObject {
   name: string
+  /** уникальное имя физической детали для карты присадки */
+  op_part?: string
   hinge?: 'left' | 'right'
   drawer_id?: number
   open?: number
@@ -78,7 +80,7 @@ export interface Material {
 export type PropType =
   | 'bed' | 'sofa' | 'armchair' | 'chair' | 'coffee-table' | 'tv'
   | 'rug' | 'bathtub' | 'toilet' | 'vanity' | 'shower' | 'plant'
-  | 'dresser' | 'lamp' | 'fridge' | 'stove' | 'sink'
+  | 'dresser' | 'lamp' | 'fridge' | 'stove' | 'sink' | 'hood'
 
 export interface Prop {
   id: string
@@ -94,11 +96,13 @@ export interface Prop {
   h: number
   color?: string
   accent?: string
+  /** комната/зона, к которой относится декор (для загрузки по комнатам) */
+  zone?: string
 }
 
 export type WallIndex = number
 
-export type ViewStyle = 'schematic' | 'realistic'
+export type ViewStyle = 'schematic' | 'realistic' | 'blueprint' | 'clay'
 
 export interface Opening {
   id: string
@@ -210,6 +214,9 @@ export interface Face {
   uvU: Vec3
   uvV: Vec3
   color: string
+  /** вертикальный градиент clay-вида: светлее сверху, темнее снизу */
+  colorTop?: string
+  colorBottom?: string
   material: Material
   objectId?: string
   part?: number

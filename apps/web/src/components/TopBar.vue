@@ -5,7 +5,10 @@ import HistoryPanel from './HistoryPanel.vue'
 import ProjectSettings from './ProjectSettings.vue'
 import QuotePanel from './QuotePanel.vue'
 import VersionsPanel from './VersionsPanel.vue'
+import LayoutPanel from './LayoutPanel.vue'
 import TopBarMenu from './TopBarMenu.vue'
+import QuickStart from './QuickStart.vue'
+import ProjectResult from './ProjectResult.vue'
 import {
   canRedo,
   canUndo,
@@ -51,76 +54,94 @@ function exportJson(): void {
 
 <template>
   <header class="topbar">
-    <div class="brand">
-      <span class="brand__mark" aria-hidden="true"></span>
-      <span class="brand__name">FURNITURE</span>
-      <span class="brand__sub">constructor</span>
+    <div class="topbar__left">
+      <div class="brand">
+        <span class="brand__mark" aria-hidden="true"></span>
+        <span class="brand__name">FURNITURE</span>
+        <span class="brand__sub">constructor</span>
+      </div>
+      <input
+        class="project-name"
+        :value="state.project.name"
+        aria-label="Название проекта"
+        @change="onRename"
+      />
     </div>
 
-    <input
-      class="project-name"
-      :value="state.project.name"
-      aria-label="Название проекта"
-      @change="onRename"
-    />
+    <div class="topbar__center">
+      <span class="topbar__label">Вид сцены</span>
+      <div class="seg" role="group" aria-label="Режим отображения">
+        <button
+          class="seg__btn"
+          :class="{ 'seg__btn--on': state.viewMode === 'realistic' }"
+          @click="setViewMode('realistic')"
+        >Полный</button>
+        <button
+          class="seg__btn"
+          :class="{ 'seg__btn--on': state.viewMode === 'schematic' }"
+          @click="setViewMode('schematic')"
+        >Каркас</button>
+        <button
+          class="seg__btn"
+          :class="{ 'seg__btn--on': state.viewMode === 'blueprint' }"
+          title="Чертёж 2.5D: мягкий свет, контуры, фиксированные ракурсы"
+          @click="setViewMode('blueprint')"
+        >Чертёж</button>
+      </div>
+    </div>
 
-    <div class="seg" role="group" aria-label="Режим отображения">
+    <div class="topbar__right">
+      <span v-if="state.busy" class="badge badge--warn">расчёт…</span>
+
+      <div class="topbar__group topbar__history" aria-label="История">
+        <button
+          class="btn btn--ghost btn--icon"
+          :disabled="!canUndo"
+          title="Отменить (Ctrl+Z)"
+          aria-label="Отменить"
+          @click="undo"
+        >↶</button>
+        <button
+          class="btn btn--ghost btn--icon"
+          :disabled="!canRedo"
+          title="Повторить (Ctrl+Shift+Z)"
+          aria-label="Повторить"
+          @click="redo"
+        >↷</button>
+      </div>
+
       <button
-        class="seg__btn"
-        :class="{ 'seg__btn--on': state.viewMode === 'schematic' }"
-        @click="setViewMode('schematic')"
+        class="save-state"
+        :class="`save-state--${state.saveState}`"
+        :title="saveTitle"
+        :aria-label="saveTitle"
+        @click="ui.moreOpen = true"
       >
-        Каркас
+        <span class="save-state__dot"></span>
+        <span class="save-state__text">{{ saveText }}</span>
       </button>
+
+      <button class="btn btn--primary topbar__save" @click="saveProject">Сохранить</button>
       <button
-        class="seg__btn"
-        :class="{ 'seg__btn--on': state.viewMode === 'realistic' }"
-        @click="setViewMode('realistic')"
+        class="btn btn--ghost topbar__menu"
+        title="Меню проекта"
+        data-tour="more"
+        :aria-expanded="ui.moreOpen"
+        @click="ui.moreOpen = true"
       >
-        Полный
+        <span class="topbar__menu-icon" aria-hidden="true">☰</span>
+        <span class="topbar__menu-text">Меню</span>
       </button>
     </div>
 
-    <span class="spacer"></span>
-
-    <span v-if="state.busy" class="badge badge--warn">расчёт…</span>
-
-    <button
-      class="save-state"
-      :class="`save-state--${state.saveState}`"
-      :title="saveTitle"
-      :aria-label="saveTitle"
-      @click="ui.moreOpen = true"
-    >
-      <span class="save-state__dot"></span>
-      <span class="save-state__text">{{ saveText }}</span>
-    </button>
-
-    <button
-      class="btn btn--ghost btn--icon"
-      :disabled="!canUndo"
-      title="Отменить (Ctrl+Z)"
-      @click="undo"
-    >
-      ↶
-    </button>
-    <button
-      class="btn btn--ghost btn--icon"
-      :disabled="!canRedo"
-      title="Повторить (Ctrl+Shift+Z)"
-      @click="redo"
-    >
-      ↷
-    </button>
-    <button class="btn btn--primary topbar__save" @click="saveProject">Сохранить</button>
-    <button class="btn btn--ghost topbar__more" title="Ещё" data-tour="more" @click="ui.moreOpen = true">
-      Ещё
-    </button>
     <ProjectManager v-if="ui.projectsOpen" @close="ui.projectsOpen = false" />
     <HistoryPanel v-if="ui.historyOpen" @close="ui.historyOpen = false" />
     <ProjectSettings v-if="ui.settingsOpen" @close="ui.settingsOpen = false" />
     <QuotePanel v-if="ui.quoteOpen" @close="ui.quoteOpen = false" />
     <VersionsPanel v-if="ui.versionsOpen" @close="ui.versionsOpen = false" />
+    <LayoutPanel v-if="ui.layoutOpen" @close="ui.layoutOpen = false" />
+    <QuickStart v-if="ui.quickOpen" @close="ui.quickOpen = false" />
+    <ProjectResult v-if="ui.resultOpen" @close="ui.resultOpen = false" />
     <TopBarMenu
       v-if="ui.moreOpen"
       @close="ui.moreOpen = false"
@@ -128,6 +149,7 @@ function exportJson(): void {
       @history="ui.historyOpen = true"
       @json="exportJson"
       @present="setPresentation(true)"
+      @layout="ui.layoutOpen = true"
     />
   </header>
 </template>

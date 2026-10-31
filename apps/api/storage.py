@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -498,3 +499,55 @@ def delete_version(pid: str, vid: str) -> bool:
     except OSError:
         pass
     return True
+
+
+def prune_guests(max_age_days: int = 7) -> int:
+    """Удалить старые гостевые аккаунты и их проекты (демо-мусор)."""
+    if _dsn:
+        _init()
+        with _conn() as con:
+            with con.cursor() as cur:
+                cur.execute(
+                    "SELECT id FROM users WHERE role = 'guest' "
+                    "AND created < now() - (%s || ' days')::interval",
+                    (int(max_age_days),),
+                )
+                ids = [r[0] for r in cur.fetchall()]
+                if not ids:
+                    return 0
+                cur.execute(
+                    "DELETE FROM project_versions WHERE project_id IN "
+                    "(SELECT id FROM projects WHERE owner = ANY(%s))", (ids,))
+                cur.execute("DELETE FROM projects WHERE owner = ANY(%s)", (ids,))
+                cur.execute("DELETE FROM users WHERE id = ANY(%s)", (ids,))
+                return len(ids)
+    users = _load_file_users()
+    from datetime import timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    old = []
+    for uid, row in users.items():
+        if row.get("role") != "guest":
+            continue
+        try:
+            created = datetime.fromisoformat(str(row.get("created")))
+        except Exception:
+            continue
+        if created < cutoff:
+            old.append(uid)
+    if not old:
+        return 0
+    old_set = set(old)
+    for project in PROJECTS.iterdir() if PROJECTS.exists() else []:
+        if not project.is_dir():
+            continue
+        f = project / "project.json"
+        try:
+            doc = json.loads(f.read_text(encoding="utf-8"))
+            if doc.get("_owner") in old_set:
+                shutil.rmtree(project, ignore_errors=True)
+        except Exception:
+            continue
+    for uid in old:
+        users.pop(uid, None)
+    _save_file_users(users)
+    return len(old)

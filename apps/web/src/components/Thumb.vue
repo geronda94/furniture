@@ -29,11 +29,55 @@ const signature = computed(() => {
   return `${JSON.stringify(inst.params)}|${JSON.stringify(inst.partMaterials ?? null)}|${inst.zone ?? ''}|${JSON.stringify(effectiveMaterials(inst))}|${JSON.stringify(state.project.materialVars)}|${d.objects.length}|${anim}|${state.rev}`
 })
 
+/** Заглушка, пока модуль ещё не посчитан (ленивый solver). */
+function placeholder(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+  ctx.clearRect(0, 0, w, h)
+  const g = ctx.createLinearGradient(0, 0, w, h)
+  g.addColorStop(0, 'rgba(120,130,140,0.22)')
+  g.addColorStop(1, 'rgba(120,130,140,0.08)')
+  ctx.fillStyle = g
+  ctx.fillRect(0, 0, w, h)
+  ctx.strokeStyle = 'rgba(200,208,214,0.45)'
+  ctx.lineWidth = 1
+  ctx.strokeRect(0.5, 0.5, w - 1, h - 1)
+  ctx.strokeStyle = 'rgba(200,208,214,0.55)'
+  ctx.lineWidth = 1.4
+  const cx = w / 2
+  const cy = h / 2
+  ctx.beginPath()
+  ctx.moveTo(cx, cy - h * 0.22)
+  ctx.lineTo(cx + w * 0.2, cy)
+  ctx.lineTo(cx, cy + h * 0.22)
+  ctx.lineTo(cx - w * 0.2, cy)
+  ctx.closePath()
+  ctx.stroke()
+  ctx.beginPath()
+  ctx.moveTo(cx, cy + h * 0.22)
+  ctx.lineTo(cx, cy + h * 0.34)
+  ctx.stroke()
+}
+
 function draw(): void {
   const c = canvasEl.value
   const inst = state.project.instances.find((i) => i.id === props.instanceId)
   const d = derived[props.instanceId]
-  if (!c || !inst || !d) return
+  if (!c || !inst) return
+  const dpr0 = Math.min(2, window.devicePixelRatio || 1)
+  const w0 = props.width
+  const h0 = props.height
+  if (c.width !== Math.round(w0 * dpr0)) {
+    c.width = Math.round(w0 * dpr0)
+    c.height = Math.round(h0 * dpr0)
+  }
+  const g0 = c.getContext('2d')
+  if (g0) {
+    g0.setTransform(dpr0, 0, 0, dpr0, 0, 0)
+    if (!d) {
+      placeholder(g0, w0, h0)
+      return
+    }
+  }
+  if (!d) return
 
   const dpr = Math.min(2, window.devicePixelRatio || 1)
   const w = props.width

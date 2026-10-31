@@ -94,7 +94,11 @@ function matches(opPart: string, name: string): boolean {
 const operations = computed<AssemblyOperation[]>(() => {
   const el = element.value
   if (!el || !calc.value) return []
-  return (calc.value.operations ?? []).filter((o) => matches(o.part, el.name))
+  const ops = calc.value.operations ?? []
+  // Каждая физическая деталь (дверь, полка, боковина) имеет свой op_part.
+  // Без него две одинаковые двери показывали бы отверстия друг друга.
+  if (el.opPart) return ops.filter((o) => o.part === el.opPart)
+  return ops.filter((o) => matches(o.part, el.name))
 })
 const edges = computed<Record<string, EdgeSide>>(
   () => planRow.value?.sides ?? {},
@@ -386,12 +390,15 @@ watch(
       {{ material?.name }}
     </div>
     <div class="pdetail__viewtabs" role="group" aria-label="Вид детали">
-      <button class="tab tab--sm" :class="{ 'tab--active': view === 'flat' }"
-        @click="view = 'flat'">Пласть</button>
-      <button class="tab tab--sm" :class="{ 'tab--active': view === 'iso' }"
-        @click="view = 'iso'">3D</button>
-      <button v-if="view === 'flat'" class="tab tab--sm"
-        :class="{ 'tab--active': guides }" @click="guides = !guides">
+      <span class="pdetail__view-label">Вид детали</span>
+      <div class="pdetail__viewseg">
+        <button class="pdetail__viewbtn" :class="{ 'pdetail__viewbtn--on': view === 'iso' }"
+          @click="view = 'iso'"><span aria-hidden="true">◈</span> 3D</button>
+        <button class="pdetail__viewbtn" :class="{ 'pdetail__viewbtn--on': view === 'flat' }"
+          @click="view = 'flat'"><span aria-hidden="true">▤</span> Схема</button>
+      </div>
+      <button v-if="view === 'flat'" class="btn btn--sm"
+        :class="{ 'btn--primary': guides }" @click="guides = !guides">
         Линии
       </button>
       <span class="dim">{{ view === 'flat' ? 'разметка и отверстия' : 'толщина и сторона сверления' }}</span>

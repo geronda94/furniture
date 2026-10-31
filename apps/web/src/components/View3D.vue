@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { BabylonRenderer } from '../render3d/babylonScene'
 import {
   beginDrag,
   clearSelection,
   createFolder,
   derived,
+  moveProp,
   moveSelection,
+  notify,
   openObjectModal,
   partIsOpen,
   partSelection,
@@ -15,27 +16,438 @@ import {
   selectOpening,
   selectFolder,
   selectPart,
+  selectProp,
   selectWall,
   selectWallItem,
   setViewMode,
+  solveAll,
+  solveVisible,
   state,
   togglePart,
   toggleSelection,
   ui,
 } from '../state/project'
 import PlanView from './PlanView.vue'
+import CameraPad from './CameraPad.vue'
 import { moduleInfo, relationsFor } from '../module/info'
+import { roomWalls } from '../render25d/room'
 
 const canvasEl = ref<HTMLCanvasElement | null>(null)
-let renderer: BabylonRenderer | null = null
+let renderer: import('../render3d/babylonScene').BabylonRenderer | null = null
 let ro: ResizeObserver | null = null
 
 const viewName = ref('iso')
+// Прогулка оставлена в коде как задел (см. docs/39-walk-disabled.md),
+// но в интерфейсе выключена. Свободный полёт удалён.
+const walkEnabled = false
 const camMode = ref<'orbit' | 'first' | 'fly'>('orbit')
 const fitTarget = ref<'module' | 'room'>('room')
 const planOpen = ref(false)
-const viewMore = ref(false)
+const pointerLocked = ref(false)
+const camToast = ref('')
+let camToastTimer = 0
+const camModeIcon: Record<'orbit' | 'first' | 'fly', string> = {
+  orbit: '◉', first: '⌖', fly: '✈',
+}
+const walker = ref<{ x: number; y: number; yaw: number; eye: number } | null>(null)
+const rendererRoom = ref('')
+type WalkTarget = {
+  kind: 'seat' | 'bed' | 'lamp' | 'sink' | 'switch' | 'stove'
+  id: string
+  label: string
+  x: number
+  y: number
+  z: number
+  yaw: number
+  eye: number
+}
+const walkTarget = ref<WalkTarget | null>(null)
+const seated = ref(false)
+const roomLightOn = ref(true)
+const orbitPivot = ref<'room' | 'object'>('room')
+const blueprintView = ref<'iso' | 'front' | 'side' | 'top'>('iso')
+const blueprintPivot = ref<'room' | 'object'>('room')
+const isBlueprint = computed(() => state.viewMode === 'blueprint')
+const viewMore = computed({
+  get: () => ui.viewSheetOpen,
+  set: (v: boolean) => { ui.viewSheetOpen = v },
+})
 let cameraApplied = false
+
+const touchQuery = window.matchMedia('(pointer: coarse)')
+const building = ref(true)
+const isTouch = ref(touchQuery.matches)
+function onTouchChange(e: MediaQueryListEvent): void {
+  isTouch.value = e.matches
+}
+
+const padMove = ref({ x: 0, y: 0 })
+const padZ = ref(0)
+const moveKeys = new Set<string>()
+const moveSpeedBoost = ref(false)
+const keyVec = ref({ x: 0, y: 0, z: 0 })
+
+function syncKeyVec(): void {
+  keyVec.value = {
+    x: (moveKeys.has('d') ? 1 : 0) - (moveKeys.has('a') ? 1 : 0),
+    y: (moveKeys.has('w') ? 1 : 0) - (moveKeys.has('s') ? 1 : 0),
+    z: (moveKeys.has('e') ? 1 : 0) - (moveKeys.has('q') ? 1 : 0),
+  }
+}
+let moveLast = 0
+
+const camModeLabel = computed(() => {
+  if (camMode.value === 'orbit') return 'Обзор'
+  return camMode.value === 'first' ? 'Прогулка' : 'Полёт'
+})
+
+const camModeHint = computed(() => {
+  if (camMode.value === 'orbit') {
+    return 'Обзор: вращайте сцену, джойстик/WASD сдвигают вид, Q/E меняют высоту'
+  }
+  if (camMode.value === 'first') {
+    return 'Прогулка: WASD — идти, мышь — обзор (клик по сцене), Space — прыжок, E — сесть/свет/вода'
+  }
+  return 'Полёт: WASD — лететь, Q/E — вниз/вверх, мышь — обзор (клик по сцене)'
+})
+
+const showPad = computed(
+  () => isTouch.value || camMode.value !== 'orbit',
+)
+
+const currentRoomIds = computed<Set<string> | null>(() => {
+  if (!ui.onlyRoom) return null
+  const f = state.project.folders.find((x) => x.id === state.folderId)
+  return f && f.ids.length ? new Set(f.ids) : null
+})
+
+type Area = { x: number; y: number; w: number; d: number }
+
+/** Куда смотреть при входе: направление с самым длинным свободным лучом. */
+function bestYaw(x: number, y: number, a: Area): number {
+  const objs = walkObstacles()
+  const blocked = (px: number, py: number) =>
+    px < a.x + 200 || px > a.x + a.w - 200 ||
+    py < a.y + 200 || py > a.y + a.d - 200 ||
+    objs.some((o) =>
+      px > o.x - 200 && px < o.x + o.w + 200 &&
+      py > o.y - 200 && py < o.y + o.d + 200)
+  let best = 0
+  let bestFree = -1
+  for (let deg = 0; deg < 360; deg += 45) {
+    const rad = (deg * Math.PI) / 180
+    let dist = 0
+    for (let step = 200; step <= 3600; step += 200) {
+      if (blocked(x + Math.sin(rad) * step, y + Math.cos(rad) * step)) break
+      dist = step
+    }
+    if (dist > bestFree) {
+      bestFree = dist
+      best = deg
+    }
+  }
+  return best
+}
+
+function inArea(x: number, y: number, a: Area): boolean {
+  return x >= a.x && x <= a.x + a.w && y >= a.y && y <= a.y + a.d
+}
+
+function folderAt(x: number, y: number) {
+  return state.project.folders.find((f) => f.area && inArea(x, y, f.area))
+}
+
+/** Габарит повёрнутого модуля/декора в плане (AABB), мм. */
+function aabbOf(
+  x: number, y: number, W: number, D: number, rot: number,
+): Area {
+  const a = ((rot || 0) * Math.PI) / 180
+  const cs = Math.cos(a)
+  const sn = Math.sin(a)
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const [lx, ly] of [[0, 0], [W, 0], [W, D], [0, D]]) {
+    const wx = x + lx * cs - ly * sn
+    const wy = y + lx * sn + ly * cs
+    minX = Math.min(minX, wx)
+    maxX = Math.max(maxX, wx)
+    minY = Math.min(minY, wy)
+    maxY = Math.max(maxY, wy)
+  }
+  return { x: minX, y: minY, w: maxX - minX, d: maxY - minY }
+}
+
+/** Габарит повёрнутого прямоугольника, заданного центром (декор). */
+function aabbCentered(
+  cx: number, cy: number, W: number, D: number, rot: number,
+): Area {
+  const a = ((rot || 0) * Math.PI) / 180
+  const cs = Math.cos(a)
+  const sn = Math.sin(a)
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const [lx, ly] of [
+    [-W / 2, -D / 2], [W / 2, -D / 2], [W / 2, D / 2], [-W / 2, D / 2],
+  ]) {
+    const wx = cx + lx * cs - ly * sn
+    const wy = cy + lx * sn + ly * cs
+    minX = Math.min(minX, wx)
+    maxX = Math.max(maxX, wx)
+    minY = Math.min(minY, wy)
+    maxY = Math.max(maxY, wy)
+  }
+  return { x: minX, y: minY, w: maxX - minX, d: maxY - minY }
+}
+
+/** Минимальный зазор до мебели/стен в точке (мм). */
+function clearanceAt(x: number, y: number, a: Area): number {
+  const objs = walkObstacles()
+  let d = Math.min(
+    x - (a.x + 200), (a.x + a.w - 200) - x,
+    y - (a.y + 200), (a.y + a.d - 200) - y,
+  )
+  for (const o of objs) d = Math.min(d, rectClear(x, y, o))
+  return d
+}
+
+/** Общий контур квартиры по комнатам-папкам (мм). */
+function walkBounds(): Area | null {
+  const areas = state.project.folders
+    .map((f) => f.area)
+    .filter((a): a is Area => !!a)
+  if (!areas.length) {
+    return {
+      x: 0, y: 0,
+      w: state.project.room.w, d: state.project.room.d,
+    }
+  }
+  const minX = Math.min(...areas.map((a) => a.x))
+  const minY = Math.min(...areas.map((a) => a.y))
+  const maxX = Math.max(...areas.map((a) => a.x + a.w))
+  const maxY = Math.max(...areas.map((a) => a.y + a.d))
+  return { x: minX, y: minY, w: maxX - minX, d: maxY - minY }
+}
+
+function walkObstacles(): Area[] {
+  const out: Area[] = []
+  for (const i of state.project.instances) {
+    // Навесные шкафы тоже мешают на высоте глаз (низ 1450 мм),
+    // поэтому в прогулке они — полноценное препятствие.
+    const d = derived[i.id]
+    const W = d?.corpus.W ?? i.params.W
+    const D = d?.corpus.D ?? i.params.D
+    out.push(aabbOf(i.x, i.y, W, D, i.rot))
+  }
+  for (const pr of state.project.props ?? []) {
+    // Ковёр/дорожка — покрытие пола, по ним ходят.
+    if ((pr.h ?? 0) < 200) continue
+    out.push(aabbCentered(pr.x, pr.y, pr.w, pr.d, pr.rot || 0))
+  }
+  return out
+}
+
+let walkSig = ''
+
+/** Зазор от точки до прямоугольника (0 внутри), мм. */
+function rectClear(x: number, y: number, o: Area): number {
+  const dx = Math.max(o.x - x, 0, x - (o.x + o.w))
+  const dy = Math.max(o.y - y, 0, y - (o.y + o.d))
+  return Math.hypot(dx, dy)
+}
+
+/**
+ * Свободная точка в комнате: не в мебели и с запасом от неё,
+ * ближе к центру. Иначе камера упирается в первый попавшийся шкаф.
+ */
+function freeSpotIn(a: Area): { x: number; y: number } | null {
+  const objs = walkObstacles()
+  const margin = 300
+  const comfort = 450
+  let best: { x: number; y: number } | null = null
+  let bestScore = -Infinity
+  let fallback: { x: number; y: number; clearance: number } | null = null
+  const cx = a.x + a.w / 2
+  const cy = a.y + a.d / 2
+  for (let y = a.y + margin; y <= a.y + a.d - margin; y += 150) {
+    for (let x = a.x + margin; x <= a.x + a.w - margin; x += 150) {
+      const clearance = objs.length
+        ? Math.min(...objs.map((o) => rectClear(x, y, o)))
+        : Infinity
+      if (clearance < comfort) {
+        if (!fallback || clearance > fallback.clearance) {
+          fallback = { x, y, clearance }
+        }
+        continue
+      }
+      // Максимум свободного места, слегка тянемся к центру комнаты.
+      const score = Math.min(clearance, 1400)
+        - 0.06 * Math.hypot(x - cx, y - cy)
+      if (score > bestScore) {
+        bestScore = score
+        best = { x, y }
+      }
+    }
+  }
+  if (best) return best
+  if (fallback && fallback.clearance >= 220) {
+    return { x: fallback.x, y: fallback.y }
+  }
+  return null
+}
+
+/** Комната под камерой (или выбранная) + препятствия для прогулки. */
+function refreshWalkArea(force = false): void {
+  if (!renderer) return
+  const wp = renderer.walkerPosition()
+  const walking = camMode.value !== 'orbit' && wp
+  const x = walking ? wp!.x : state.project.room.w / 2
+  const y = walking ? wp!.y : state.project.room.d / 2
+  const f = (walking ? folderAt(x, y) : null)
+    ?? state.project.folders.find((q) => q.id === state.folderId && q.area)
+    ?? null
+  // Граница прогулки — вся квартира, а не текущая комната: иначе камера
+  // упирается в прямоугольник комнаты и не проходит в открытую дверь.
+  const rect = walkBounds()
+  const name = f?.name ?? ''
+  const objs = walkObstacles()
+  const sig = `${rect ? rect.x + ',' + rect.y + ',' + rect.w + ',' + rect.d : '-'}|${name}|` +
+    objs.map((o) => `${o.x},${o.y},${o.w},${o.d}`).join(';')
+  if (!force && sig === walkSig) return
+  walkSig = sig
+  renderer.setWalkArea(rect, objs, name)
+}
+
+const SEAT_TYPES = new Set(['chair', 'armchair', 'sofa', 'bed'])
+
+/** Ближайшее сиденье/интерактивный предмет для подсказки и клавиши E. */
+function findWalkTarget(wp: { x: number; y: number } | null): WalkTarget | null {
+  if (!wp) return null
+  let best: WalkTarget | null = null
+  let bestD = Infinity
+  const consider = (t: WalkTarget, radius: number) => {
+    const d = Math.hypot(t.x - wp.x, t.y - wp.y)
+    if (d > radius || d >= bestD) return
+    bestD = d
+    best = t
+  }
+  const a = folderAt(wp.x, wp.y)?.area
+  const faceYaw = (x: number, y: number): number => {
+    if (!a) return 0
+    return (Math.atan2(a.x + a.w / 2 - x, a.y + a.d / 2 - y) * 180) / Math.PI
+  }
+  for (const pr of state.project.props ?? []) {
+    if (SEAT_TYPES.has(pr.type)) {
+      const bed = pr.type === 'bed'
+      consider({
+        kind: bed ? 'bed' : 'seat',
+        id: pr.id,
+        label: bed ? 'Лечь' : 'Сесть',
+        x: pr.x,
+        y: pr.y,
+        z: pr.h,
+        yaw: bed ? (pr.rot || 0) : faceYaw(pr.x, pr.y),
+        eye: bed ? Math.max(0.55, (pr.h / 1000) * 0.72) : 1.14,
+      }, 1500)
+    } else if (pr.type === 'lamp') {
+      consider({
+        kind: 'lamp', id: pr.id,
+        label: renderer?.isLampOn(pr.id) ? 'Выключить светильник' : 'Включить светильник',
+        x: pr.x, y: pr.y, z: pr.h * 0.88, yaw: 0, eye: 1.6,
+      }, 2000)
+    } else if (pr.type === 'sink') {
+      consider({
+        kind: 'sink', id: pr.id,
+        label: renderer?.isSinkOn(pr.id) ? 'Закрыть воду' : 'Открыть воду',
+        x: pr.x, y: pr.y, z: pr.h * 0.9, yaw: 0, eye: 1.6,
+      }, 2000)
+    } else if (pr.type === 'stove') {
+      consider({
+        kind: 'stove', id: pr.id,
+        label: 'Плита: включить/выключить',
+        x: pr.x, y: pr.y, z: pr.h, yaw: 0, eye: 1.6,
+      }, 2000)
+    }
+  }
+  // Мойка в составе кухни — тоже интерактивная (кран).
+  for (const inst of state.project.instances) {
+    if (!/мойк|sink/i.test(inst.name)) continue
+    const d = derived[inst.id]
+    if (!d) continue
+    const w = d.corpus.W
+    const dep = d.corpus.D
+    const c = toWorld(inst, w / 2, dep / 2, 0)
+    consider({
+      kind: 'sink', id: `inst:${inst.id}`,
+      label: renderer?.isSinkOn(`inst:${inst.id}`) ? 'Закрыть воду' : 'Открыть воду',
+      x: c.x, y: c.y, z: d.corpus.H + 120, yaw: 0, eye: 1.6,
+    }, 2200)
+  }
+  // Выключатели на стенах.
+  const walls = roomWalls(state.project.room)
+  for (const item of state.project.room.wallItems ?? []) {
+    if (item.kind !== 'switch') continue
+    const seg = walls.find((w) => w.index === item.wall)
+    if (!seg) continue
+    const s = item.x + item.w / 2
+    const x = seg.a.x + seg.dx * s + seg.nx * (item.depth / 2)
+    const y = seg.a.y + seg.dy * s + seg.ny * (item.depth / 2)
+    consider({
+      kind: 'switch', id: item.id,
+      label: roomLightOn.value ? 'Выключить свет' : 'Включить свет',
+      x, y, z: item.z + item.h / 2, yaw: 0, eye: 1.6,
+    }, 2200)
+  }
+  return best
+}
+
+function updateWalkHud(): void {
+  if (!renderer) return
+  const wp = renderer.walkerPosition()
+  walker.value = wp
+  rendererRoom.value = renderer.currentRoomName()
+  seated.value = renderer.isSeated()
+  roomLightOn.value = renderer.roomLightIsOn()
+  walkTarget.value = camMode.value === 'first' && !seated.value
+    ? findWalkTarget(wp)
+    : null
+}
+
+function interactWalk(): void {
+  if (!renderer) return
+  if (renderer.isSeated()) {
+    renderer.standUp()
+    seated.value = false
+    return
+  }
+  const t = walkTarget.value
+  if (!t) return
+  if (t.kind === 'seat' || t.kind === 'bed') {
+    renderer.sitAt(t.x, t.y, t.yaw, t.eye, t.id, t.kind)
+    seated.value = true
+    walkTarget.value = null
+    notify(t.kind === 'bed' ? 'Лежим. E или Space — встать' : 'Сидим. E или Space — встать')
+    return
+  }
+  if (t.kind === 'lamp') {
+    const on = renderer.toggleLamp(t.id, t.x, t.y, t.z)
+    notify(on ? 'Светильник включён' : 'Светильник выключен')
+  } else if (t.kind === 'sink') {
+    const on = renderer.toggleSink(t.id, t.x, t.y, t.z)
+    notify(on ? 'Вода открыта' : 'Вода закрыта')
+  } else if (t.kind === 'switch') {
+    const on = renderer.toggleRoomLight()
+    roomLightOn.value = on
+    notify(on ? 'Свет включён' : 'Свет выключен')
+  } else if (t.kind === 'stove') {
+    const on = renderer.toggleRoomLight()
+    notify(on ? 'Плита включена' : 'Плита выключена')
+  }
+  walkTarget.value = findWalkTarget(walker.value)
+}
 
 function applyProjectCamera(): void {
   const cam = state.project.camera3d
@@ -49,28 +461,70 @@ const viewNameLabel = computed(() => {
   }
   return labels[viewName.value] ?? 'Вид'
 })
+const selRect = ref<{ x: number; y: number; w: number; h: number } | null>(null)
+const DIM_W = '#ffbe55'
+const DIM_H = '#7fe0c2'
+const DIM_D = '#7fb9f0'
+const DIM_POS = '#ffd28a'
+const DIM_REL = '#d8a6ff'
 const dimLines = ref<{
   x1: number; y1: number; x2: number; y2: number
-  tx: number; ty: number; label: string
+  tx: number; ty: number; label: string; color: string; labelW: number; marker: string
+  e1: [number, number, number, number]
+  e2: [number, number, number, number]
 }[]>([])
 const partPill = ref<{ id: string; part: number } | null>(null)
 const pillPos = ref({ x: 0, y: 0 })
 let dimRaf = 0
 let dimLast = 0
+let walkLast = 0
+let selSig = ''
+let partSig = ''
+
+// --- производительность (FPS/память) -------------------------------------
+const perfOn = (() => {
+  try {
+    return new URLSearchParams(window.location.search).get('perf') === '1'
+  } catch {
+    return false
+  }
+})()
+const perf = ref({ fps: 0, heap: 0, meshes: 0 })
+let perfFrames = 0
+let perfLast = 0
+
+// Авто-качество: если GPU не тянет, один раз включаем каркас и уменьшаем
+// разрешение, а при совсем низком FPS предлагаем 2D-развёртки.
+const lowGpu = ref(false)
+const suggestDraft = ref(false)
+let autoQualityDone = false
+let autoSlowWindows = 0
+let autoLast = 0
+let autoFrames = 0
+let autoStart = 0
 
 function sync(): void {
   if (!renderer) return
   renderer.syncRoom(state.project.room, state.project.materials)
   renderer.syncProps(state.project.props ?? [])
+  // Режим «только комната» — не строить меши чужих комнат (экономия GPU/RAM).
+  const roomIds = currentRoomIds.value
+  const instances = roomIds
+    ? state.project.instances.filter((i) => roomIds.has(i.id))
+    : state.project.instances
   renderer.syncInstances(
-    state.project.instances,
+    instances,
     derived,
     state.project.materials,
     state.project.materialVars,
     state.rev,
   )
+  renderer.setVisibleInstances(currentRoomIds.value)
   renderer.setSelected(state.selected.length ? [...state.selected]
     : state.selection ? [state.selection] : [])
+  renderer.setSelectedPart(partSelection.instanceId, partSelection.part)
+  renderer.setSelectedProp(state.propId)
+  refreshWalkArea(true)
 }
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -150,31 +604,95 @@ function updateDims(): void {
     a: { x: number; y: number; z: number },
     b: { x: number; y: number; z: number },
     label: string,
+    color: string,
+    t = 0.5,
   ) => {
+    const marker = color === DIM_H ? 'dim-arrow-h'
+      : color === DIM_D ? 'dim-arrow-d'
+        : color === DIM_POS ? 'dim-arrow-p'
+          : color === DIM_REL ? 'dim-arrow-r' : 'dim-arrow-w'
     const p1 = renderer!.project(a.x, a.y, a.z)
     const p2 = renderer!.project(b.x, b.y, b.z)
+    // Короткие цветные штрихи поперёк концов размера: слегка подкрашивают
+    // грань, к которой относится стрелка, но не заливают всю плоскость.
+    const dx = p2.x - p1.x
+    const dy = p2.y - p1.y
+    const dl = Math.hypot(dx, dy) || 1
+    const nx = (-dy / dl) * 7
+    const ny = (dx / dl) * 7
     out.push({
+      e1: [p1.x - nx, p1.y - ny, p1.x + nx, p1.y + ny],
+      e2: [p2.x - nx, p2.y - ny, p2.x + nx, p2.y + ny],
       x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y,
-      tx: (p1.x + p2.x) / 2,
-      ty: (p1.y + p2.y) / 2 - 4,
+      tx: p1.x + (p2.x - p1.x) * t,
+      ty: p1.y + (p2.y - p1.y) * t - 4,
       label,
+      color,
+      marker,
+      labelW: Math.max(36, label.length * 7.8 + 14),
     })
   }
   const Wp = (lx: number, ly: number, lz: number) => toWorld(inst, lx, ly, lz)
-  add(Wp(x0, y0 - pad, z0), Wp(x1, y0 - pad, z0), `${Math.round(W)}`)
-  add(Wp(x1 + pad, y0 - pad, z0), Wp(x1 + pad, y0 - pad, z1), `${Math.round(H)}`)
-  add(Wp(x1 + pad, y0, z0), Wp(x1 + pad, y1, z0), `${Math.round(D)}`)
-
+  const depthMark = D < 60 ? 'Т' : 'Г'
+  add(Wp(x0, y0 - pad, z0), Wp(x1, y0 - pad, z0), `Ш ${Math.round(W)}`, DIM_W, 0.26)
+  add(Wp(x1 + pad, y0 - pad, z0), Wp(x1 + pad, y0 - pad, z1), `В ${Math.round(H)}`, DIM_H)
+  add(Wp(x1 + pad, y0, z0), Wp(x1 + pad, y1, z0), `${depthMark} ${Math.round(D)}`, DIM_D, 0.84)
+  // Относительные размеры: высоты полок в выбранном модуле и просветы
+  // до соседних полок у выбранной детали — то, что нужно при проектировании.
+  if (info) {
+    if (!el) {
+      for (const g of info.shelves) {
+        if (g.size <= 2) continue
+        add(Wp(x0 + 22, y0, g.from), Wp(x0 + 22, y0, g.to),
+          `↕ ${Math.round(g.size)}`, DIM_REL)
+      }
+    } else {
+      const rel = relationsFor(info, part)
+      if (rel?.above && rel.above.distance > 2 &&
+          rel.above.distance < info.totalH - 2) {
+        add(Wp(x1 - 18, y0, z1), Wp(x1 - 18, y0, rel.above.to),
+          `↕ ${Math.round(rel.above.distance)}`, DIM_REL)
+      }
+      if (rel?.below && rel.below.distance > 2 &&
+          rel.below.distance < info.totalH - 2) {
+        add(Wp(x1 - 18, y0, rel.below.from), Wp(x1 - 18, y0, z0),
+          `↕ ${Math.round(rel.below.distance)}`, DIM_REL)
+      }
+    }
+  }
+  // Абсолютные размеры от краёв плиты (только для выбранной детали):
+  // сколько до левого/правого края корпуса и до низа/верха.
   if (el && info) {
-    const rel = relationsFor(info, part)
-    if (rel?.above && rel.above.distance > 0) {
-      add(Wp(x0 - 34, (y0 + y1) / 2, z1), Wp(x0 - 34, (y0 + y1) / 2, rel.above.to), `${rel.above.distance}`)
+    const abs = relationsFor(info, part)
+    if (abs) {
+      const gap = Math.max(28, Math.min(60, W * 0.12))
+      if (abs.toLeft > 30) {
+        add(Wp(0, y0 - gap * 0.45, z0 - gap * 0.3),
+          Wp(el.x, y0 - gap * 0.45, z0 - gap * 0.3), `← ${Math.round(abs.toLeft)}`, DIM_POS)
+      }
+      if (abs.toRight > 30) {
+        add(Wp(el.x + el.w, y0 - gap * 0.45, z0 - gap * 0.3),
+          Wp(info.W, y0 - gap * 0.45, z0 - gap * 0.3), `→ ${Math.round(abs.toRight)}`, DIM_POS)
+      }
+      if (abs.toBottom > 2) {
+        add(Wp(el.x - gap * 0.45, y0 - gap * 0.2, 0),
+          Wp(el.x - gap * 0.45, y0 - gap * 0.2, el.z), `↓ ${Math.round(abs.toBottom)}`, DIM_POS)
+      }
+      if (abs.toTop > 2) {
+        add(Wp(el.x - gap * 0.45, y0 - gap * 0.2, el.z),
+          Wp(el.x - gap * 0.45, y0 - gap * 0.2, info.totalH), `↑ ${Math.round(abs.toTop)}`, DIM_POS)
+      }
     }
-    if (rel?.below && rel.below.distance > 0) {
-      add(Wp(x0 - 34, (y0 + y1) / 2, rel.below.from), Wp(x0 - 34, (y0 + y1) / 2, z0), `${rel.below.distance}`)
-    }
-    if (rel?.right && rel.right.distance > 0) {
-      add(Wp(x1, (y0 + y1) / 2, z1 + 34), Wp(x1 + rel.right.distance, (y0 + y1) / 2, z1 + 34), `${rel.right.distance}`)
+  }
+  // Подписи близких размеров не должны наезжать друг на друга.
+  for (let i = 0; i < out.length; i++) {
+    for (let j = 0; j < i; j++) {
+      const half = (out[i].labelW + out[j].labelW) / 2 + 4
+      if (Math.abs(out[i].tx - out[j].tx) < half &&
+          Math.abs(out[i].ty - out[j].ty) < 26) {
+        out[i].tx += out[i].tx >= out[j].tx ? half * 0.6 : -half * 0.6
+        out[i].ty += i % 2 ? 26 : -26
+      }
     }
   }
   dimLines.value = out
@@ -200,13 +718,141 @@ function updatePartPill(): void {
   }
 }
 
-function dimLoop(t: number): void {
+/** Рамка выбора: для детали — из рендерера, для модуля — по деталям
+ *  из состояния (не зависит от того, успел ли синхронизироваться рендерер). */
+function selectionFrame(): { x: number; y: number; w: number; h: number } | null {
+  if (!renderer) return null
+  const ids = state.selected.length ? state.selected
+    : state.selection ? [state.selection] : []
+  if (!ids.length || (partSelection.instanceId && partSelection.part != null)) {
+    return renderer.selectionScreenBounds()
+  }
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const id of ids) {
+    const inst = state.project.instances.find((i) => i.id === id)
+    const d = inst ? derived[inst.id] : null
+    if (!inst || !d) continue
+    for (const o of d.objects) {
+      for (const [lx, ly, lz] of [
+        [o.x, o.y, o.z], [o.x + o.sx, o.y, o.z],
+        [o.x, o.y + o.sy, o.z], [o.x, o.y, o.z + o.sz],
+        [o.x + o.sx, o.y + o.sy, o.z], [o.x + o.sx, o.y, o.z + o.sz],
+        [o.x, o.y + o.sy, o.z + o.sz],
+        [o.x + o.sx, o.y + o.sy, o.z + o.sz],
+      ] as const) {
+        const w = toWorld(inst, lx, ly, lz)
+        const p = renderer.project(w.x, w.y, w.z)
+        minX = Math.min(minX, p.x)
+        minY = Math.min(minY, p.y)
+        maxX = Math.max(maxX, p.x)
+        maxY = Math.max(maxY, p.y)
+      }
+    }
+  }
+  if (!Number.isFinite(minX)) return renderer.selectionScreenBounds()
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+}
+
+function controlLoop(t: number): void {
+  const dt = moveLast ? Math.min(0.08, (t - moveLast) / 1000) : 0
+  moveLast = t
+  applyMovement(dt)
   if (t - dimLast > 33) {
     dimLast = t
     updateDims()
     updatePartPill()
+    if (renderer) {
+      // Страховка: состояние выбора могло обновиться до того, как watcher
+      // увидел renderer. Синхронизируем только при изменении.
+      const ids = state.selected.length ? [...state.selected]
+        : state.selection ? [state.selection] : []
+      const sig = `${state.wallIndex}|${state.wallItemId}|${state.openingId}|${ids.join(',')}`
+      if (sig !== selSig) {
+        selSig = sig
+        if (state.wallIndex != null) {
+          renderer.setSelectedWall(state.wallIndex, state.wallItemId)
+        } else if (state.openingId) {
+          renderer.setSelectedOpening(state.openingId)
+        } else {
+          renderer.setSelected(ids)
+        }
+      }
+      const psig = `${partSelection.instanceId ?? ''}:${partSelection.part ?? ''}`
+      if (psig !== partSig) {
+        partSig = psig
+        renderer.setSelectedPart(partSelection.instanceId, partSelection.part)
+      }
+      renderer.refreshSelectionGlow()
+      selRect.value = selectionFrame()
+    }
+    // Комнаты меняются редко: пересчёт раз в ~0.4 с достаточен.
+    if (t - walkLast > 400) {
+      walkLast = t
+      refreshWalkArea()
+      updateWalkHud()
+    }
   }
-  dimRaf = requestAnimationFrame(dimLoop)
+  // --- авто-качество (всегда, не только при ?perf=1) ---
+  if (document.hidden) {
+    // в фоне rAF стоит: не считаем это «медленным GPU»
+    autoFrames = 0
+    autoLast = t
+  }
+  if (!autoStart) autoStart = t
+  // Первые 4 с — прогрев (загрузка, solve, текстуры): не считаем их тормозами.
+  if (t - autoStart < 4000) {
+    autoFrames = 0
+    autoLast = t
+  } else {
+    autoFrames++
+  }
+  if (!autoLast) autoLast = t
+  if (t - autoLast >= 2000 && renderer && !state.presentation &&
+      state.viewMode !== 'blueprint' &&
+      document.visibilityState === 'visible' && t - autoStart >= 4000) {
+    const fps = (autoFrames * 1000) / (t - autoLast)
+    autoFrames = 0
+    autoLast = t
+    if (fps < 24) {
+      autoSlowWindows++
+      if (!autoQualityDone) {
+        autoQualityDone = true
+        lowGpu.value = true
+        if (state.viewMode !== 'schematic') setViewMode('schematic')
+        renderer.setQuality('schematic')
+        renderer.setPerformance(true)
+      } else if (autoSlowWindows >= 3 && fps < 16) {
+        suggestDraft.value = true
+      }
+    } else if (fps >= 45) {
+      autoSlowWindows = 0
+    }
+  }
+  if (perfOn) {
+    perfFrames++
+    if (!perfLast) perfLast = t
+    if (t - perfLast >= 1000) {
+      const heap = (performance as Performance & {
+        memory?: { usedJSHeapSize: number }
+      }).memory?.usedJSHeapSize ?? 0
+      const stats = renderer?.perfStats()
+      perf.value = {
+        fps: Math.round((perfFrames * 1000) / (t - perfLast)),
+        heap: Math.round(heap / 1048576),
+        meshes: renderer?.meshCount() ?? 0,
+        ...stats,
+        quality: state.viewMode,
+        lowGpu: lowGpu.value,
+      }
+      ;(window as unknown as Record<string, unknown>).__furniturePerf = perf.value
+      perfFrames = 0
+      perfLast = t
+    }
+  }
+  dimRaf = requestAnimationFrame(controlLoop)
 }
 
 function fit(target: 'module' | 'room' = fitTarget.value): void {
@@ -220,7 +866,56 @@ function centerRoom(): void {
   renderer?.center(state.project.room)
 }
 
+/** Ось обзора: центр выбранной комнаты (папки) или всей квартиры. */
+function pivotRoom(): void {
+  orbitPivot.value = 'room'
+  camMode.value = 'orbit'
+  exitLook()
+  renderer?.setMode('orbit')
+  const f = state.project.folders.find((q) => q.id === state.folderId && q.area)
+  if (f?.area) renderer?.setPivotArea(f.area)
+  else renderer?.setPivotRoom(state.project.room)
+  announceCam('orbit')
+}
+
+/** Поставить ось обзора на модуль: по мешам, иначе по его габаритам. */
+function pivotToInstance(id: string): boolean {
+  if (!renderer) return false
+  if (renderer.setPivotObject(id)) return true
+  const inst = state.project.instances.find((i) => i.id === id)
+  const d = inst ? derived[inst.id] : null
+  if (!inst || !d) return false
+  const c = toWorld(inst, d.corpus.W / 2, d.corpus.D / 2, d.corpus.H / 2)
+  renderer.setOrbitTarget(c.x, c.y, c.z)
+  return true
+}
+
+/** Ось обзора: центр выбранного объекта мебели. */
+function pivotObject(): void {
+  const id = state.selection ?? state.selected[0]
+  if (!id || !renderer) return
+  camMode.value = 'orbit'
+  exitLook()
+  renderer.setMode('orbit')
+  if (pivotToInstance(id)) {
+    orbitPivot.value = 'object'
+    announceCam('orbit')
+  }
+}
+
+function cyclePivot(): void {
+  if (orbitPivot.value === 'room' && (state.selection || state.selected.length)) {
+    pivotObject()
+  } else {
+    pivotRoom()
+  }
+}
+
 function setView(name: 'iso' | 'front' | 'side' | 'top'): void {
+  if (isBlueprint.value) {
+    setBlueprintView(name)
+    return
+  }
   viewName.value = name
   camMode.value = 'orbit'
   renderer?.setMode('orbit')
@@ -231,9 +926,133 @@ function setProjection(p: 'persp' | 'ortho'): void {
   renderer?.setProjection(p)
 }
 
+function setBlueprintView(v: 'iso' | 'front' | 'side' | 'top'): void {
+  blueprintView.value = v
+  renderer?.setBlueprintView(v)
+}
+
+function setBlueprintPivot(v: 'room' | 'object'): void {
+  if (v === 'object') {
+    const id = state.selection ?? state.selected[0]
+    if (id && renderer?.setPivotObject(id)) {
+      blueprintPivot.value = 'object'
+      return
+    }
+  }
+  blueprintPivot.value = 'room'
+  renderer?.setBlueprintPivot('room')
+}
+
+function blueprintZoom(f: number): void {
+  renderer?.blueprintZoom(f)
+}
+
+function announceCam(mode: 'orbit' | 'first' | 'fly'): void {
+  const label = mode === 'orbit' ? 'Обзор' : mode === 'first' ? 'Прогулка' : 'Полёт'
+  camToast.value = label
+  window.clearTimeout(camToastTimer)
+  camToastTimer = window.setTimeout(() => { camToast.value = '' }, 1500)
+}
+
+function requestLook(): void {
+  if (isTouch.value) return
+  const c = canvasEl.value
+  if (!c || document.pointerLockElement === c) return
+  void c.requestPointerLock?.()
+}
+
+function exitLook(): void {
+  if (document.pointerLockElement) document.exitPointerLock()
+}
+
 function setCamMode(mode: 'orbit' | 'first' | 'fly'): void {
+  if (!walkEnabled && mode !== 'orbit') return
+  if (mode !== 'orbit' && isBlueprint.value) {
+    // В чертеже камера фиксированная: выход в прогулку/полёт возвращает
+    // обычный вид, иначе «свободная камера» ломает чертёжные ракурсы.
+    setViewMode('schematic')
+  }
   camMode.value = mode
   renderer?.setMode(mode)
+  announceCam(mode)
+  viewMore.value = false
+  if (mode === 'orbit') exitLook()
+  else if (!isTouch.value) requestLook()
+  if (mode !== 'orbit' && renderer) {
+    // Входим в комнату, а не в центр всей квартиры: прогулка замкнута
+    // на помещении, в котором находится камера.
+    const wp = renderer.walkerPosition()
+    // Вход из обзора — в выбранную комнату; если она не задана,
+    // остаёмся в той, где уже стоит камера.
+    const f = state.project.folders.find((q) => q.id === state.folderId && q.area)
+      ?? (wp ? folderAt(wp.x, wp.y) : null)
+    if (f?.area) {
+      const a = f.area
+      // Встаём там, откуда смотрели в обзоре: позиция камеры орбиты,
+      // прижатая к комнате, и взгляд на её цель. Занято — ищем свободное.
+      const cam = renderer.orbit.position
+      let sx = clamp(cam.x * 1000, a.x + 300, a.x + a.w - 300)
+      let sy = clamp(cam.z * 1000, a.y + 300, a.y + a.d - 300)
+      if (!renderer.canStandAt(sx, sy) || clearanceAt(sx, sy, a) < 400) {
+        const spot = freeSpotIn(a)
+        if (spot) {
+          sx = spot.x
+          sy = spot.y
+        }
+      }
+      const t = renderer.orbit.target
+      const dx = t.x * 1000 - sx
+      const dy = t.z * 1000 - sy
+      const yaw = Math.hypot(dx, dy) > 300
+        ? (Math.atan2(dx, dy) * 180) / Math.PI
+        : bestYaw(sx, sy, a)
+      renderer.placeWalker(sx, sy, yaw)
+    }
+  }
+  refreshWalkArea(true)
+  updateWalkHud()
+}
+
+function cycleCamMode(): void {
+  if (!walkEnabled) return
+  const order: Array<'orbit' | 'first' | 'fly'> = ['orbit', 'first', 'fly']
+  const i = order.indexOf(camMode.value)
+  setCamMode(order[(i + 1) % order.length])
+}
+
+function onPadMove(v: { x: number; y: number }): void {
+  padMove.value = v
+}
+
+function onPadZ(v: number): void {
+  padZ.value = v
+}
+
+function keyName(e: KeyboardEvent): string {
+  const k = e.key.toLowerCase()
+  const map: Record<string, string> = {
+    ц: 'w', ф: 'a', ы: 's', в: 'd', й: 'q', у: 'e',
+  }
+  return map[k] ?? k
+}
+
+function applyMovement(dt: number): void {
+  if (!renderer || state.presentation) return
+  // Джойстик: вверх — вперёд (в Canvas Y растёт вниз), вправо — вправо.
+  let forward = -padMove.value.y
+  let strafe = padMove.value.x
+  let vertical = padZ.value
+  if (moveKeys.has('w')) forward += 1
+  if (moveKeys.has('s')) forward -= 1
+  if (moveKeys.has('d')) strafe += 1
+  if (moveKeys.has('a')) strafe -= 1
+  if (moveKeys.has('e')) vertical += 1
+  if (moveKeys.has('q')) vertical -= 1
+  forward = Math.max(-1, Math.min(1, forward))
+  strafe = Math.max(-1, Math.min(1, strafe))
+  vertical = Math.max(-1, Math.min(1, vertical))
+  if (!forward && !strafe && !vertical) return
+  renderer.moveCamera(forward, strafe, vertical, dt, moveSpeedBoost.value)
 }
 
 function planZoom(k: number): void {
@@ -276,11 +1095,15 @@ let down: {
   moved: number
   instanceId?: string
   part?: number
-  type: 'instance' | 'wall' | 'opening' | 'wallitem'
+  type: 'instance' | 'wall' | 'opening' | 'wallitem' | 'prop'
   wallIndex?: number
   openingId?: string
   itemId?: string
+  propId?: string
+  propStart?: { x: number; y: number }
+  propGrab?: { x: number; y: number }
   move: boolean
+  mod: boolean
   startFloor: { x: number; y: number } | null
   starts: Record<string, { x: number; y: number }>
   dragged: boolean
@@ -291,8 +1114,23 @@ function canvasPoint(e: PointerEvent): { x: number; y: number } {
   return { x: e.clientX - rect.left, y: e.clientY - rect.top }
 }
 
+function onPointerLockChange(): void {
+  pointerLocked.value = document.pointerLockElement === canvasEl.value
+}
+
+function onLookMove(e: PointerEvent): void {
+  if (!pointerLocked.value || !renderer) return
+  renderer.look(e.movementX || 0, e.movementY || 0)
+}
+
 function onDown(e: PointerEvent): void {
   if (!renderer || !canvasEl.value) return
+  // В прогулке/полёте мышь смотрит без зажатой кнопки: клик — захват.
+  if ((camMode.value === 'first' || camMode.value === 'fly') &&
+      e.pointerType !== 'touch') {
+    if (!pointerLocked.value) requestLook()
+    return
+  }
   activePointers.add(e.pointerId)
   // Второй палец — жест камеры, а не перетаскивание модуля.
   if (e.pointerType === 'touch' && activePointers.size > 1) {
@@ -305,34 +1143,43 @@ function onDown(e: PointerEvent): void {
   const hit = renderer.pick(p.x, p.y)
   const starts: Record<string, { x: number; y: number }> = {}
   const isInstance = hit?.type === 'instance' && !!hit.instanceId
-  const canDrag = isInstance && ui.dragMove
-  if (isInstance) {
-    if (e.shiftKey || e.ctrlKey || e.metaKey) toggleSelection(hit.instanceId!)
-    else if (!state.selected.includes(hit.instanceId!)) {
-      // клик по фасаду/ящику не должен открывать/закрывать окно настроек
-      if (hit.part != null) selectQuiet(hit.instanceId!)
+  const isProp = hit?.type === 'prop' && !!hit.propId
+  const canDrag = (isInstance || isProp) && ui.dragMove
+  // Выбор — на отпускании, если это был клик, а не вращение камеры.
+  // Исключение — режим «Двигать»: там объект нужен выбранным сразу.
+  if (canDrag) {
+    if (isProp) selectProp(hit.propId!, false)
+    if (isInstance) {
+      if (e.shiftKey || e.ctrlKey || e.metaKey) toggleSelection(hit.instanceId!)
+      else if (hit.part != null) selectQuiet(hit.instanceId!)
       else select(hit.instanceId!)
-    } else if (hit.part == null && !ui.object.open) {
-      // модуль уже выбран, но окно закрыли — обычный клик открывает снова
-      openObjectModal('quick')
-    }
-    for (const id of state.selected.length ? state.selected : [hit.instanceId!]) {
-      const i = state.project.instances.find((x) => x.id === id)
-      if (i) starts[id] = { x: i.x, y: i.y }
+      for (const id of state.selected.length ? state.selected : [hit.instanceId!]) {
+        const i = state.project.instances.find((x) => x.id === id)
+        if (i) starts[id] = { x: i.x, y: i.y }
+      }
     }
   }
+  const grab = canDrag ? renderer.floorPoint(p.x, p.y) : null
+  const prop = isProp
+    ? (state.project.props ?? []).find((x) => x.id === hit!.propId)
+    : null
   down = {
     x: e.clientX,
     y: e.clientY,
     moved: 0,
     instanceId: hit?.instanceId,
     part: hit?.part,
-    type: (hit?.type ?? 'instance') as 'instance' | 'wall' | 'opening' | 'wallitem',
+    type: (hit?.type ?? 'instance') as
+      'instance' | 'wall' | 'opening' | 'wallitem' | 'prop',
     wallIndex: hit?.wallIndex,
     openingId: hit?.openingId,
     itemId: hit?.itemId,
+    propId: hit?.propId,
+    propStart: prop ? { x: prop.x, y: prop.y } : undefined,
+    propGrab: grab ?? undefined,
     move: canDrag,
-    startFloor: canDrag ? renderer.floorPoint(p.x, p.y) : null,
+    mod: e.shiftKey || e.ctrlKey || e.metaKey,
+    startFloor: grab,
     starts,
     dragged: false,
   }
@@ -352,6 +1199,14 @@ function onMove(e: PointerEvent): void {
   if (!down.dragged) {
     down.dragged = true
     beginDrag()
+  }
+  if (down.propId && down.propStart && down.propGrab) {
+    moveProp(
+      down.propId,
+      down.propStart.x + (floor.x - down.propGrab.x),
+      down.propStart.y + (floor.y - down.propGrab.y),
+    )
+    return
   }
   moveSelection(floor.x - down.startFloor.x, floor.y - down.startFloor.y, down.starts)
 }
@@ -377,12 +1232,32 @@ function onUp(e: PointerEvent): void {
     selectOpening(d.openingId)
     return
   }
+  if (d.type === 'prop' && d.propId) {
+    selectProp(d.propId, true)
+    return
+  }
   if (!d.instanceId) {
     clearSelection()
     return
   }
   const inst = state.project.instances.find((i) => i.id === d.instanceId)
   if (!inst) return
+  if (!wasMove && d.mod) {
+    toggleSelection(d.instanceId)
+    return
+  }
+  // Одиночный выбор: прошлое выделение снимается.
+  if (d.part != null) selectQuiet(d.instanceId)
+  else select(d.instanceId)
+  // Ось обзора и камера — лицом к выбранному объекту.
+  camMode.value = 'orbit'
+  renderer.setMode('orbit')
+  if (pivotToInstance(d.instanceId)) orbitPivot.value = 'object'
+  if (!isBlueprint.value) {
+    renderer.focusInstance(d.instanceId, 'front', 1, 1)
+  } else {
+    setBlueprintPivot('object')
+  }
   if (d.part != null) {
     const o = derived[inst.id]?.objects[d.part]
     const movable =
@@ -444,13 +1319,56 @@ function onDrop(e: DragEvent): void {
   })
 }
 
+function isTypingOrModal(): boolean {
+  const t = document.activeElement as HTMLElement | null
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' ||
+    t.tagName === 'TEXTAREA' || t.isContentEditable)) return true
+  return ui.addOpen || ui.object.open || ui.settingsOpen || ui.quoteOpen ||
+    ui.versionsOpen || ui.moreOpen || ui.projectsOpen || ui.historyOpen ||
+    ui.viewSheetOpen || ui.tourOpen
+}
+
 function onKey(e: KeyboardEvent): void {
   const t = e.target as HTMLElement | null
   if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' ||
     t.tagName === 'TEXTAREA' || t.isContentEditable)) return
-  const k = e.key.toLowerCase()
+  const k = keyName(e)
+  moveSpeedBoost.value = e.shiftKey
+  if (k === ' ' || e.code === 'Space') {
+    if (isTypingOrModal() || camMode.value !== 'first') return
+    e.preventDefault()
+    if (renderer?.isSeated()) renderer.standUp()
+    else renderer?.jump()
+    return
+  }
+  if (k === 'e' && camMode.value === 'first') {
+    if (isTypingOrModal()) return
+    e.preventDefault()
+    interactWalk()
+    return
+  }
+  if (['w', 'a', 's', 'd', 'q', 'e'].includes(k)) {
+    if (isTypingOrModal()) return
+    // Движение с места сидя — встать.
+    if (camMode.value === 'first' && ['w', 'a', 's', 'd'].includes(k) &&
+      renderer?.isSeated()) {
+      renderer.standUp()
+    }
+    moveKeys.add(k)
+    syncKeyVec()
+    e.preventDefault()
+    return
+  }
+  if ((k === 'c' || k === 'с') && walkEnabled) {
+    if (isTypingOrModal()) return
+    e.preventDefault()
+    cycleCamMode()
+    return
+  }
   if (k === 'f' || k === 'а') fit(fitTarget.value)
-  else if (k === 'escape') clearSelection()
+  // Esc сначала закрывает модалку (это делает App). Если ничего не открыто —
+  // снимаем выделение, но не вместе с закрытием окна.
+  else if (k === 'escape' && !e.defaultPrevented && !isTypingOrModal()) clearSelection()
   else if (k === '1') setView('iso')
   else if (k === '2') setView('front')
   else if (k === '3') setView('side')
@@ -461,7 +1379,21 @@ function onKey(e: KeyboardEvent): void {
   }
 }
 
+function onKeyUp(e: KeyboardEvent): void {
+  const k = keyName(e)
+  moveKeys.delete(k)
+  syncKeyVec()
+  moveSpeedBoost.value = e.shiftKey
+}
+
+function clearMoveKeys(): void {
+  moveKeys.clear()
+  syncKeyVec()
+  moveSpeedBoost.value = false
+}
+
 watch(() => state.rev, sync)
+watch(() => ui.facades, () => renderer?.markAnimDirty())
 watch(() => state.project.materials, sync, { deep: true })
 watch(() => state.project.props, sync, { deep: true })
 watch(
@@ -477,6 +1409,9 @@ watch(
       renderer.setSelected(state.selected.length ? [...state.selected]
         : state.selection ? [state.selection] : [])
     }
+    if (isBlueprint.value && blueprintPivot.value === 'object') {
+      renderer.setBlueprintPivot('object')
+    }
   },
   { deep: true },
 )
@@ -485,29 +1420,123 @@ watch(
   () => state.focusToken,
   () => {
     if (state.focusInstanceId) {
-      renderer?.focusInstance(state.focusInstanceId, state.focusView, state.focusLeft)
+      renderer?.focusInstance(
+        state.focusInstanceId,
+        state.focusView,
+        state.focusLeft,
+        state.focusBottom,
+      )
+    } else if (state.focusPropId) {
+      renderer?.focusProp(state.focusPropId, state.focusView)
     }
   },
 )
 
 // объектный режим: камера вокруг объекта только в конструкторе
 let objectModeOn = false
+const objectModeUi = ref(false)
+
+/** Под панелью конструктора канвас занимает только свободную часть:
+ *  иначе камера крутится вокруг центра всего экрана, а не объекта. */
+function setCanvasDock(active: boolean): void {
+  const c = canvasEl.value
+  if (!c) return
+  if (active) {
+    const body = c.parentElement
+    const width = body?.clientWidth || 0
+    // state.objectLeft — доля ширины вьюпорта, которая остаётся свободной
+    // (её же считает панель конструктора). Канвас ровно такой ширины:
+    // центр канваса = центр свободной части, вращение вокруг объекта.
+    const free = Math.max(160, Math.round(width * state.objectLeft))
+    c.style.width = `${free}px`
+    c.style.right = ''
+  } else {
+    c.style.width = ''
+    c.style.right = ''
+  }
+  requestAnimationFrame(() => renderer?.resize())
+}
+
+/** Панель может доехать/измениться после открытия — подгоняем канвас. */
+watch(() => state.objectLeft, () => {
+  if (ui.object.open && ui.object.mode === 'full' && state.selection) {
+    setCanvasDock(true)
+  }
+})
+
 watch(
   () => [ui.object.open, ui.object.mode, state.selection, state.objectLeft] as const,
   () => {
     const active =
       ui.object.open && ui.object.mode === 'full' && !!state.selection
+    objectModeUi.value = active
+    // В конструкторе камера всегда обзор, но вид отрисовки (Полный/Каркас/
+    // Чертёж) не меняем: канвас выглядит так же, как до открытия.
+    if (active) {
+      if (camMode.value !== 'orbit') {
+        camMode.value = 'orbit'
+        exitLook()
+        renderer?.setMode('orbit')
+        updateWalkHud()
+      }
+    }
+    setCanvasDock(active)
     if (active && state.selection) {
       objectModeOn = true
-      renderer?.enterObjectMode(state.selection, state.objectLeft)
+      // Ждём, пока канвас получит новую ширину (ResizeObserver → resize),
+      // иначе камера считает кадр по старой, широкой области и обрезает объект.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (!objectModeOn || !state.selection) return
+        renderer?.resize()
+        renderer?.enterObjectMode(state.selection, 1)
+      }))
     } else if (objectModeOn) {
       objectModeOn = false
       renderer?.exitObjectMode()
     }
   },
 )
+// выбрали деталь в конструкторе — камера подходит к ней (длинные боковины)
+watch(
+  () => [partSelection.instanceId, partSelection.part, ui.object.mode] as const,
+  () => {
+    renderer?.setSelectedPart(partSelection.instanceId, partSelection.part)
+    if (!objectModeUi.value) return
+    const id = partSelection.instanceId
+    const part = partSelection.part
+    if (id && part != null) renderer?.focusPart(id, part)
+  },
+)
+function zoomObject(factor: number): void {
+  renderer?.zoomBy(factor)
+}
+
+function fitObject(): void {
+  renderer?.fitObject()
+}
+
 watch(() => state.wallMode, (m) => renderer?.setWallMode(m))
+watch(() => ui.walkFov, (v) => renderer?.setWalkFov(v))
 watch(() => state.viewMode, (m) => renderer?.setQuality(m))
+watch(isBlueprint, (on) => {
+  if (on) {
+    camMode.value = 'orbit'
+    suggestDraft.value = false
+    lowGpu.value = false
+    exitLook()
+    renderer?.setMode('orbit')
+    renderer?.setBlueprint(true)
+    blueprintView.value = 'iso'
+    blueprintPivot.value = 'room'
+    renderer?.setBlueprintPivot('room')
+    renderer?.setBlueprintView('iso')
+  } else {
+    renderer?.setBlueprint(false)
+  }
+})
+watch(() => ui.hardware, (v) => renderer?.setHardwareVisible(v))
+watch(() => ui.onlyRoom, (v) => { if (v) void solveVisible(); else void solveAll(); sync() })
+watch(currentRoomIds, () => { void solveVisible(); sync() })
 watch(
   () => state.projectId,
   () => {
@@ -520,14 +1549,45 @@ watch(() => state.fitToken, () => {
   window.setTimeout(applyProjectCamera, 0)
 })
 
-onMounted(() => {
+onMounted(async () => {
   if (canvasEl.value) {
+    const { BabylonRenderer } = await import('../render3d/babylonScene')
+    if (!canvasEl.value) return
     renderer = new BabylonRenderer(canvasEl.value)
+    if (perfOn) {
+      ;(window as unknown as Record<string, unknown>).__furnitureRenderer = renderer
+      ;(window as unknown as Record<string, unknown>).__furnitureDbg = {
+        state, ui, lowGpu, suggestDraft,
+      }
+    }
     renderer.setWallMode(state.wallMode)
+    renderer.setWalkFov(ui.walkFov)
+    // На телефоне с небольшим числом ядер сразу схема: полный вид со
+    // тенями и текстурами собирается секундами и «подвешивает» канвас.
+    try {
+      const coarse = window.matchMedia('(pointer: coarse)').matches
+      const cores = navigator.hardwareConcurrency || 8
+      if (coarse && cores <= 6 && state.viewMode === 'realistic') {
+        state.viewMode = 'schematic'
+      }
+    } catch { /* ignore */ }
     renderer.setQuality(state.viewMode)
+    if (state.viewMode === 'blueprint') {
+      camMode.value = 'orbit'
+      renderer.setBlueprint(true)
+      renderer.setBlueprintPivot('room')
+      renderer.setBlueprintView('iso')
+    }
+    // Первый кадр на телефоне собирается секундами: показываем плашку,
+    // чтобы это читалось как загрузка, а не как зависание.
+    building.value = true
+    renderer.scene.onAfterRenderObservable.addOnce(() => { building.value = false })
     sync()
-    renderer.setSelected(state.selected.length ? [...state.selected]
+    renderer.setVisibleInstances(currentRoomIds.value)
+  renderer.setSelected(state.selected.length ? [...state.selected]
     : state.selection ? [state.selection] : [])
+  renderer.setSelectedPart(partSelection.instanceId, partSelection.part)
+  renderer.setSelectedProp(state.propId)
     renderer.fit('room', state.project.room, null)
     applyProjectCamera()
     if (import.meta.env.DEV) {
@@ -537,12 +1597,24 @@ onMounted(() => {
   ro = new ResizeObserver(() => renderer?.resize())
   if (canvasEl.value) ro.observe(canvasEl.value)
   window.addEventListener('keydown', onKey)
-  dimRaf = requestAnimationFrame(dimLoop)
+  window.addEventListener('keyup', onKeyUp)
+  window.addEventListener('blur', clearMoveKeys)
+  window.addEventListener('pointermove', onLookMove)
+  document.addEventListener('pointerlockchange', onPointerLockChange)
+  touchQuery.addEventListener('change', onTouchChange)
+  dimRaf = requestAnimationFrame(controlLoop)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey)
+  window.removeEventListener('keyup', onKeyUp)
+  window.removeEventListener('blur', clearMoveKeys)
+  window.removeEventListener('pointermove', onLookMove)
+  document.removeEventListener('pointerlockchange', onPointerLockChange)
+  touchQuery.removeEventListener('change', onTouchChange)
+  exitLook()
   cancelAnimationFrame(dimRaf)
+  window.clearTimeout(camToastTimer)
   ro?.disconnect()
   renderer?.dispose()
   renderer = null
@@ -552,34 +1624,44 @@ onBeforeUnmount(() => {
 <template>
   <section class="view">
     <header class="view__head">
-      <span class="view__title">3D · Babylon</span>
+      <div class="view__title-wrap">
+        <span class="view__title">3D</span>
+        <span class="view__mode-label">{{ camModeLabel }}</span>
+      </div>
       <div class="view__actions">
-        <button class="tab" :class="{ 'tab--active': viewName === 'iso' }" @click="setView('iso')">Изо</button>
-        <button class="tab" :class="{ 'tab--active': viewName === 'front' }" @click="setView('front')">Фасад</button>
-        <button class="tab" :class="{ 'tab--active': viewName === 'side' }" @click="setView('side')">Бок</button>
-        <button class="tab" :class="{ 'tab--active': viewName === 'top' }" @click="setView('top')">Сверху</button>
-        <span class="tab-sep"></span>
-        <button class="tab" title="Перспектива" @click="setProjection('persp')">Персп</button>
-        <button class="tab" title="Ортокамера" @click="setProjection('ortho')">Орто</button>
-        <span class="tab-sep"></span>
-        <button class="tab" :class="{ 'tab--active': camMode === 'orbit' }" @click="setCamMode('orbit')">Обзор</button>
-        <button class="tab" :class="{ 'tab--active': camMode === 'first' }" @click="setCamMode('first')">От лица</button>
-        <button class="tab" :class="{ 'tab--active': camMode === 'fly' }" @click="setCamMode('fly')">Полёт</button>
-        <span class="tab-sep"></span>
-        <button class="tab" :class="{ 'tab--active': ui.dragMove }" title="Перемещение модулей мышью по 3D (по умолчанию выключено)" @click="ui.dragMove = !ui.dragMove">{{ ui.dragMove ? '✥ Двигать' : '🔒 Двигать' }}</button>
-        <button class="tab" :class="{ 'tab--active': ui.dims3d }" title="Показывать размеры на 3D" @click="ui.dims3d = !ui.dims3d">Размеры</button>
-        <button class="tab" :class="{ 'tab--active': ui.facades }" title="Показывать или скрыть фасады" @click="ui.facades = !ui.facades">Фасады</button>
-        <button class="tab" :class="{ 'tab--active': fitTarget === 'module' }" @click="fit('module')">Модуль</button>
-        <button class="tab" :class="{ 'tab--active': fitTarget === 'room' }" @click="fit('room')">Комната</button>
-        <button class="tab" title="Камера в центр комнаты" @click="centerRoom">Центр</button>
-        <button class="tab" popovertarget="view-help3d" title="Горячие клавиши">?</button>
-        <button class="btn btn--ghost btn--sm" title="Снимок вида" @click="exportPng">PNG</button>
+        <div class="view__group" role="group" aria-label="Ракурс">
+          <span class="view__group-label">Ракурс</span>
+          <button class="tab" :class="{ 'tab--active': viewName === 'iso' }" @click="setView('iso')">Изо</button>
+          <button class="tab" :class="{ 'tab--active': viewName === 'front' }" @click="setView('front')">Фасад</button>
+          <button class="tab" :class="{ 'tab--active': viewName === 'side' }" @click="setView('side')">Бок</button>
+          <button class="tab" :class="{ 'tab--active': viewName === 'top' }" @click="setView('top')">Сверху</button>
+        </div>
+
+        <div v-if="walkEnabled && !ui.master" class="view__group" role="group" aria-label="Режим камеры">
+          <span class="view__group-label">Камера</span>
+          <button class="tab" :class="{ 'tab--active': camMode === 'orbit' }" title="Вращение вокруг точки" @click="setCamMode('orbit')">Обзор</button>
+          <button class="tab" :class="{ 'tab--active': camMode === 'first' }" title="Камера на высоте глаз" @click="setCamMode('first')">Прогулка</button>
+        </div>
+
+        <div v-if="!ui.master" class="view__group" role="group" aria-label="Вписать в кадр">
+          <button class="tab" :class="{ 'tab--active': fitTarget === 'module' }" @click="fit('module')">Модуль</button>
+          <button class="tab" :class="{ 'tab--active': fitTarget === 'room' }" @click="fit('room')">Комната</button>
+          <button class="tab" title="Камера в центр комнаты" @click="centerRoom">Центр</button>
+        </div>
+
+        <button v-if="ui.master" class="tab" title="Вписать комнату в кадр" @click="fit('room')">Вписать</button>
+        <button class="tab" title="2D-развёртки стен без WebGL" @click="ui.renderMode = 'draft'; ui.draftTab = 'walls'; ui.viewSheetOpen = false">2D-стены</button>
+        <button v-if="!ui.master" class="tab view__more" title="Все настройки вида и камеры" @click="viewMore = true">Ещё</button>
+        <button v-if="!ui.master" class="tab" popovertarget="view-help3d" title="Горячие клавиши">?</button>
+        <button v-if="!ui.master" class="tab" title="Снимок вида" @click="exportPng">PNG</button>
+
         <div id="view-help3d" popover class="popover">
-          <h4>Камера</h4>
+          <h4>Камера и движение</h4>
           <dl>
-            <dt>ЛКМ / перетаскивание</dt><dd>орбита</dd>
-            <dt>Колесо</dt><dd>зум</dd>
-            <dt>Shift / ПКМ</dt><dd>панорама</dd>
+            <dt>ЛКМ / перетаскивание</dt><dd>осмотреться (обзор)</dd>
+            <dt>W A S D</dt><dd>сдвиг вида</dd>
+            <dt>Q / E</dt><dd>ниже / выше</dd>
+            <dt>Shift</dt><dd>ускорить движение</dd>
             <dt>Двойной клик</dt><dd>фокус на модуле</dd>
             <dt>F</dt><dd>вписать</dd>
             <dt>0</dt><dd>исходный вид</dd>
@@ -589,7 +1671,20 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </header>
+
     <div class="view__body" data-tour="scene">
+      <div v-if="building" class="view__building">Собираем сцену…</div>
+      <div
+        v-if="objectModeUi"
+        class="view__zoom"
+        role="group"
+        aria-label="Масштаб объекта"
+        :style="{ right: `calc(${Math.round((1 - state.objectLeft) * 100)}% + 10px)` }"
+      >
+        <button class="view__zoom-btn" title="Отдалить" @click="zoomObject(1.25)">−</button>
+        <button class="view__zoom-btn" title="Вписать объект" @click="fitObject()">⌂</button>
+        <button class="view__zoom-btn" title="Приблизить" @click="zoomObject(0.8)">＋</button>
+      </div>
       <canvas
         ref="canvasEl"
         class="view__canvas"
@@ -602,14 +1697,131 @@ onBeforeUnmount(() => {
         @drop.prevent="onDrop"
         @contextmenu.prevent
       ></canvas>
+
+      <button
+        v-if="walkEnabled && !state.presentation"
+        class="cam-switch"
+        :class="`cam-switch--${camMode}`"
+        :title="`Камера: ${camModeLabel}. Клик — следующий режим`"
+        @click="cycleCamMode"
+      >
+        <span class="cam-switch__icon" aria-hidden="true">{{ camModeIcon[camMode] }}</span>
+        <span class="cam-switch__text">{{ camModeLabel }}</span>
+        <span class="cam-switch__hint">
+          {{ camMode === 'first'
+            ? (pointerLocked ? 'C — сменить · Esc — курсор' : 'клик — обзор · C — сменить')
+            : 'C — сменить' }}
+        </span>
+      </button>
+
+      <Transition name="cam-toast">
+        <div v-if="camToast" class="cam-toast" role="status">
+          <span class="cam-toast__icon">{{ camModeIcon[camMode] }}</span>
+          <b>{{ camToast }}</b>
+          <small>{{ camModeHint }}</small>
+        </div>
+      </Transition>
+
+      <div v-if="isBlueprint && !state.presentation" class="bp-bar" role="group" aria-label="Чертёж">
+        <div class="bp-bar__group">
+          <button class="tab" :class="{ 'tab--active': blueprintView === 'iso' }" @click="setBlueprintView('iso')">Изо</button>
+          <button class="tab" :class="{ 'tab--active': blueprintView === 'front' }" @click="setBlueprintView('front')">Фасад</button>
+          <button class="tab" :class="{ 'tab--active': blueprintView === 'side' }" @click="setBlueprintView('side')">Бок</button>
+          <button class="tab" :class="{ 'tab--active': blueprintView === 'top' }" @click="setBlueprintView('top')">Сверху</button>
+        </div>
+        <div class="bp-bar__group">
+          <span class="bp-bar__label">Ось</span>
+          <button class="tab" :class="{ 'tab--active': blueprintPivot === 'room' }" @click="setBlueprintPivot('room')">Комната</button>
+          <button class="tab" :class="{ 'tab--active': blueprintPivot === 'object' }" @click="setBlueprintPivot('object')">Объект</button>
+        </div>
+        <div class="bp-bar__group">
+          <button class="tab" title="Отдалить" @click="blueprintZoom(1.25)">−</button>
+          <button class="tab" title="Приблизить" @click="blueprintZoom(0.8)">＋</button>
+        </div>
+        <span class="bp-bar__hint">Чертёж 2.5D · камера фиксированная</span>
+      </div>
+
+      <div v-if="camMode === 'first' && !state.presentation" class="walk-hud">
+        <span v-if="seated" class="walk-hud__main">E или Space — встать</span>
+        <span v-else-if="walkTarget" class="walk-hud__main">
+          <b>E</b> — {{ walkTarget.label }}
+        </span>
+        <span v-else class="walk-hud__main">WASD — идти · Space — прыжок</span>
+        <span v-if="!pointerLocked && !isTouch" class="walk-hud__lock">
+          клик по сцене — обзор мышью без зажатой кнопки
+        </span>
+      </div>
+
       <svg v-if="ui.dims3d && dimLines.length" class="view__dims">
+        <defs>
+          <marker
+            id="dim-arrow"
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="7"
+            markerHeight="7"
+            orient="auto-start-reverse"
+          >
+            <path d="M0,0 L10,5 L0,10 z" fill="#ffbe55" stroke="#0b0d0f" stroke-width="0.8" />
+          </marker>
+          <marker id="dim-arrow-h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#7fe0c2" stroke="#0b0d0f" stroke-width="0.8" />
+          </marker>
+          <marker id="dim-arrow-d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#7fb9f0" stroke="#0b0d0f" stroke-width="0.8" />
+          </marker>
+          <marker id="dim-arrow-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#ffd28a" stroke="#0b0d0f" stroke-width="0.8" />
+          </marker>
+          <marker id="dim-arrow-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#d8a6ff" stroke="#0b0d0f" stroke-width="0.8" />
+          </marker>
+        </defs>
         <g v-for="(d, i) in dimLines" :key="i">
-          <line :x1="d.x1" :y1="d.y1" :x2="d.x2" :y2="d.y2" />
-          <circle :cx="d.x1" :cy="d.y1" r="1.6" />
-          <circle :cx="d.x2" :cy="d.y2" r="1.6" />
-          <text :x="d.tx" :y="d.ty">{{ d.label }}</text>
+          <line
+            :x1="d.x1" :y1="d.y1" :x2="d.x2" :y2="d.y2"
+            :style="{ stroke: d.color }"
+            :marker-start="`url(#${d.marker})`"
+            :marker-end="`url(#${d.marker})`"
+          />
+          <line
+            class="view__dims-edge"
+            :x1="d.e1[0]" :y1="d.e1[1]" :x2="d.e1[2]" :y2="d.e1[3]"
+            :style="{ stroke: d.color }"
+          />
+          <line
+            class="view__dims-edge"
+            :x1="d.e2[0]" :y1="d.e2[1]" :x2="d.e2[2]" :y2="d.e2[3]"
+            :style="{ stroke: d.color }"
+          />
+          <rect
+            class="view__dims-badge"
+            :x="d.tx - d.labelW / 2"
+            :y="d.ty - 9"
+            :width="d.labelW"
+            :height="18"
+            rx="4"
+            :style="{ stroke: d.color }"
+          />
+          <text :x="d.tx" :y="d.ty" :style="{ fill: d.color }">{{ d.label }}</text>
         </g>
       </svg>
+
+      <svg
+        v-if="selRect && !state.presentation"
+        class="view__sel"
+        aria-hidden="true"
+      >
+        <rect
+          :x="selRect.x - 6"
+          :y="selRect.y - 6"
+          :width="selRect.w + 12"
+          :height="selRect.h + 12"
+          rx="4"
+        />
+      </svg>
+
       <button
         v-if="partPill && !state.presentation"
         class="part-pill"
@@ -618,6 +1830,7 @@ onBeforeUnmount(() => {
         @pointerdown.stop
         @click.stop="togglePill"
       >{{ pillOpen ? '⤡' : '⤢' }}</button>
+
       <div v-if="!state.presentation" class="viewcube-wrap">
         <div class="viewcube">
           <button class="viewcube__face viewcube__face--front" @click="setView('front')">ПЕРЕД</button>
@@ -628,42 +1841,83 @@ onBeforeUnmount(() => {
         </div>
         <button class="viewcube__home" title="Исходный вид (0)" @click="setView('iso'); fit('room')">⌂</button>
       </div>
+
       <div v-if="!state.presentation" class="wallmode">
         <button class="tab" :class="{ 'tab--active': state.wallMode === 'cutaway' }" @click="setWallMode('cutaway')">Срез</button>
         <button class="tab" :class="{ 'tab--active': state.wallMode === 'low' }" @click="setWallMode('low')">Низкие</button>
       </div>
-      <div v-if="!state.presentation" class="minimap" :class="{ 'minimap--open': planOpen }">
-        <PlanView :compact="!planOpen" />
+
+      <div
+        v-if="!state.presentation && !objectModeUi"
+        class="minimap"
+        :class="{ 'minimap--open': planOpen, 'minimap--walk': camMode === 'first' }"
+      >
+        <PlanView :compact="!planOpen" :marker="walker" />
         <div class="minimap__tools">
           <button class="minimap__btn" title="Приблизить план" @click="planZoom(1.25)">＋</button>
           <button class="minimap__btn" title="Отдалить план" @click="planZoom(0.8)">−</button>
           <button class="minimap__btn" title="Вписать комнату" @click="planFit">⌂</button>
           <button class="minimap__btn minimap__btn--wide" title="Добавить комнату" @click="addRoom">＋комната</button>
         </div>
+        <div v-if="walker" class="minimap__pos">
+          X <b>{{ (walker.x / 1000).toFixed(2) }}</b> ·
+          Y <b>{{ (walker.y / 1000).toFixed(2) }}</b> ·
+          Z <b>{{ walker.eye.toFixed(2) }}</b> м
+          <span v-if="rendererRoom" class="minimap__room">{{ rendererRoom }}</span>
+        </div>
         <button class="minimap__toggle" @click="planOpen = !planOpen">{{ planOpen ? '×' : '⤢' }}</button>
       </div>
-      <div v-if="!state.presentation" class="view__dock" aria-label="Вид и камера">
+
+      <div v-if="!state.presentation && !isBlueprint" class="view__dock" aria-label="Вид и камера">
         <button class="tab" @click="viewMore = true">Вид · {{ viewNameLabel }}</button>
-        <button class="tab" @click="fit('room')">Вписать</button>
-        <button class="tab" :class="{ 'tab--active': ui.dragMove }" @click="ui.dragMove = !ui.dragMove">
-          Двигать
-        </button>
-        <button class="tab tab--primary" @click="viewMore = true">Ещё</button>
+        <button v-if="walkEnabled" class="tab" :class="{ 'tab--active': camMode !== 'orbit' }" @click="cycleCamMode">{{ camModeLabel }}</button>
+        <button
+          class="tab"
+          :class="{ 'tab--active': orbitPivot === 'object' }"
+          :disabled="!state.selection && !state.selected.length"
+          :title="orbitPivot === 'room' ? 'Вращать вокруг комнаты — нажмите для объекта' : 'Вращать вокруг объекта — нажмите для комнаты'"
+          @click="cyclePivot"
+        >Ось: {{ orbitPivot === 'room' ? 'комната' : 'объект' }}</button>
+        <button
+          class="tab"
+          :title="state.selection ? 'Вписать выбранный модуль' : 'Вписать комнату'"
+          @click="fit(state.selection ? 'module' : 'room')"
+        >Вписать</button>
+        <button class="tab" :class="{ 'tab--active': ui.dragMove }" @click="ui.dragMove = !ui.dragMove">Двигать</button>
       </div>
+
+      <CameraPad
+        v-if="!state.presentation && showPad && !isBlueprint"
+        :mode="camMode"
+        :touch="isTouch"
+        :keys="keyVec"
+        @move="onPadMove"
+        @z="onPadZ"
+      />
+
       <div v-if="viewMore" class="view__sheet" @click.self="viewMore = false">
         <section class="view__sheet-card" role="dialog" aria-modal="true" aria-label="Вид и камера">
           <span class="view__sheet-grip" aria-hidden="true"></span>
           <header class="view__sheet-head">
-            <span>Вид и камера</span>
+            <span>Вид и сцена</span>
             <button class="btn btn--ghost btn--sm" title="Закрыть" @click="viewMore = false">×</button>
           </header>
 
-          <div class="view__sheet-section">
-            <span class="view__sheet-label">Отображение</span>
-            <div class="view__sheet-row">
-              <button class="tab" :class="{ 'tab--active': state.viewMode === 'schematic' }" @click="setViewMode('schematic')">Каркас</button>
-              <button class="tab" :class="{ 'tab--active': state.viewMode === 'realistic' }" @click="setViewMode('realistic')">Полный</button>
+          <div v-if="walkEnabled" class="view__sheet-section">
+            <span class="view__sheet-label">Режим камеры</span>
+            <div class="view__sheet-row view__sheet-row--stack">
+              <button class="tab" :class="{ 'tab--active': camMode === 'orbit' }" @click="setCamMode('orbit')">
+                Обзор <small>вращение вокруг точки</small>
+              </button>
+              <button class="tab" :class="{ 'tab--active': camMode === 'first' }" @click="setCamMode('first')">
+                Прогулка <small>на высоте глаз</small>
+              </button>
             </div>
+            <p class="view__sheet-note">{{ camModeHint }}</p>
+            <label v-if="camMode === 'first'" class="view__fov">
+              <span>Угол обзора <b>{{ ui.walkFov }}°</b></span>
+              <input v-model.number="ui.walkFov" type="range" min="48" max="82" step="1" />
+            </label>
           </div>
 
           <div class="view__sheet-section">
@@ -674,48 +1928,79 @@ onBeforeUnmount(() => {
               <button class="tab" :class="{ 'tab--active': viewName === 'side' }" @click="setView('side')">Бок</button>
               <button class="tab" :class="{ 'tab--active': viewName === 'top' }" @click="setView('top')">Сверху</button>
             </div>
-          </div>
-
-          <div class="view__sheet-section">
-            <span class="view__sheet-label">Проекция и камера</span>
-            <div class="view__sheet-row">
+            <div v-if="state.viewMode !== 'blueprint'" class="view__sheet-row">
               <button class="tab" @click="setProjection('persp')">Перспектива</button>
               <button class="tab" @click="setProjection('ortho')">Ортокамера</button>
             </div>
             <div class="view__sheet-row">
-              <button class="tab" :class="{ 'tab--active': camMode === 'orbit' }" @click="setCamMode('orbit')">Обзор</button>
-              <button class="tab" :class="{ 'tab--active': camMode === 'first' }" @click="setCamMode('first')">От лица</button>
-              <button class="tab" :class="{ 'tab--active': camMode === 'fly' }" @click="setCamMode('fly')">Полёт</button>
+              <button class="tab" :class="{ 'tab--active': fitTarget === 'module' }" @click="fit('module')">Вписать модуль</button>
+              <button class="tab" :class="{ 'tab--active': fitTarget === 'room' }" @click="fit('room')">Вписать комнату</button>
               <button class="tab" @click="centerRoom">Центр</button>
+              <button class="tab" @click="pivotRoom">Ось: комната</button>
+              <button class="tab" :disabled="!state.selection" @click="pivotObject">Ось: объект</button>
             </div>
           </div>
 
           <div class="view__sheet-section">
-            <span class="view__sheet-label">Сцена</span>
+            <span class="view__sheet-label">Отображение</span>
             <div class="view__sheet-row">
-              <button class="tab" :class="{ 'tab--active': fitTarget === 'module' }" @click="fit('module')">Вписать модуль</button>
-              <button class="tab" :class="{ 'tab--active': fitTarget === 'room' }" @click="fit('room')">Вписать комнату</button>
+              <button class="tab" :class="{ 'tab--active': state.viewMode === 'realistic' }" @click="setViewMode('realistic')">Полный</button>
+              <button class="tab" :class="{ 'tab--active': state.viewMode === 'schematic' }" @click="setViewMode('schematic')">Каркас</button>
+              <button class="tab" :class="{ 'tab--active': state.viewMode === 'blueprint' }" @click="setViewMode('blueprint')">Чертёж</button>
+            </div>
+            <div v-if="state.viewMode === 'blueprint'" class="view__sheet-row">
+              <button class="tab" :class="{ 'tab--active': blueprintView === 'iso' }" @click="setBlueprintView('iso')">Изо</button>
+              <button class="tab" :class="{ 'tab--active': blueprintView === 'front' }" @click="setBlueprintView('front')">Фасад</button>
+              <button class="tab" :class="{ 'tab--active': blueprintView === 'side' }" @click="setBlueprintView('side')">Бок</button>
+              <button class="tab" :class="{ 'tab--active': blueprintView === 'top' }" @click="setBlueprintView('top')">Сверху</button>
+              <button class="tab" :class="{ 'tab--active': blueprintPivot === 'room' }" @click="setBlueprintPivot('room')">Ось: комната</button>
+              <button class="tab" :class="{ 'tab--active': blueprintPivot === 'object' }" @click="setBlueprintPivot('object')">Ось: объект</button>
+            </div>
+            <div class="view__sheet-row">
+              <button class="tab" :class="{ 'tab--active': state.wallMode === 'cutaway' }" @click="setWallMode('cutaway')">Срез стен</button>
+              <button class="tab" :class="{ 'tab--active': state.wallMode === 'low' }" @click="setWallMode('low')">Низкие стены</button>
             </div>
             <div class="view__sheet-row">
               <button class="tab" :class="{ 'tab--active': ui.dims3d }" @click="ui.dims3d = !ui.dims3d">Размеры</button>
               <button class="tab" :class="{ 'tab--active': ui.facades }" @click="ui.facades = !ui.facades">Фасады</button>
               <button class="tab" :class="{ 'tab--active': ui.dragMove }" @click="ui.dragMove = !ui.dragMove">Двигать модули</button>
+              <button class="tab" :class="{ 'tab--active': ui.onlyRoom }" @click="ui.onlyRoom = !ui.onlyRoom">Только комната</button>
               <button class="tab" :class="{ 'tab--active': planOpen }" @click="planOpen = !planOpen">План</button>
+              <button class="tab" @click="ui.renderMode = 'draft'; ui.draftTab = 'walls'; ui.viewSheetOpen = false">2D-стены</button>
             </div>
             <div class="view__sheet-row">
-              <button class="tab" :class="{ 'tab--active': state.wallMode === 'cutaway' }" @click="setWallMode('cutaway')">Срез стен</button>
-              <button class="tab" :class="{ 'tab--active': state.wallMode === 'low' }" @click="setWallMode('low')">Низкие стены</button>
-              <button class="btn btn--sm" @click="exportPng">PNG</button>
+              <button class="btn btn--sm" @click="exportPng">Снимок PNG</button>
             </div>
+          </div>
+
+          <div class="view__sheet-section">
+            <span class="view__sheet-label">Как управлять</span>
+            <p class="view__sheet-note">
+              Обзор: <b>ЛКМ</b> — вращение, колесо — зум, <b>ПКМ / Shift</b> —
+              панорама. На телефоне: один палец — вращение, два — зум и панорама.
+              Режимы прогулки и полёта временно отключены — работаем в обзоре.
+            </p>
           </div>
         </section>
       </div>
-      <span v-if="!state.presentation" class="view__hint view__hint--right">
-        {{ camMode === 'orbit'
-          ? 'ЛКМ — вращать · перетаскивание модуля — двигать · колесо — масштаб'
-          : camMode === 'first'
-            ? 'WASD — идти · мышь — смотреть'
-            : 'WASD — лететь · Q/E — вниз/вверх · мышь — смотреть' }}
+
+      <div v-if="lowGpu && !suggestDraft" class="view__gpu-note">
+        Слабый GPU — включён упрощённый вид.
+        <button class="view__gpu-btn" @click="suggestDraft = true">2D?</button>
+        <button class="view__gpu-btn" @click="lowGpu = false">×</button>
+      </div>
+      <div v-if="suggestDraft" class="view__gpu-note view__gpu-note--strong">
+        Тормозит даже упрощённый 3D.
+        <button class="view__gpu-btn" @click="ui.renderMode = 'draft'; ui.draftTab = 'walls'">
+          Открыть 2D-развёртки
+        </button>
+        <button class="view__gpu-btn" @click="suggestDraft = false">Остаться</button>
+      </div>
+      <span v-if="perfOn" class="view__perf">
+        {{ perf.fps }} FPS · {{ perf.heap }} MB · {{ perf.meshes }} мешей
+      </span>
+      <span v-if="!state.presentation && !isBlueprint" class="view__hint view__hint--right">
+        {{ camModeHint }}
       </span>
     </div>
   </section>

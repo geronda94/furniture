@@ -7,6 +7,18 @@ categories:
   - id: ldsp
     name: ЛДСП / декоры
     items:
+      # Реальные серии/коды производителей. Цвет — ориентир для экрана,
+      # точный оттенок и текстуру уточняем у поставщика/фото.
+      - { id: egger-w1000, name: "Egger W1000 Premium White", brand: Egger, code: "W1000 ST9", collection: "Egger Decorative", color: "#f4f3ef", accent: "#dedbd4", pattern: solid, price_m2: 1650 }
+      - { id: egger-u702, name: "Egger U702 Cashmere", brand: Egger, code: "U702 ST9", collection: "Egger Decorative", color: "#c9b79f", accent: "#a9947a", pattern: solid, price_m2: 1720 }
+      - { id: egger-h1180, name: "Egger H1180 Natural Hickory", brand: Egger, code: "H1180 ST37", collection: "Egger Decorative", color: "#b98f63", accent: "#8f6844", pattern: wood, texScale: 650, price_m2: 1950 }
+      - { id: egger-h1334, name: "Egger H1334 Oak Kendal", brand: Egger, code: "H1334 ST10", collection: "Egger Decorative", color: "#b08f68", accent: "#876b4b", pattern: wood, texScale: 720, price_m2: 1880 }
+      - { id: egger-h3151, name: "Egger H3151 Dark Brown Thermo Oak", brand: Egger, code: "H3151 ST12", collection: "Egger Decorative", color: "#5f4530", accent: "#3f2b1d", pattern: wood, texScale: 700, price_m2: 2050 }
+      - { id: egger-u961, name: "Egger U961 Dark Grey", brand: Egger, code: "U961 ST9", collection: "Egger Decorative", color: "#4a4d50", accent: "#333639", pattern: solid, price_m2: 1740 }
+      - { id: kronospan-k003, name: "Kronospan K003 PW White", brand: Kronospan, code: "K003 PW", collection: "Kronospan", color: "#f2f2ee", accent: "#dad9d3", pattern: solid, price_m2: 1350 }
+      - { id: kronospan-k011, name: "Kronospan K011 Oak Sonoma", brand: Kronospan, code: "K011", collection: "Kronospan", color: "#c3a47a", accent: "#9a7c55", pattern: wood, texScale: 720, price_m2: 1490 }
+      - { id: kronospan-k017, name: "Kronospan K017 Dark Walnut", brand: Kronospan, code: "K017", collection: "Kronospan", color: "#5a3e2b", accent: "#3d281a", pattern: wood, texScale: 650, price_m2: 1560 }
+      - { id: kronospan-k008, name: "Kronospan K008 Grey", brand: Kronospan, code: "K008", collection: "Kronospan", color: "#8c8f8e", accent: "#6f7271", pattern: solid, price_m2: 1380 }
       - { id: ldsp-white, name: "Белый матовый", color: "#f2f1ed", accent: "#dcdad4", pattern: solid, price_m2: 980 }
       - { id: ldsp-cashmere, name: "Кашемир", color: "#c9b79f", accent: "#a9947a", pattern: solid, price_m2: 1120 }
       - { id: ldsp-oak-natural, name: "Дуб натуральный", color: "#d9c3a3", accent: "#b7956c", pattern: wood, texScale: 650, price_m2: 1350 }

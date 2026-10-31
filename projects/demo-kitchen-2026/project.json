@@ -1,0 +1,619 @@
+{
+  "schema": "furniture/project@0",
+  "name": "Демо — кухня 2026",
+  "shop": "shop-ro-bucuresti",
+  "market": "ro",
+  "supplier": "generic",
+  "room": {
+    "w": 4390,
+    "d": 3200,
+    "h": 2700,
+    "wallT": 100,
+    "outline": [
+      [
+        0,
+        0
+      ],
+      [
+        4390,
+        0
+      ],
+      [
+        4390,
+        3200
+      ],
+      [
+        0,
+        3200
+      ]
+    ],
+    "partitions": [],
+    "floor": {
+      "enabled": true,
+      "material": "floor",
+      "t": 0
+    },
+    "ceiling": {
+      "enabled": false,
+      "material": "ceiling",
+      "t": 0
+    },
+    "wallItems": [],
+    "openings": [
+      {
+        "id": "o1",
+        "kind": "window",
+        "wall": 2,
+        "x": 3350,
+        "w": 640,
+        "z0": 1050,
+        "z1": 2100
+      },
+      {
+        "id": "o2",
+        "kind": "door",
+        "wall": 0,
+        "x": 2600,
+        "w": 900,
+        "z0": 0,
+        "z1": 2100,
+        "hinge": "left",
+        "angle": 80,
+        "open": false
+      }
+    ]
+  },
+  "instances": [
+    {
+      "id": "i1",
+      "product": "base-cabinet",
+      "name": "Мойка 800",
+      "x": 320.0,
+      "y": 2640.0,
+      "z": 0.0,
+      "rot": 0.0,
+      "zLocked": true,
+      "params": {
+        "W": 800,
+        "H": 720,
+        "D": 560,
+        "doors": 2,
+        "drawers": 0,
+        "shelves": 1,
+        "dividers": 0,
+        "frame": "inset",
+        "hardware": "blum",
+        "runners": "tandem-21",
+        "t": 16,
+        "back": "dvp",
+        "backT": 4,
+        "roof": true,
+        "reinforce": "auto",
+        "mount": "floor",
+        "plinthH": 100,
+        "worktopT": 38,
+        "gapSide": 2,
+        "gapBetween": 3,
+        "gapTop": 2,
+        "gapBottom": 2,
+        "zone": "Кухня",
+        "cutouts": [
+          {
+            "x": 170,
+            "y": 150,
+            "w": 460,
+            "h": 380
+          }
+        ]
+      }
+    },
+    {
+      "id": "i2",
+      "product": "base-cabinet",
+      "name": "ПММ 600",
+      "x": 1120.0,
+      "y": 2640.0,
+      "z": 0.0,
+      "rot": 0.0,
+      "zLocked": true,
+      "params": {
+        "W": 600,
+        "H": 720,
+        "D": 560,
+        "doors": 1,
+        "drawers": 0,
+        "shelves": 1,
+        "dividers": 0,
+        "frame": "inset",
+        "hardware": "blum",
+        "runners": "tandem-21",
+        "t": 16,
+        "back": "dvp",
+        "backT": 4,
+        "roof": true,
+        "reinforce": "auto",
+        "mount": "floor",
+        "plinthH": 100,
+        "worktopT": 38,
+        "gapSide": 2,
+        "gapBetween": 3,
+        "gapTop": 2,
+        "gapBottom": 2,
+        "zone": "Кухня"
+      }
+    },
+    {
+      "id": "i3",
+      "product": "base-cabinet",
+      "name": "Варочная 600",
+      "x": 1720.0,
+      "y": 2640.0,
+      "z": 0.0,
+      "rot": 0.0,
+      "zLocked": true,
+      "params": {
+        "W": 600,
+        "H": 720,
+        "D": 560,
+        "doors": 0,
+        "drawers": 2,
+        "shelves": 0,
+        "dividers": 0,
+        "frame": "inset",
+        "hardware": "blum",
+        "runners": "tandem-21",
+        "t": 16,
+        "back": "dvp",
+        "backT": 4,
+        "roof": true,
+        "reinforce": "auto",
+        "mount": "floor",
+        "plinthH": 100,
+        "worktopT": 38,
+        "gapSide": 2,
+        "gapBetween": 3,
+        "gapTop": 2,
+        "gapBottom": 2,
+        "zone": "Кухня"
+      }
+    },
+    {
+      "id": "i4",
+      "product": "base-cabinet",
+      "name": "Тумба 800",
+      "x": 2320.0,
+      "y": 2640.0,
+      "z": 0.0,
+      "rot": 0.0,
+      "zLocked": true,
+      "params": {
+        "W": 800,
+        "H": 720,
+        "D": 560,
+        "doors": 2,
+        "drawers": 0,
+        "shelves": 1,
+        "dividers": 0,
+        "frame": "inset",
+        "hardware": "blum",
+        "runners": "tandem-21",
+        "t": 16,
+        "back": "dvp",
+        "backT": 4,
+        "roof": true,
+        "reinforce": "auto",
+        "mount": "floor",
+        "plinthH": 100,
+        "worktopT": 38,
+        "gapSide": 2,
+        "gapBetween": 3,
+        "gapTop": 2,
+        "gapBottom": 2,
+        "zone": "Кухня"
+      }
+    },
+    {
+      "id": "i5",
+      "product": "base-cabinet",
+      "name": "Тумба 600",
+      "x": 3120.0,
+      "y": 2640.0,
+      "z": 0.0,
+      "rot": 0.0,
+      "zLocked": true,
+      "params": {
+        "W": 600,
+        "H": 720,
+        "D": 560,
+        "doors": 1,
+        "drawers": 0,
+        "shelves": 1,
+        "dividers": 0,
+        "frame": "inset",
+        "hardware": "blum",
+        "runners": "tandem-21",
+        "t": 16,
+        "back": "dvp",
+        "backT": 4,
+        "roof": true,
+        "reinforce": "auto",
+        "mount": "floor",
+        "plinthH": 100,
+        "worktopT": 38,
+        "gapSide": 2,
+        "gapBetween": 3,
+        "gapTop": 2,
+        "gapBottom": 2,
+        "zone": "Кухня"
+      }
+    },
+    {
+      "id": "i6",
+      "product": "base-cabinet",
+      "name": "Пенал-холодильник 650",
+      "x": 3720.0,
+      "y": 2550.0,
+      "z": 0.0,
+      "rot": 0.0,
+      "zLocked": true,
+      "params": {
+        "W": 650,
+        "H": 2200,
+        "D": 650,
+        "doors": 2,
+        "drawers": 0,
+        "shelves": 4,
+        "dividers": 0,
+        "frame": "inset",
+        "hardware": "blum",
+        "runners": "tandem-21",
+        "t": 16,
+        "back": "dvp",
+        "backT": 4,
+        "roof": true,
+        "reinforce": "auto",
+        "mount": "floor",
+        "plinthH": 0,
+        "worktopT": 0,
+        "gapSide": 2,
+        "gapBetween": 3,
+        "gapTop": 2,
+        "gapBottom": 2,
+        "zone": "Кухня"
+      }
+    },
+    {
+      "id": "i7",
+      "product": "base-cabinet",
+      "name": "Навесной 600",
+      "x": 1120.0,
+      "y": 2880.0,
+      "z": 1450.0,
+      "rot": 0.0,
+      "zLocked": true,
+      "params": {
+        "W": 600,
+        "H": 720,
+        "D": 320,
+        "doors": 1,
+        "drawers": 0,
+        "shelves": 2,
+        "dividers": 0,
+        "frame": "inset",
+        "hardware": "blum",
+        "runners": "tandem-21",
+        "t": 16,
+        "back": "dvp",
+        "backT": 4,
+        "roof": true,
+        "reinforce": "auto",
+        "mount": "wall",
+        "plinthH": 0,
+        "worktopT": 0,
+        "gapSide": 2,
+        "gapBetween": 3,
+        "gapTop": 2,
+        "gapBottom": 2,
+        "zone": "Кухня"
+      }
+    },
+    {
+      "id": "i8",
+      "product": "base-cabinet",
+      "name": "Навесной 800",
+      "x": 2320.0,
+      "y": 2880.0,
+      "z": 1450.0,
+      "rot": 0.0,
+      "zLocked": true,
+      "params": {
+        "W": 800,
+        "H": 720,
+        "D": 320,
+        "doors": 2,
+        "drawers": 0,
+        "shelves": 2,
+        "dividers": 0,
+        "frame": "inset",
+        "hardware": "blum",
+        "runners": "tandem-21",
+        "t": 16,
+        "back": "dvp",
+        "backT": 4,
+        "roof": true,
+        "reinforce": "auto",
+        "mount": "wall",
+        "plinthH": 0,
+        "worktopT": 0,
+        "gapSide": 2,
+        "gapBetween": 3,
+        "gapTop": 2,
+        "gapBottom": 2,
+        "zone": "Кухня"
+      }
+    },
+    {
+      "id": "i9",
+      "product": "base-cabinet",
+      "name": "Навесной 600",
+      "x": 3120.0,
+      "y": 2880.0,
+      "z": 1450.0,
+      "rot": 0.0,
+      "zLocked": true,
+      "params": {
+        "W": 600,
+        "H": 720,
+        "D": 320,
+        "doors": 1,
+        "drawers": 0,
+        "shelves": 2,
+        "dividers": 0,
+        "frame": "inset",
+        "hardware": "blum",
+        "runners": "tandem-21",
+        "t": 16,
+        "back": "dvp",
+        "backT": 4,
+        "roof": true,
+        "reinforce": "auto",
+        "mount": "wall",
+        "plinthH": 0,
+        "worktopT": 0,
+        "gapSide": 2,
+        "gapBetween": 3,
+        "gapTop": 2,
+        "gapBottom": 2,
+        "zone": "Кухня"
+      }
+    }
+  ],
+  "folders": [
+    {
+      "id": "f-kitchen",
+      "name": "Кухня",
+      "area": {
+        "x": 0,
+        "y": 0,
+        "w": 4390,
+        "d": 3200
+      },
+      "ids": [
+        "i1",
+        "i2",
+        "i3",
+        "i4",
+        "i5",
+        "i6",
+        "i7",
+        "i8",
+        "i9"
+      ]
+    }
+  ],
+  "globals": {
+    "t": 16,
+    "back": "dvp",
+    "backT": 4,
+    "roof": true,
+    "reinforce": "auto",
+    "frame": "inset",
+    "hardware": "blum",
+    "runners": "tandem-21",
+    "plinthH": 100,
+    "worktopT": 38,
+    "gapSide": 2,
+    "gapBetween": 3,
+    "gapTop": 2,
+    "gapBottom": 2,
+    "autoApply": true
+  },
+  "materials": {
+    "corpus": {
+      "name": "ЛДСП Дуб Сонома",
+      "color": "#d8bf9b",
+      "accent": "#b99a70",
+      "pattern": "wood",
+      "texScale": 650
+    },
+    "facade": {
+      "name": "МДФ Шалфей",
+      "color": "#7d8f7b",
+      "accent": "#63745f",
+      "pattern": "solid"
+    },
+    "worktop": {
+      "name": "Столешница Кварц",
+      "color": "#e9e6df",
+      "accent": "#c9c5bb",
+      "pattern": "stone",
+      "texScale": 1400
+    },
+    "plinth": {
+      "name": "Цоколь Антрацит",
+      "color": "#22262a",
+      "accent": "#14171a",
+      "pattern": "solid"
+    },
+    "back": {
+      "name": "ДВП Светлая",
+      "color": "#efede7",
+      "accent": "#ddd9d0",
+      "pattern": "solid"
+    },
+    "drawer": {
+      "name": "Ящик Металл",
+      "color": "#9aa0a6",
+      "accent": "#7b8288",
+      "pattern": "metal"
+    },
+    "floor": {
+      "name": "Ламинат Дуб",
+      "color": "#b79a70",
+      "accent": "#a08355",
+      "pattern": "wood",
+      "texScale": 1200
+    },
+    "ceiling": {
+      "name": "Потолок",
+      "color": "#f3f1ec",
+      "accent": "#e6e3dc",
+      "pattern": "solid"
+    },
+    "leg": {
+      "name": "Ножки",
+      "color": "#3a3f44",
+      "accent": "#2a2e32",
+      "pattern": "metal"
+    }
+  },
+  "materialVars": [],
+  "finishes": [
+    {
+      "id": "fin-kitchen",
+      "name": "Ламинат кухни",
+      "kind": "floor",
+      "x": 0,
+      "y": 0,
+      "w": 4390,
+      "d": 3200,
+      "material": "Ламинат",
+      "color": "#b79a70",
+      "tileW": 1200,
+      "tileH": 200,
+      "grout": 0,
+      "waste": 8,
+      "price_m2": 1400
+    }
+  ],
+  "zones": [
+    "Кухня"
+  ],
+  "props": [
+    {
+      "id": "p1",
+      "type": "rug",
+      "name": "Ковёр",
+      "x": 2000,
+      "y": 1580,
+      "z": 0,
+      "rot": 0,
+      "w": 2300,
+      "d": 1000,
+      "h": 10,
+      "color": "#8d7f70",
+      "zone": "Кухня"
+    },
+    {
+      "id": "p2",
+      "type": "coffee-table",
+      "name": "Обеденный стол",
+      "x": 2000,
+      "y": 1420,
+      "z": 0,
+      "rot": 0,
+      "w": 1200,
+      "d": 800,
+      "h": 750,
+      "color": "#6b4f3a",
+      "accent": "#8b6a4d",
+      "zone": "Кухня"
+    },
+    {
+      "id": "p3",
+      "type": "chair",
+      "name": "Стул 1",
+      "x": 1120,
+      "y": 1420,
+      "z": 0,
+      "rot": 0,
+      "w": 450,
+      "d": 450,
+      "h": 900,
+      "color": "#6b4f3a",
+      "accent": "#8b6a4d",
+      "zone": "Кухня"
+    },
+    {
+      "id": "p4",
+      "type": "chair",
+      "name": "Стул 2",
+      "x": 2880,
+      "y": 1420,
+      "z": 0,
+      "rot": 0,
+      "w": 450,
+      "d": 450,
+      "h": 900,
+      "color": "#6b4f3a",
+      "accent": "#8b6a4d",
+      "zone": "Кухня"
+    },
+    {
+      "id": "p5",
+      "type": "plant",
+      "name": "Фикус",
+      "x": 320,
+      "y": 320,
+      "z": 0,
+      "rot": 0,
+      "w": 420,
+      "d": 420,
+      "h": 1100,
+      "color": "#4f7a4a",
+      "accent": "#c9c1b2",
+      "zone": "Кухня"
+    },
+    {
+      "id": "p6",
+      "type": "lamp",
+      "name": "Торшер",
+      "x": 1000,
+      "y": 360,
+      "z": 0,
+      "rot": 0,
+      "w": 360,
+      "d": 360,
+      "h": 1500,
+      "color": "#3a3f44",
+      "accent": "#ffe6b0",
+      "zone": "Кухня"
+    }
+  ],
+  "views": [
+    {
+      "id": "v-front",
+      "name": "Кухня — анфас",
+      "alpha": -90,
+      "beta": 18,
+      "radius": null,
+      "target": null
+    }
+  ],
+  "log": [],
+  "wallMode": "cutaway",
+  "camera3d": {
+    "alpha": -90,
+    "beta": 20
+  }
+}

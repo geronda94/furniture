@@ -23,6 +23,16 @@ const open = ref(false)
 const openGroups = ref<Record<string, boolean>>({})
 
 const info = computed(() => moduleInfo(props.inst, derived[props.inst.id]?.objects))
+/** Полная высота (цоколь + корпус + столешница); у навесных = H. */
+const totalH = computed(() => {
+  const p = props.inst.params
+  const floor = (p.mount || 'floor') !== 'wall'
+  return Math.round(
+    p.H + (floor
+      ? Math.max(0, p.plinthH || 0) + Math.max(0, p.worktopT || 0)
+      : 0),
+  )
+})
 const selected = computed(() => state.selected.includes(props.inst.id))
 const folder = computed(() => folderOf(props.inst.id))
 const rowEl = ref<HTMLElement | null>(null)
@@ -100,7 +110,9 @@ function toggleGroup(key: string): void {
       <div class="tree__col">
         <span class="tree__name">{{ inst.name || 'Модуль' }}</span>
         <span class="tree__meta">
-          {{ inst.params.W }}×{{ inst.params.H }}×{{ inst.params.D }}
+          <span :title="`Полная высота; корпус ${inst.params.H} мм`">
+            {{ inst.params.W }}×{{ totalH }}×{{ inst.params.D }}
+          </span>
           <template v-if="inst.z"> · Z{{ inst.z }}</template>
         </span>
       </div>
