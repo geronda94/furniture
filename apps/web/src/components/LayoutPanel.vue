@@ -4,6 +4,7 @@ import { apiNormalizeLayout, apiProjectLayout, type LayoutIssue } from '../api'
 import {
   flushSave, focusObject, focusProp, pushHistory, selectQuiet, state, ui,
   setInstancePosition, updateInstanceParams, toggleDoors, toggleDrawers,
+  zSpan,
 } from '../state/project'
 
 const emit = defineEmits<{ (e: 'close'): void }>()
@@ -18,6 +19,7 @@ const checked = ref<boolean[]>([])
 const pickedCount = computed(() => checked.value.filter(Boolean).length)
 
 const MANUAL_FIXES = new Set([
+  'row-gap-wall',
   'std-wall-height', 'std-wall-gap', 'std-wall-top', 'std-plinth', 'plinth',
   'std-door-width', 'std-drawer-width', 'std-shelf-span',
   'std-base-height', 'std-base-depth', 'std-wall-depth', 'std-worktop-height',
@@ -112,8 +114,74 @@ function showIssue(i: LayoutIssue): void {
   }
 }
 
+/** Ряд у стены: сдвигаем весь ряд к стене на величину щели. */
+function shiftRow(issue: LayoutIssue): boolean {
+  const m = issue.message.match(/(\d+)\s*мм/)
+  const gap = m ? Number(m[1]) : 0
+  if (!gap) return false
+  const dir = /слева/.test(issue.message)
+    ? 'left'
+    : /справа/.test(issue.message)
+      ? 'right'
+      : /сзади|сзаду/.test(issue.message)
+        ? 'back'
+        : /спереди|впереди/.test(issue.message)
+          ? 'front'
+          : ''
+  if (!dir) return false
+  const boxes = state.project.instances.map((i) => {
+    const p = i.params
+    const swap = Math.abs(i.rot % 180) === 90
+    const [z0, z1] = zSpan(i)
+    return {
+      inst: i,
+      x: i.x,
+      y: i.y,
+      w: swap ? p.D : p.W,
+      d: swap ? p.W : p.D,
+      z0,
+      z1,
+    }
+  })
+  if (!boxes.length) return false
+  const horiz = dir === 'left' || dir === 'right'
+  let anchor = boxes[0]
+  for (const b of boxes) {
+    if (dir === 'left' && b.x < anchor.x) anchor = b
+    if (dir === 'right' && b.x + b.w > anchor.x + anchor.w) anchor = b
+    if (dir === 'back' && b.y < anchor.y) anchor = b
+    if (dir === 'front' && b.y + b.d > anchor.y + anchor.d) anchor = b
+  }
+  const row = boxes.filter((b) => {
+    if (b.z1 <= anchor.z0 + 0.5 || b.z0 >= anchor.z1 - 0.5) return false
+    if (horiz) {
+      // та же полоса по глубине
+      return b.y < anchor.y + anchor.d + 200 && b.y + b.d > anchor.y - 200
+    }
+    return b.x < anchor.x + anchor.w + 200 && b.x + b.w > anchor.x - 200
+  })
+  row.sort((a, b) => {
+    if (dir === 'left') return a.x - b.x
+    if (dir === 'right') return b.x - a.x
+    if (dir === 'back') return a.y - b.y
+    return b.y - a.y
+  })
+  let moved = false
+  for (const b of row) {
+    const dx = dir === 'left' ? -gap : dir === 'right' ? gap : 0
+    const dy = dir === 'back' ? -gap : dir === 'front' ? gap : 0
+    if (horiz) {
+      if (setInstancePosition(b.inst.id, { x: Math.max(0, b.inst.x + dx) })) moved = true
+    } else if (setInstancePosition(b.inst.id, { y: Math.max(0, b.inst.y + dy) })) {
+      moved = true
+    }
+  }
+  return moved
+}
+
 /** Ручные исправления по коду: реально меняют параметры/позицию. */
 function applyManual(issue: LayoutIssue): boolean {
+  if (issue.code === 'row-gap-wall') return shiftRow(issue)
   const inst = issue.instance
     ? state.project.instances.find((i) => i.id === issue.instance)
     : null
@@ -193,7 +261,7 @@ async function afterManual(): Promise<void> {
 }
 
 async function fixOne(issue: LayoutIssue): Promise<void> {
-  if (issue.auto_fixable) {
+  if (issue.auto_fixable && !MANUAL_FIXES.has(issue.code)) {
     await fix()
     return
   }
@@ -219,7 +287,7 @@ async function fixSelected(): Promise<void> {
   let manual = 0
   let auto = false
   for (const issue of list) {
-    if (issue.auto_fixable) {
+    if (issue.auto_fixable && !MANUAL_FIXES.has(issue.code)) {
       auto = true
       continue
     }

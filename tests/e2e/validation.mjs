@@ -74,6 +74,16 @@ try {
     return i?.z
   })
   check('шкаф физически поднят к норме', z === 1450, `z=${z}`)
+
+  // Щель у стены: физический сдвиг ряда (а не только «уплотнить»).
+  const rowGap = panel.locator('.layout-panel__row', { hasText: 'щель у стены' }).first()
+  if (await rowGap.count()) {
+    await rowGap.getByText('Исправить', { exact: true }).click()
+    await page.waitForTimeout(2500)
+  }
+  const gapsLeft = await panel.locator('.layout-panel__row', { hasText: 'щель у стены' }).count()
+  check('щель у стены закрывается сдвигом ряда', gapsLeft === 0, `осталось ${gapsLeft}`)
+
   check('ошибок консоли нет', errors.length === 0, errors.slice(0, 2).join(' | '))
 } finally {
   await browser.close()
