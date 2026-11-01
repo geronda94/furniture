@@ -188,6 +188,15 @@ function setSize(key: 'W' | 'H', value: number): void {
   const target = Math.round(value / 10) * 10
   const current = object.params[key]
   if (!Number.isFinite(target) || target === current) return
+  // Реактивная нормативка: полка не должна висеть пролётом больше 1100 мм.
+  if (key === 'W' && target > current && object.params.shelves > 0) {
+    const spans = Math.max(1, object.params.dividers + 1)
+    if (target > 1100 * spans) {
+      notify('Пролёт полки больше 1100 мм — добавьте стойку в конструкторе', null, 'error')
+      fieldRev.value++
+      return
+    }
+  }
   if (canResizeModule(object.id, { [key]: target })) {
     if (!resizeModule(object.id, { [key]: target })) fieldRev.value++
     return

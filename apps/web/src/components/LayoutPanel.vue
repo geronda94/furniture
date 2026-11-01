@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { apiNormalizeLayout, apiProjectLayout, type LayoutIssue } from '../api'
 import {
   flushSave, focusObject, focusProp, pushHistory, selectQuiet, state, ui,
+  setInstancePosition, updateInstanceParams, toggleDoors, toggleDrawers,
 } from '../state/project'
 
 const emit = defineEmits<{ (e: 'close'): void }>()
@@ -12,6 +13,18 @@ const warnings = ref(0)
 const busy = ref(false)
 const error = ref('')
 const done = ref('')
+/** Отметки для «исправить выбранные». */
+const checked = ref<boolean[]>([])
+const pickedCount = computed(() => checked.value.filter(Boolean).length)
+
+const MANUAL_FIXES = new Set([
+  'std-wall-height', 'std-wall-gap', 'std-wall-top', 'std-plinth', 'plinth',
+  'std-door-width', 'std-drawer-width', 'std-shelf-span',
+  'std-base-height', 'std-base-depth', 'std-wall-depth', 'std-worktop-height',
+  'below-floor', 'above-ceiling', 'outside', 'in-wall',
+  'door-swing-instance', 'door-swing-clash', 'door-swing-wall',
+  'door-swing-opening', 'drawer-instance', 'drawer-wall',
+])
 
 const errorsList = computed(() => issues.value.filter((i) => i.level === 'error'))
 const warnsList = computed(() => issues.value.filter((i) => i.level !== 'error'))
@@ -75,6 +88,7 @@ async function load(): Promise<void> {
   try {
     const r = await apiProjectLayout(state.projectId)
     issues.value = r.issues
+    checked.value = r.issues.map(() => false)
     errors.value = r.errors
     warnings.value = r.warnings
   } catch (e) {
@@ -96,6 +110,130 @@ function showIssue(i: LayoutIssue): void {
     focusProp(propId)
     ui.layoutOpen = false
   }
+}
+
+/** Ручные исправления по коду: реально меняют параметры/позицию. */
+function applyManual(issue: LayoutIssue): boolean {
+  const inst = issue.instance
+    ? state.project.instances.find((i) => i.id === issue.instance)
+    : null
+  if (!inst) return false
+  const p = inst.params
+  switch (issue.code) {
+    case 'std-wall-height':
+    case 'std-wall-gap':
+      return setInstancePosition(inst.id, { z: 1450 })
+    case 'std-wall-top':
+      return setInstancePosition(inst.id, {
+        z: Math.max(0, Math.min(2150, state.project.room.h) - p.H),
+      })
+    case 'below-floor':
+      return setInstancePosition(inst.id, { z: 0 })
+    case 'above-ceiling':
+      return setInstancePosition(inst.id, {
+        z: Math.max(0, state.project.room.h - p.H),
+      })
+    case 'outside':
+    case 'in-wall': {
+      const swap = Math.abs(inst.rot % 180) === 90
+      const w = swap ? p.D : p.W
+      const d = swap ? p.W : p.D
+      const x = Math.min(Math.max(inst.x, 0), Math.max(0, state.project.room.w - w))
+      const y = Math.min(Math.max(inst.y, 0), Math.max(0, state.project.room.d - d))
+      setInstancePosition(inst.id, { x })
+      return setInstancePosition(inst.id, { y })
+    }
+    case 'std-plinth':
+    case 'plinth':
+      return updateInstanceParams(inst.id, { plinthH: 100 })
+    case 'std-door-width':
+      return updateInstanceParams(inst.id, {
+        doors: Math.max(1, Math.min(6, Math.round(p.W / 500))),
+      })
+    case 'std-drawer-width':
+      return updateInstanceParams(inst.id, {
+        drawers: Math.max(1, Math.min(6, Math.round(p.W / 500))),
+      })
+    case 'std-shelf-span':
+      return updateInstanceParams(inst.id, {
+        dividers: Math.max(1, Math.ceil(p.W / 1100) - 1),
+      })
+    case 'std-base-height':
+      return updateInstanceParams(inst.id, { H: 720 })
+    case 'std-base-depth':
+      return updateInstanceParams(inst.id, { D: 560 })
+    case 'std-wall-depth':
+      return updateInstanceParams(inst.id, { D: 320 })
+    case 'std-worktop-height': {
+      const target = 860 - (p.plinthH || 0) - (p.worktopT || 0)
+      return updateInstanceParams(inst.id, { H: Math.max(200, Math.round(target)) })
+    }
+    case 'door-swing-instance':
+    case 'door-swing-clash':
+    case 'door-swing-wall':
+    case 'door-swing-opening':
+      if (inst.params.doors) toggleDoors(inst.id)
+      return true
+    case 'drawer-instance':
+    case 'drawer-wall':
+      if (inst.params.drawers) toggleDrawers(inst.id)
+      return true
+    default:
+      return false
+  }
+}
+
+function fixable(issue: LayoutIssue): boolean {
+  return !!issue.auto_fixable || MANUAL_FIXES.has(issue.code)
+}
+
+async function afterManual(): Promise<void> {
+  await flushSave(true)
+  await load()
+}
+
+async function fixOne(issue: LayoutIssue): Promise<void> {
+  if (issue.auto_fixable) {
+    await fix()
+    return
+  }
+  busy.value = true
+  error.value = ''
+  done.value = ''
+  const ok = applyManual(issue)
+  busy.value = false
+  if (!ok) {
+    done.value = 'Это исправление требует решения — проверьте вручную'
+    return
+  }
+  done.value = 'Исправлено'
+  await afterManual()
+}
+
+async function fixSelected(): Promise<void> {
+  const list = issues.value.filter((_, n) => checked.value[n])
+  if (!list.length) return
+  busy.value = true
+  error.value = ''
+  done.value = ''
+  let manual = 0
+  let auto = false
+  for (const issue of list) {
+    if (issue.auto_fixable) {
+      auto = true
+      continue
+    }
+    if (applyManual(issue)) manual++
+  }
+  busy.value = false
+  if (auto) {
+    await fix()
+    return
+  }
+  done.value = manual
+    ? `Исправлено: ${manual}`
+    : 'Выбранные пункты требуют решения — проверьте вручную'
+  if (manual) await afterManual()
 }
 
 async function fix(): Promise<void> {
@@ -135,6 +273,7 @@ async function fix(): Promise<void> {
     state.saveState = 'saved'
     state.rev++
     issues.value = r.issues
+    checked.value = r.issues.map(() => false)
     errors.value = r.errors
     warnings.value = r.warnings
     done.value = n ? `Исправлено изменений: ${n}` : 'Расстановка уже в порядке'
@@ -181,15 +320,18 @@ onMounted(load)
               :title="i.instance ? 'Показать модуль в 3D' : i.prop ? 'Показать декор в 3D' : ''"
               @click="showIssue(i)"
             >
+              <label class="layout-panel__pick" @click.stop>
+                <input v-model="checked[n]" type="checkbox" :aria-label="`Выбрать: ${i.message}`" />
+              </label>
               <span class="layout-panel__tag">{{ codeLabel[i.code] || i.code }}</span>
               <b>{{ i.name || i.instance || i.prop }}</b>
-              <span>{{ i.message }}<template v-if="i.fix"> <em class="layout-panel__fix">— {{ i.fix }}</em></template></span>
+              <span class="layout-panel__msg">{{ i.message }}<template v-if="i.fix"> <em class="layout-panel__fix">— {{ i.fix }}</em></template></span>
               <button
-                v-if="i.auto_fixable"
+                v-if="fixable(i)"
                 class="btn btn--ghost btn--sm layout-panel__btn"
-                title="Исправить автоматически: уплотнить и прижать"
+                :title="i.auto_fixable ? 'Исправить автоматически: уплотнить и прижать' : 'Применить физическое исправление'"
                 :disabled="busy"
-                @click.stop="fix()"
+                @click.stop="fixOne(i)"
               >Исправить</button>
               <span v-if="i.instance" class="layout-panel__go">→</span>
             </div>
@@ -207,6 +349,11 @@ onMounted(load)
 
           <div class="layout-panel__foot">
             <button class="btn btn--sm" :disabled="busy" @click="load">Проверить снова</button>
+            <button
+              class="btn btn--sm"
+              :disabled="busy || !pickedCount"
+              @click="fixSelected"
+            >Исправить выбранные ({{ pickedCount }})</button>
             <button class="btn btn--primary btn--sm" :disabled="busy" @click="fix">
               {{ busy ? 'Работаем…' : 'Уплотнить и прижать' }}
             </button>

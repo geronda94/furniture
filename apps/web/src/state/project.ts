@@ -1264,6 +1264,28 @@ export function moveSelection(
  * Повернуть выделение. Группа поворачивается как целое вокруг общего центра:
  * взаимное расположение модулей сохраняется. Один модуль — вокруг себя.
  */
+/** Изменить параметры конкретного модуля (не только выделенного). */
+export function updateInstanceParams(
+  id: string,
+  patch: Partial<Params>,
+): boolean {
+  const inst = state.project.instances.find((i) => i.id === id)
+  if (!inst) return false
+  pushHistory('Параметры модуля')
+  const managed = MANAGED_PARAMS.filter((k) => k in patch)
+  if (managed.length) {
+    const set = new Set<ManagedParam>(inst.overrides ?? [])
+    for (const k of managed) set.add(k)
+    inst.overrides = [...set]
+  }
+  const next = sanitizeParams({ ...inst.params, ...patch })
+  inst.params = next
+  touch()
+  scheduleSolve(inst)
+  scheduleSave()
+  return true
+}
+
 /** Можно ли поставить модуль в новые координаты, не задев стену/соседа/потолок. */
 export function canPlaceInstance(
   id: string,

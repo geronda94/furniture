@@ -3801,14 +3801,29 @@
 
 .layout-panel__row {
   display: grid;
-  grid-template-columns: auto minmax(90px, auto) 1fr auto;
+  grid-template-columns: auto auto minmax(90px, auto) 1fr auto auto;
   gap: 8px;
-  align-items: baseline;
+  align-items: center;
   padding: 7px 8px;
   background: var(--bg-2);
   border: 1px solid var(--line);
   border-radius: 5px;
   font-size: 11px;
+}
+
+.layout-panel__pick {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 2px;
+  cursor: pointer;
+}
+
+.layout-panel__pick input {
+  width: 13px;
+  height: 13px;
+  accent-color: var(--accent);
+  cursor: pointer;
 }
 
 .layout-panel__row.is-error {
@@ -3858,7 +3873,7 @@
     font-size: 11.5px;
   }
 
-  .layout-panel__row > span:nth-child(3) {
+  .layout-panel__row .layout-panel__msg {
     grid-column: 1 / -1;
     color: var(--muted);
     line-height: 1.45;
@@ -3871,7 +3886,7 @@
   }
 
   .layout-panel__go {
-    grid-column: 3;
+    grid-column: 4;
     grid-row: 1;
   }
 }

@@ -46,8 +46,22 @@ function hit(name: string | undefined): boolean {
 const foundModules = computed(() =>
   state.project.instances.filter((i) => hit(i.name || i.id)),
 )
+/** Мебель, живущая в сцене как объект декора (диваны, комоды, ТВ-тумбы). */
+const FURNITURE_PROP_TYPES = new Set([
+  'sofa', 'bed', 'dresser', 'tv-stand', 'coffee-table', 'table',
+  'chair', 'armchair',
+])
+const furnitureProps = computed(() =>
+  (state.project.props ?? []).filter((p) => FURNITURE_PROP_TYPES.has(p.type)),
+)
+const decorProps = computed(() =>
+  (state.project.props ?? []).filter((p) => !FURNITURE_PROP_TYPES.has(p.type)),
+)
+const foundFurniture = computed(() =>
+  furnitureProps.value.filter((p) => hit(p.name)),
+)
 const foundProps = computed(() =>
-  (state.project.props ?? []).filter((p) => hit(p.name)),
+  decorProps.value.filter((p) => hit(p.name)),
 )
 
 function addDecorFromList(): void {
@@ -162,7 +176,7 @@ function floorSelected(): boolean {
         :aria-selected="outlinerTab === 'furniture'"
         title="Модули и техника"
         @click="outlinerTab = 'furniture'"
-      >Мебель ({{ state.project.instances.length }})</button>
+      >Мебель ({{ state.project.instances.length + furnitureProps.length }})</button>
       <button
         class="tab" role="tab"
         :class="{ 'tab--active': outlinerTab === 'room' }"
@@ -176,7 +190,7 @@ function floorSelected(): boolean {
         :aria-selected="outlinerTab === 'decor'"
         title="Диваны, столы, техника и другие объекты декора"
         @click="outlinerTab = 'decor'"
-      >Декор ({{ state.project.props?.length ?? 0 }})</button>
+      >Декор ({{ decorProps.length }})</button>
     </div>
 
     <div class="outliner__search">
@@ -327,7 +341,18 @@ function floorSelected(): boolean {
             <span class="tree__meta">{{ foundModules.length }}</span>
           </div>
           <InstanceNode v-for="inst in foundModules" :key="inst.id" :inst="inst" />
-          <div v-if="!foundModules.length" class="tree__row tree__row--nested dim">
+          <div
+            v-for="pr in foundFurniture" :key="pr.id"
+            class="tree__row tree__row--item tree__row--nested"
+            :class="{ 'is-selected': state.propId === pr.id }"
+            @click="openProp(pr.id)"
+          >
+            <span class="tree__dot"></span>
+            <span class="tree__name">{{ pr.name }}</span>
+            <span class="tree__meta">{{ Math.round(pr.w) }}×{{ Math.round(pr.h) }}×{{ Math.round(pr.d) }}</span>
+          </div>
+          <div v-if="!foundModules.length && !foundFurniture.length"
+            class="tree__row tree__row--nested dim">
             Ничего не найдено
           </div>
         </template>
@@ -381,6 +406,26 @@ function floorSelected(): boolean {
             Свободных модулей нет
           </div>
         </template>
+
+        <div v-if="furnitureProps.length" class="tree__row tree__row--group">
+          <button class="tree__twist" @click="toggleExpand('furnitureProps')">
+            {{ isClosed('furnitureProps') ? '▸' : '▾' }}
+          </button>
+          <span class="tree__name">Мебель сцены</span>
+          <span class="tree__meta">{{ furnitureProps.length }}</span>
+        </div>
+        <template v-if="furnitureProps.length && !isClosed('furnitureProps')">
+          <div
+            v-for="pr in furnitureProps" :key="pr.id"
+            class="tree__row tree__row--item tree__row--nested"
+            :class="{ 'is-selected': state.propId === pr.id }"
+            @click="openProp(pr.id)"
+          >
+            <span class="tree__dot"></span>
+            <span class="tree__name">{{ pr.name }}</span>
+            <span class="tree__meta">{{ Math.round(pr.w) }}×{{ Math.round(pr.h) }}×{{ Math.round(pr.d) }}</span>
+          </div>
+        </template>
         </template>
       </template>
 
@@ -391,7 +436,7 @@ function floorSelected(): boolean {
             {{ isClosed('decor') ? '▸' : '▾' }}
           </button>
           <span class="tree__name">Декор сцены</span>
-          <span class="tree__meta">{{ state.project.props?.length ?? 0 }}</span>
+          <span class="tree__meta">{{ decorProps.length }}</span>
           <button class="tree__act" title="Добавить декор" @click="addDecorFromList">
             ＋декор
           </button>
@@ -415,7 +460,7 @@ function floorSelected(): boolean {
               @click.stop="deleteProp(pr.id)"
             >×</button>
           </div>
-          <div v-if="!state.project.props?.length" class="tree__row tree__row--nested dim">
+          <div v-if="!decorProps.length" class="tree__row tree__row--nested dim">
             Декора пока нет — добавьте кнопкой «＋декор»
           </div>
           <div v-else-if="!foundProps.length" class="tree__row tree__row--nested dim">
