@@ -1149,31 +1149,67 @@ export class BabylonRenderer {
       // Меш — ребёнок двери/фасада, поэтому ручка едет вместе с открытием.
       const holes = o.op_part ? handleHoles.get(o.op_part) : undefined
       if ((o.kind === 'door' || o.kind === 'drawerfront') && holes?.length) {
+        // Ручка — сборка из бара и стоек/кнопки, дочерняя к створке:
+        // открывается и закрывается вместе с фасадом.
         const xs = holes.map((h) => h.x)
-        const left = Math.min(...xs)
-        const right = Math.max(...xs)
-        const y = holes.reduce((sum, h) => sum + h.y, 0) / holes.length
-        const length = Math.max(64, right - left + 40)
+        const ys = holes.map((h) => h.y)
+        const minX = Math.min(...xs)
+        const maxX = Math.max(...xs)
+        const minY = Math.min(...ys)
+        const maxY = Math.max(...ys)
+        const cx = ((minX + maxX) / 2 - o.sx / 2) * MM
+        const cy = ((minY + maxY) / 2 - o.sz / 2) * MM
+        const spanX = maxX - minX
+        const spanY = maxY - minY
+        const model = String(inst.params.handle || 'bar-128')
+        const knob = model.startsWith('knob') || (spanX < 1 && spanY < 1)
+        const vertical = spanY > spanX + 1
+        const centers = Math.max(spanX, spanY, 0)
+        const barLen = Math.max(96, centers + 24)
+        const frontZ = (-o.sy / 2) * MM
         const hm = this.hardwareMaterial()
-        const handle = CreateBox(
-          `${key}:handle`,
-          {
-            width: length * MM,
-            height: 16 * MM,
-            depth: 20 * MM,
-          },
-          this.scene,
-        )
-        handle.parent = mesh
-        handle.position.set(
-          ((left + right) / 2 - o.sx / 2) * MM,
-          (-o.sy / 2 - 14) * MM,
-          (y - o.sz / 2) * MM,
-        )
-        handle.material = hm
-        handle.isPickable = false
-        handle.metadata = { instanceId: inst.id, part, hardware: true }
-        handle.setEnabled(this.hardwareVisible)
+        const makeHandle = (
+          name: string,
+          diameter: number,
+          length: number,
+          x: number,
+          y: number,
+          z: number,
+          axis: 'x' | 'y' | 'z',
+        ): Mesh => {
+          const m = CreateCylinder(
+            `${key}:${name}`,
+            {
+              diameter: diameter * MM,
+              height: length * MM,
+              tessellation: 20,
+            },
+            this.scene,
+          )
+          m.parent = mesh
+          m.position.set(x, y, z)
+          if (axis === 'x') m.rotation.z = Math.PI / 2
+          else if (axis === 'z') m.rotation.x = Math.PI / 2
+          m.material = hm
+          m.isPickable = false
+          m.metadata = { instanceId: inst.id, part, hardware: true }
+          m.setEnabled(this.hardwareVisible)
+          return m
+        }
+        if (knob) {
+          makeHandle('handle-stem', 8, 16, cx, cy, frontZ - 8 * MM, 'z')
+          makeHandle('handle-knob', 30, 14, cx, cy, frontZ - 22 * MM, 'z')
+        } else if (vertical) {
+          makeHandle('handle-bar', 12, barLen, cx, cy, frontZ - 28 * MM, 'y')
+          const py = Math.min(barLen / 2 - 12, Math.max(12, centers / 2))
+          makeHandle('handle-post-a', 8, 28, cx, cy - py * MM, frontZ - 14 * MM, 'z')
+          makeHandle('handle-post-b', 8, 28, cx, cy + py * MM, frontZ - 14 * MM, 'z')
+        } else {
+          makeHandle('handle-bar', 12, barLen, cx, cy, frontZ - 28 * MM, 'x')
+          const px = Math.min(barLen / 2 - 12, Math.max(12, centers / 2))
+          makeHandle('handle-post-a', 8, 28, cx - px * MM, cy, frontZ - 14 * MM, 'z')
+          makeHandle('handle-post-b', 8, 28, cx + px * MM, cy, frontZ - 14 * MM, 'z')
+        }
       }
       if (this.quality === 'realistic' &&
         ['corpus', 'facade', 'worktop', 'plinth'].includes(o.role || 'corpus')) {
@@ -1438,21 +1474,32 @@ export class BabylonRenderer {
     floorMat.emissiveColor = matColor(fm?.color || '#8b7a63').scale(0.08)
     if (room.floor?.enabled !== false) {
       const floors: Mesh[] = []
+      // UV пола: без них динамическая текстура давала чёрный пол
+      // (меш строится вручную, а не через CreateBox).
+      const minX = Math.min(...pts.map((p) => p.x))
+      const maxX = Math.max(...pts.map((p) => p.x))
+      const minY = Math.min(...pts.map((p) => p.y))
+      const maxY = Math.max(...pts.map((p) => p.y))
+      const spanX = Math.max(1, maxX - minX)
+      const spanY = Math.max(1, maxY - minY)
       for (const tri of triangulate(pts)) {
         const mesh = new Mesh('floor', this.scene)
         const positions: number[] = []
         const inds: number[] = []
         const normals: number[] = []
+        const uvs: number[] = []
         tri.forEach((p) => {
           positions.push(p.x * MM, 0, p.y * MM)
           normals.push(0, 1, 0)
+          uvs.push((p.x - minX) / spanX, (p.y - minY) / spanY)
         })
-        // ровно один треугольник: обход против часовой при взгляде сверху
-        inds.push(0, 2, 1)
+        // Babylon — левосторонняя система: лицевая сторона пола (взгляд сверху)
+        inds.push(0, 1, 2)
         const vd = new VertexData()
         vd.positions = positions
         vd.indices = inds
         vd.normals = normals
+        vd.uvs = uvs
         vd.applyToMesh(mesh)
         mesh.material = floorMat
         mesh.isPickable = false
