@@ -2259,6 +2259,21 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="view__sheet-section">
+            <span class="view__sheet-label">Размеры</span>
+            <div class="view__sheet-row view__sheet-row--stack">
+              <button class="tab" :class="{ 'tab--active': ui.dims3d }" @click="ui.dims3d = !ui.dims3d">
+                Внутри <small>детали модуля</small>
+              </button>
+              <button class="tab" :class="{ 'tab--active': ui.dimsOuter }" @click="ui.dimsOuter = !ui.dimsOuter">
+                Снаружи <small>до стен и соседей</small>
+              </button>
+              <button class="tab" :class="{ 'tab--active': ui.dimsAll }" @click="ui.dimsAll = !ui.dimsAll">
+                Зазоры <small>все полки и ящики</small>
+              </button>
+            </div>
+          </div>
+
+          <div class="view__sheet-section">
             <span class="view__sheet-label">Как управлять</span>
             <p class="view__sheet-note">
               Обзор: <b>ЛКМ</b> — вращение, колесо — зум, <b>ПКМ / Shift</b> —
