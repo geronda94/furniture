@@ -25,6 +25,9 @@ import {
   toggleDoors,
   toggleDrawers,
   toggleZLock,
+  canResizeModule,
+  resizeModule,
+  notify,
   ui,
 } from '../state/project'
 import { roomWalls } from '../render25d/room'
@@ -39,11 +42,13 @@ let viewRo: ResizeObserver | null = null
 const inst = selectedInstance
 const full = computed(() => ui.object.mode === 'full' && !!inst.value)
 const partAbs = computed(() => {
-  if (!inst.value || part.value == null) return null
+  if (!inst.value || partSelection.instanceId !== inst.value.id) return null
+  if (partSelection.part == null) return null
   const info = moduleInfo(inst.value, derived[inst.value.id]?.objects ?? [])
-  return info ? relationsFor(info, part.value) : null
+  return info ? relationsFor(info, partSelection.part) : null
 })
 const quickExpanded = ref(false)
+const fieldRev = ref(0)
 const quickCollapsed = computed(() => !!inst.value && !full.value && !quickExpanded.value)
 const partEl = computed(() => {
   if (!inst.value || partSelection.instanceId !== inst.value.id) return null
@@ -52,7 +57,8 @@ const partEl = computed(() => {
   return info?.elements[partSelection.part] ?? null
 })
 const partRel = computed(() => {
-  if (!inst.value || partSelection.part == null) return null
+  if (!inst.value || partSelection.instanceId !== inst.value.id) return null
+  if (partSelection.part == null) return null
   const info = moduleInfo(inst.value, derived[inst.value.id]?.objects)
   return info ? relationsFor(info, partSelection.part) : null
 })
@@ -135,9 +141,11 @@ function placeNearPointer(): void {
   const w = Math.min(390, window.innerWidth - 16)
   const h = Math.min(winEl.value?.offsetHeight || 480, window.innerHeight - 100)
   const sidebar = document.querySelector('.sidebar') as HTMLElement | null
-  const sideLeft = sidebar ? sidebar.getBoundingClientRect().left : window.innerWidth
-  const nearSidebar = pointer.x >= sideLeft - 8
-  const x = nearSidebar ? sideLeft - w - 12 : pointer.x + 16
+  const rect = sidebar?.getBoundingClientRect()
+  // Держим карточку у правой панели (списка объектов), а не под курсором:
+  // у мыши она закрывает то, что пользователь как раз рассматривает.
+  const sideLeft = rect && rect.width > 4 ? rect.left : window.innerWidth
+  const x = sideLeft - w - 12
   const y = pointer.y + 12
   pos.value = {
     x: Math.min(Math.max(8, x), Math.max(8, window.innerWidth - w - 8)),
@@ -168,7 +176,44 @@ function toFull(): void {
   setObjectModalMode('full')
 }
 function setPos(key: 'x' | 'y' | 'z', value: number): void {
-  if (inst.value) setInstancePosition(inst.value.id, { [key]: value })
+  if (!inst.value) return
+  if (!setInstancePosition(inst.value.id, { [key]: value })) fieldRev.value++
+}
+
+/** Ширина/высота всего модуля: движок пересчитывает деталировку и меши. */
+function setSize(key: 'W' | 'H', value: number): void {
+  const object = inst.value
+  if (!object) return
+  // Шаг полей — 10 мм; введённое значение подравниваем к нему.
+  const target = Math.round(value / 10) * 10
+  const current = object.params[key]
+  if (!Number.isFinite(target) || target === current) return
+  if (canResizeModule(object.id, { [key]: target })) {
+    if (!resizeModule(object.id, { [key]: target })) fieldRev.value++
+    return
+  }
+  // Не влезает целиком — подбираем максимальный допустимый размер
+  // в сторону изменения, чтобы модуль не ушёл в стену/соседа/потолок.
+  const dir = target > current ? 1 : -1
+  let best = current
+  for (let v = target; v !== current; v -= dir * 10) {
+    if (canResizeModule(object.id, { [key]: v })) {
+      best = v
+      break
+    }
+  }
+  if (best !== current) {
+    if (!resizeModule(object.id, { [key]: best })) fieldRev.value++
+  } else {
+    fieldRev.value++
+  }
+  notify(
+    best !== current
+      ? `Ограничено до ${best} мм: упор в стену, потолок или соседа`
+      : 'Не помещается: стена, потолок или другой объект',
+    null,
+    'error',
+  )
 }
 function onKey(e: KeyboardEvent): void {
   if (e.key === 'Escape') close()
@@ -260,9 +305,16 @@ watch(() => ui.object.mode, () => {
               v-if="inst"
               class="tab"
               :class="{ 'tab--active': ui.dims3d }"
-              title="Показывать размеры на 3D"
+              title="Размеры деталей внутри объекта"
               @click="ui.dims3d = !ui.dims3d"
-            >Размеры</button>
+            >Внутри</button>
+            <button
+              v-if="inst"
+              class="tab"
+              :class="{ 'tab--active': ui.dimsOuter }"
+              title="Расстояния до стен и соседних объектов"
+              @click="ui.dimsOuter = !ui.dimsOuter"
+            >Снаружи</button>
             <button
               v-if="inst && !full"
               class="tab"
@@ -331,14 +383,15 @@ watch(() => ui.object.mode, () => {
 
           <div class="om__label">Положение <span class="dim">в комнате, мм</span></div>
           <div class="om__coords">
-            <NumField label="X" :value="inst.x" :min="0" :step="10" @change="setPos('x', $event)" />
-            <NumField label="Y" :value="inst.y" :min="0" :step="10" @change="setPos('y', $event)" />
+            <NumField label="X" :value="inst.x" :min="0" :step="10" :rev="fieldRev" @change="setPos('x', $event)" />
+            <NumField label="Y" :value="inst.y" :min="0" :step="10" :rev="fieldRev" @change="setPos('y', $event)" />
             <div class="om__z">
               <NumField
                 label="Z"
                 :value="inst.z"
                 :min="0"
                 :step="10"
+                :rev="fieldRev"
                 :disabled="inst.zLocked"
                 @change="setPos('z', $event)"
               />
@@ -349,6 +402,28 @@ watch(() => ui.object.mode, () => {
                 @click="toggleZLock(inst.id)"
               >{{ inst.zLocked ? '🔒' : '🔓' }}</button>
             </div>
+          </div>
+
+          <div class="om__label">
+            Размеры модуля <span class="dim">ширина / высота, мм</span>
+          </div>
+          <div class="om__coords om__coords--two">
+            <NumField
+              label="Ш"
+              :value="inst.params.W"
+              :min="100"
+              :step="10"
+              :rev="fieldRev"
+              @change="setSize('W', $event)"
+            />
+            <NumField
+              label="В"
+              :value="inst.params.H"
+              :min="100"
+              :step="10"
+              :rev="fieldRev"
+              @change="setSize('H', $event)"
+            />
           </div>
 
           <div class="om__toggles">

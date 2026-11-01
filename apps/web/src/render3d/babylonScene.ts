@@ -11,6 +11,8 @@ import { PointLight } from '@babylonjs/core/Lights/pointLight'
 import { ShadowGenerator } from '@babylonjs/core/Lights/Shadows/shadowGenerator'
 import '@babylonjs/core/Lights/Shadows/shadowGeneratorSceneComponent'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial'
+import { ShaderMaterial } from '@babylonjs/core/Materials/shaderMaterial'
+import { Effect } from '@babylonjs/core/Materials/effect'
 import { Material } from '@babylonjs/core/Materials/material'
 import { Texture } from '@babylonjs/core/Materials/Textures/texture'
 import { DynamicTexture } from '@babylonjs/core/Materials/Textures/dynamicTexture'
@@ -122,6 +124,7 @@ export class BabylonRenderer {
   private wallMode: 'cutaway' | 'low' = 'cutaway'
   private selected = ''
   private quality: 'realistic' | 'schematic' | 'blueprint' = 'realistic'
+  private clayMats = new Map<string, ShaderMaterial>()
   /** Чертёж: фиксированная камера, без свободного вращения. */
   private blueprint = false
   private bpView: 'iso' | 'front' | 'side' | 'top' = 'iso'
@@ -146,6 +149,19 @@ export class BabylonRenderer {
   private walkFov = 1.02
   private seated: { id: string; kind: string; eye: number } | null = null
   private selectionBox: Mesh
+  /** Плавный доворот камеры к объекту: без рывка при клике. */
+  private camTween: {
+    t: number
+    dur: number
+    fromA: number
+    fromB: number
+    fromR: number
+    fromTarget: Vector3
+    toA: number
+    toB: number
+    toR: number
+    toTarget: Vector3
+  } | null = null
   private selectedPartInst: string | null = null
   private selectedPart: number | null = null
   private edgeSaved = new Map<Mesh, { width: number; color: Color4 }>()
@@ -302,7 +318,9 @@ export class BabylonRenderer {
     const selMat = new StandardMaterial('sel-mat', this.scene)
     selMat.wireframe = true
     selMat.emissiveColor = matColor('#ffc04a')
+    selMat.alpha = 0.55
     selMat.disableLighting = true
+    selMat.disableDepthWrite = true
     this.selectionBox = CreateBox('selection', { size: 1 }, this.scene)
     this.selectionBox.material = selMat
     this.selectionBox.isPickable = false
@@ -313,6 +331,7 @@ export class BabylonRenderer {
       if (this.disposed) return
       this.tickAnim()
       this.tickWalk()
+      this.tickCamera()
       this.updateWalls()
       if (this.projection === 'ortho') this.updateOrtho()
       this.scene.render()
@@ -321,6 +340,8 @@ export class BabylonRenderer {
 
   dispose(): void {
     this.disposed = true
+    for (const m of this.clayMats.values()) m.dispose()
+    this.clayMats.clear()
     this.scene.dispose()
     this.engine.dispose()
   }
@@ -354,6 +375,7 @@ export class BabylonRenderer {
       maxY: Math.max(...pts.map((p) => p.y)) * MM,
     }
     this.buildRoom(room, materials)
+    if (this.isClay()) this.applyClayMaterials()
     const sm = this.shadow.getShadowMap()
     if (sm) {
       sm.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE
@@ -844,6 +866,7 @@ export class BabylonRenderer {
         if (8 * e.x * e.y * e.z > 0.012) this.shadow.addShadowCaster(m)
       }
     }
+    if (this.isClay()) this.applyClayMaterials()
     // Новые кастеры появляются после первого рендера карты теней.
     // Без сброса Babylon может перерисовывать её каждый кадр.
     const sm = this.shadow.getShadowMap()
@@ -1013,6 +1036,7 @@ export class BabylonRenderer {
     if (rebuilt || matsSig !== this.matsSig) {
       this.matsSig = matsSig
       this.applyMaterials(instances, derived, materials, materialVars)
+      if (this.isClay()) this.applyClayMaterials()
     }
     if (rebuilt) {
       this.applyQualityToMeshes()
@@ -1130,10 +1154,7 @@ export class BabylonRenderer {
         const right = Math.max(...xs)
         const y = holes.reduce((sum, h) => sum + h.y, 0) / holes.length
         const length = Math.max(64, right - left + 40)
-        const hm = this.materialFor('hardware')
-        hm.diffuseColor = matColor('#aeb6bc')
-        hm.specularColor = new Color3(0.55, 0.6, 0.64)
-        hm.roughness = 0.35
+        const hm = this.hardwareMaterial()
         const handle = CreateBox(
           `${key}:handle`,
           {
@@ -1162,6 +1183,15 @@ export class BabylonRenderer {
         mesh.edgesColor = new Color4(0.06, 0.07, 0.08, 0.8)
       }
     })
+  }
+
+  /** Металл ручек: общий кэш, чтобы clay мог вернуть его после выхода. */
+  private hardwareMaterial(): StandardMaterial {
+    const hm = this.materialFor('hardware')
+    hm.diffuseColor = matColor('#aeb6bc')
+    hm.specularColor = new Color3(0.55, 0.6, 0.64)
+    hm.roughness = 0.35
+    return hm
   }
 
   private materialFor(role: string): StandardMaterial {
@@ -1217,6 +1247,106 @@ export class BabylonRenderer {
     return tex
   }
 
+  private isClay(): boolean {
+    return this.quality === 'schematic' || this.quality === 'blueprint'
+  }
+
+  private clayTone(role?: string): number {
+    if (role === 'facade' || role === 'door') return 1
+    if (role === 'worktop') return 2
+    if (!role) return 3
+    return 0
+  }
+
+  /** Серый clay-шейдер «Каркаса» и «Чертежа»: мягкий градиент, без цвета. */
+  private clayMaterial(tone = 0): ShaderMaterial {
+    const key = `bp:${tone}`
+    const cached = this.clayMats.get(key)
+    if (cached) return cached
+    if (!Effect.ShadersStore['furnitureClayVertexShader']) {
+      Effect.ShadersStore['furnitureClayVertexShader'] = `
+        precision highp float;
+        attribute vec3 position;
+        attribute vec3 normal;
+        uniform mat4 world;
+        uniform mat4 worldViewProjection;
+        varying vec3 vNormal;
+        varying vec3 vWorld;
+        void main() {
+          vec4 wp = world * vec4(position, 1.0);
+          vWorld = wp.xyz;
+          vNormal = normalize(mat3(world) * normal);
+          gl_Position = worldViewProjection * vec4(position, 1.0);
+        }
+      `
+      Effect.ShadersStore['furnitureClayFragmentShader'] = `
+        precision highp float;
+        varying vec3 vNormal;
+        varying vec3 vWorld;
+        uniform vec3 uBase;
+        void main() {
+          vec3 n = normalize(vNormal);
+          vec3 L = normalize(vec3(-0.45, 0.85, 0.55));
+          float diff = clamp(dot(n, L) * 0.5 + 0.5, 0.0, 1.0);
+          float sky = clamp(n.y * 0.5 + 0.5, 0.0, 1.0);
+          float grad = clamp(vWorld.y * 0.24 + 0.72, 0.5, 1.0);
+          vec3 col = uBase * (0.46 + 0.54 * diff);
+          col *= mix(0.88, 1.07, sky);
+          col *= grad;
+          col += vec3(0.05, 0.05, 0.05) * (1.0 - diff);
+          gl_FragColor = vec4(col, 1.0);
+        }
+      `
+    }
+    const palette = [
+      new Color3(0.80, 0.80, 0.80),
+      new Color3(0.72, 0.72, 0.72),
+      new Color3(0.87, 0.87, 0.87),
+      new Color3(0.76, 0.76, 0.76),
+      new Color3(0.90, 0.90, 0.90),
+      new Color3(0.78, 0.78, 0.78),
+    ]
+    const mat = new ShaderMaterial(key, this.scene, 'furnitureClay', {
+      attributes: ['position', 'normal'],
+      uniforms: ['world', 'worldViewProjection', 'uBase'],
+    })
+    mat.setColor3('uBase', palette[Math.max(0, Math.min(5, tone))])
+    mat.backFaceCulling = true
+    this.clayMats.set(key, mat)
+    return mat
+  }
+
+  /** Разложить clay-материалы и тонкие контуры по мешам сцены. */
+  private applyClayMaterials(): void {
+    const skip = new Set<Mesh>([this.selectionBox])
+    const partMeshes = new Set(this.parts.values())
+    const roleByMesh = new Map<Mesh, string>()
+    for (const [key, mesh] of this.parts) {
+      const role = this.partMeta.get(key)?.role
+      roleByMesh.set(mesh, role ? (ROLE_MAT[role] || role) : 'corpus')
+    }
+    for (const m of this.scene.meshes) {
+      if (!(m instanceof Mesh) || skip.has(m)) continue
+      if (m.name.startsWith('sink-stream:')) continue
+      let tone = 0
+      if (m.name === 'wall' || m.name === 'ceiling') tone = 4
+      else if (m.name === 'floor') tone = 5
+      else tone = this.clayTone(roleByMesh.get(m))
+      m.material = this.clayMaterial(tone)
+      m.receiveShadows = false
+      const role = roleByMesh.get(m)
+      const wantEdges = m.name === 'wall' || (partMeshes.has(m) &&
+        (role === 'corpus' || role === 'facade' || role === 'worktop'))
+      if (wantEdges) {
+        if (!m.edgesRenderer) m.enableEdgesRendering(0.999)
+        m.edgesWidth = 0.9
+        m.edgesColor = new Color4(0.22, 0.24, 0.26, 0.85)
+      } else if (m.edgesRenderer) {
+        m.disableEdgesRendering()
+      }
+    }
+  }
+
   private applyMaterials(
     instances: Instance[],
     derived: Record<string, SolveResponse>,
@@ -1235,10 +1365,21 @@ export class BabylonRenderer {
           ? resolveObjectMaterial(materials, materialVars, inst, obj,
               meta.part)
           : materials.corpus
-        // «Каркас» и «Чертёж» — упрощённый вид канваса: без текстур,
-        // но с фактическим цветом материала — как было в «Каркасе».
-        const flat = this.quality === 'schematic' || this.quality === 'blueprint'
-        const textured = !flat && !!src?.texture
+        if (this.isClay()) {
+          mesh.material = this.clayMaterial(this.clayTone(mk))
+          mesh.receiveShadows = false
+          continue
+        }
+        // Ручки — дочерние меши детали: clay перекрашивает и их, поэтому
+        // при выходе из clay возвращаем металл, даже если материал детали
+        // не менялся (sig совпал).
+        for (const child of mesh.getChildMeshes()) {
+          if (child.metadata?.hardware) {
+            child.material = this.hardwareMaterial()
+            child.receiveShadows = true
+          }
+        }
+        const textured = !!src?.texture
         const face = Math.max(meta.base.sx, meta.base.sz, meta.base.sy)
         const repeat = face / (src?.texScale || 600)
         // Материал общий по содержимому (цвет + текстура + повтор), а не по
@@ -1246,10 +1387,8 @@ export class BabylonRenderer {
         const qRepeat = src?.pattern === 'solid' || !src
           ? 0
           : Math.max(0.25, Math.round(repeat * 2) / 2)
-        const matKey = flat
-          ? `schem|${src?.color || ''}|${src?.accent || ''}|${mk}`
-          : `r|${src?.pattern || 'solid'}|${src?.color || ''}|` +
-            `${src?.accent || ''}|${src?.texture || ''}|${qRepeat}`
+        const matKey = `r|${src?.pattern || 'solid'}|${src?.color || ''}|` +
+          `${src?.accent || ''}|${src?.texture || ''}|${qRepeat}`
         const fa = this.materialFor(matKey)
         const sig = (fa as StandardMaterial & { __sig?: string }).__sig
         if (sig === matKey) {
@@ -1257,29 +1396,17 @@ export class BabylonRenderer {
           continue
         }
         ;(fa as StandardMaterial & { __sig?: string }).__sig = matKey
-        if (flat) {
-          const grey: Record<string, string> = {
-            corpus: '#b8bcc1', facade: '#8f969d', worktop: '#7d848b',
-            plinth: '#6e757c', back: '#d3d7db', drawer: '#9aa0a6',
-            leg: '#555b61',
-          }
-          const base = src?.color || grey[mk] || '#a9aeb3'
-          fa.diffuseColor = matColor(base)
-          fa.emissiveColor = matColor(src?.accent || base).scale(0.04)
-          fa.diffuseTexture = null
-        } else {
-          const texture = textured && src?.texture
-            ? this.textureFor(src.texture, repeat)
-            : src
-              ? this.proceduralTexture(src, repeat)
-              : null
-          // Текстура уже содержит цвет; белый diffuse не затемняет её.
-          fa.diffuseColor = texture
-            ? new Color3(1, 1, 1)
-            : matColor(src?.color || '#999999')
-          fa.emissiveColor = matColor(src?.accent || src?.color || '#222222').scale(0.06)
-          fa.diffuseTexture = texture
-        }
+        const texture = textured && src?.texture
+          ? this.textureFor(src.texture, repeat)
+          : src
+            ? this.proceduralTexture(src, repeat)
+            : null
+        // Текстура уже содержит цвет; белый diffuse не затемняет её.
+        fa.diffuseColor = texture
+          ? new Color3(1, 1, 1)
+          : matColor(src?.color || '#999999')
+        fa.emissiveColor = matColor(src?.accent || src?.color || '#222222').scale(0.06)
+        fa.diffuseTexture = texture
         mesh.material = fa
         fa.markAsDirty(Material.AllDirtyFlag)
       }
@@ -1820,47 +1947,22 @@ export class BabylonRenderer {
     return out
   }
 
-  private applySelectionGlow(meshes: Mesh[]): void {
-    const partMode = this.selectedPartInst != null && this.selectedPart != null
-    // Снять прошлую подсветку.
+  private applySelectionGlow(_meshes: Mesh[]): void {
+    // Цветную подсветку рёбер больше не рисуем: она перекрывала цветные
+    // рёбра размеров и искажала вид детали. Выделение показывают экранная
+    // рамка (и размеры, если включены). Метод оставлен, чтобы снять
+    // подсветку, сохранённую в предыдущих версиях/кадрах.
     for (const [m, prev] of this.edgeSaved) {
-      if (partMode && meshes.includes(m)) continue
       m.edgesWidth = prev.width
       m.edgesColor = prev.color
     }
     for (const [m, prev] of this.outlineSaved) {
-      if (partMode && meshes.includes(m)) continue
       m.renderOutline = prev.on
       m.outlineColor = prev.color
       m.outlineWidth = prev.width
     }
     this.edgeSaved.clear()
     this.outlineSaved.clear()
-    // Жирный контур — только для конкретной детали. Целый модуль в обычном
-    // просмотре не обводим по всем компонентам: остаётся только аккуратная
-    // экранная рамка, чтобы не искажать общий вид.
-    if (!partMode) return
-    const next = new Map<Mesh, { width: number; color: Color4 }>()
-    const nextOutline = new Map<Mesh, { on: boolean; color: Color3; width: number }>()
-    for (const m of meshes) {
-      next.set(m, {
-        width: m.edgesWidth ?? 0.9,
-        color: (m.edgesColor ?? new Color4(0, 0, 0, 1)) as Color4,
-      })
-      if (!m.edgesRenderer) m.enableEdgesRendering(0.999)
-      m.edgesWidth = 3.4
-      m.edgesColor = new Color4(1, 0.62, 0.08, 1)
-      nextOutline.set(m, {
-        on: m.renderOutline,
-        color: m.outlineColor.clone(),
-        width: m.outlineWidth,
-      })
-      m.renderOutline = true
-      m.outlineColor.set(1, 0.58, 0.08)
-      m.outlineWidth = 0.015
-    }
-    this.edgeSaved = next
-    this.outlineSaved = nextOutline
   }
 
   private updateSelectionBox(): void {
@@ -1893,10 +1995,13 @@ export class BabylonRenderer {
       Math.max(0.01, size.y + pad * 2),
       Math.max(0.01, size.z + pad * 2),
     )
-    this.selectionBox.setEnabled(true)
+    // С включёнными размерами объёмную рамку не показываем: она спорит
+    // с цветными рёбрами размеров. Остаётся пунктирная экранная рамка.
+    this.selectionBox.setEnabled(!ui.dims3d && !ui.dimsOuter)
   }
 
   setQuality(mode: 'realistic' | 'schematic' | 'blueprint'): void {
+    const wasClay = this.isClay()
     this.quality = mode
     const schematic = mode === 'schematic'
     const blueprint = mode === 'blueprint'
@@ -1919,7 +2024,7 @@ export class BabylonRenderer {
     this.scene.imageProcessingConfiguration.exposure =
       blueprint ? 1.0 : schematic ? 1.0 : 1.05
     this.scene.clearColor = schematic || blueprint
-      ? new Color4(0.30, 0.32, 0.35, 1)
+      ? new Color4(0.905, 0.905, 0.9, 1)
       : new Color4(0.055, 0.066, 0.08, 1)
     const hadRoom = !!this.roomSig
     this.roomSig = ''
@@ -1930,9 +2035,14 @@ export class BabylonRenderer {
       state.project.materialVars,
     )
     if (hadRoom) this.syncRoom(state.project.room, state.project.materials)
+    if (schematic || blueprint) this.applyClayMaterials()
     for (const m of this.parts.values()) {
       m.receiveShadows = !schematic && !blueprint
-      m.edgesWidth = schematic || blueprint ? 0.55 : 0.9
+      m.edgesWidth = 0.9
+    }
+    if (wasClay && !schematic && !blueprint) {
+      this.propSig = ''
+      this.syncProps(state.project.props ?? [])
     }
     this.applyQualityToMeshes()
   }
@@ -1948,11 +2058,13 @@ export class BabylonRenderer {
       mesh.setEnabled(ui.facades || meta.role !== 'facade')
     }
     for (const m of this.wallDecor) m.setEnabled(!schematic && !blueprint)
+    if (this.isClay()) this.applyClayMaterials()
     this.markAnimDirty()
   }
 
   /** Включить/выключить чертёжный режим камеры (фиксированные ракурсы). */
   setBlueprint(on: boolean): void {
+    this.camTween = null
     this.blueprint = on
     if (on) {
       this.setMode('orbit')
@@ -2041,6 +2153,7 @@ export class BabylonRenderer {
   }
 
   setOrbit(alphaDeg: number, betaDeg: number): void {
+    this.camTween = null
     this.orbit.alpha = (alphaDeg * Math.PI) / 180
     this.orbit.beta = (betaDeg * Math.PI) / 180
   }
@@ -2052,6 +2165,7 @@ export class BabylonRenderer {
    */
   setMode(mode: 'orbit' | 'first' | 'fly'): void {
     if (mode === this.mode) return
+    this.camTween = null
     const from = this.mode
     this.mode = mode
     if (mode === 'orbit') {
@@ -2566,6 +2680,7 @@ export class BabylonRenderer {
   }
 
   fit(target: 'room' | 'module', room: Room, instanceId?: string | null): void {
+    this.camTween = null
     const pts = outlinePoints(room)
     let minX = Math.min(...pts.map((p) => p.x))
     let maxX = Math.max(...pts.map((p) => p.x))
@@ -2787,10 +2902,78 @@ export class BabylonRenderer {
     view: 'front' | 'iso' | 'side' | 'top' = 'front',
     leftFraction = 1,
     bottomFraction = 1,
+    animate = true,
   ): void {
     const root = this.roots.get(instanceId)
     if (!root) return
-    this.frameNode(root, view, leftFraction, bottomFraction)
+    this.frameNode(root, view, leftFraction, bottomFraction, animate)
+  }
+
+  /** Прервать плавный доворот (пользователь сам взялся за камеру). */
+  cancelCameraTween(): void {
+    this.camTween = null
+  }
+
+  /**
+   * Уже удобно смотрим на модуль? Тогда клик по нему/его деталям не должен
+   * переставлять камеру: объект достаточно крупный и в кадре.
+   */
+  isInstanceWellFramed(instanceId: string): boolean {
+    const root = this.roots.get(instanceId)
+    if (!root) return false
+    const meshes = root.getChildMeshes()
+    if (!meshes.length) return false
+    const W = this.canvas.clientWidth || this.engine.getRenderWidth()
+    const H = this.canvas.clientHeight || this.engine.getRenderHeight()
+    if (!W || !H) return false
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    let min = new Vector3(Infinity, Infinity, Infinity)
+    let max = new Vector3(-Infinity, -Infinity, -Infinity)
+    for (const m of meshes) {
+      m.computeWorldMatrix(true)
+      const bb = m.getBoundingInfo().boundingBox
+      min = Vector3.Minimize(min, bb.minimumWorld)
+      max = Vector3.Maximize(max, bb.maximumWorld)
+      for (const c of bb.vectorsWorld) {
+        const p = this.project(c.x / MM, c.z / MM, c.y / MM)
+        minX = Math.min(minX, p.x)
+        minY = Math.min(minY, p.y)
+        maxX = Math.max(maxX, p.x)
+        maxY = Math.max(maxY, p.y)
+      }
+    }
+    if (!Number.isFinite(minX)) return false
+    const cover = Math.max((maxX - minX) / W, (maxY - minY) / H)
+    const cx = (minX + maxX) / 2 / W
+    const cy = (minY + maxY) / 2 / H
+    const centered = cx > 0.07 && cx < 0.93 && cy > 0.07 && cy < 0.93
+    const size = max.subtract(min)
+    const t = this.orbit.target
+    const pad = 0.35
+    const inside =
+      t.x >= min.x - Math.max(0.2, size.x * pad) &&
+      t.x <= max.x + Math.max(0.2, size.x * pad) &&
+      t.y >= min.y - Math.max(0.2, size.y * pad) &&
+      t.y <= max.y + Math.max(0.2, size.y * pad) &&
+      t.z >= min.z - Math.max(0.2, size.z * pad) &&
+      t.z <= max.z + Math.max(0.2, size.z * pad)
+    return centered && inside && cover >= 0.32
+  }
+
+  private tickCamera(): void {
+    if (!this.camTween) return
+    const tw = this.camTween
+    tw.t += Math.min(64, this.engine.getDeltaTime()) / 1000
+    let k = Math.min(1, tw.t / tw.dur)
+    k = k * k * (3 - 2 * k)
+    this.orbit.alpha = tw.fromA + (tw.toA - tw.fromA) * k
+    this.orbit.beta = tw.fromB + (tw.toB - tw.fromB) * k
+    this.orbit.radius = tw.fromR + (tw.toR - tw.fromR) * k
+    this.orbit.target.copyFrom(Vector3.Lerp(tw.fromTarget, tw.toTarget, k))
+    if (tw.t >= tw.dur) this.camTween = null
   }
 
   /** Выделить декор рамкой (без движения камеры). */
@@ -2824,9 +3007,14 @@ export class BabylonRenderer {
     view: 'front' | 'iso' | 'side' | 'top',
     leftFraction: number,
     bottomFraction = 1,
+    animate = true,
   ): void {
     const meshes = root.getChildMeshes()
     if (!meshes.length) return
+    const fromA = this.orbit.alpha
+    const fromB = this.orbit.beta
+    const fromR = this.orbit.radius
+    const fromTarget = this.orbit.target.clone()
     let min = new Vector3(Infinity, Infinity, Infinity)
     let max = new Vector3(-Infinity, -Infinity, -Infinity)
     for (const m of meshes) {
@@ -2919,6 +3107,27 @@ export class BabylonRenderer {
       this.orbit.setPosition(target.add(dir.scale(dist)).add(up.scale(maxDim * 0.03)))
       this.orbit.radius = dist
     }
+    if (animate && !this.blueprint && this.mode === 'orbit') {
+      // Плавно доворачиваем камеру: клик по объекту не должен «прыгать».
+      let toA = this.orbit.alpha
+      let dA = toA - fromA
+      while (dA > Math.PI) dA -= Math.PI * 2
+      while (dA < -Math.PI) dA += Math.PI * 2
+      toA = fromA + dA
+      this.camTween = {
+        t: 0,
+        dur: 0.45,
+        fromA, fromB, fromR, fromTarget,
+        toA,
+        toB: this.orbit.beta,
+        toR: this.orbit.radius,
+        toTarget: this.orbit.target.clone(),
+      }
+      this.orbit.alpha = fromA
+      this.orbit.beta = fromB
+      this.orbit.radius = fromR
+      this.orbit.target.copyFrom(fromTarget)
+    }
     this.applyProjection()
   }
 
@@ -2972,6 +3181,11 @@ export class BabylonRenderer {
     this.applySelectionGlow(this.selectionMeshes())
   }
 
+  /** Пересчитать объёмную рамку выбора (например, при включении размеров). */
+  refreshSelectionBox(): void {
+    this.updateSelectionBox()
+  }
+
   /** Экранная рамка вокруг выбранного объекта/детали (CSS px). */
   selectionScreenBounds(): { x: number; y: number; w: number; h: number } | null {
     const meshes = this.selectionMeshes()
@@ -2993,6 +3207,47 @@ export class BabylonRenderer {
     }
     if (!Number.isFinite(minX)) return null
     return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+  }
+
+  /** Контур выделения по проекции деталей: выпуклая оболочка, а не
+   *  прямоугольник — обводка идёт по самому объекту, а не «плавает». */
+  selectionScreenHull(): { x: number; y: number }[] {
+    const meshes = this.selectionMeshes()
+    const pts: { x: number; y: number }[] = []
+    for (const m of meshes) {
+      m.computeWorldMatrix(true)
+      const bb = m.getBoundingInfo().boundingBox
+      for (const c of bb.vectorsWorld) {
+        pts.push(this.project(c.x / MM, c.z / MM, c.y / MM))
+      }
+    }
+    if (pts.length < 3) return pts
+    pts.sort((a, b) => a.x - b.x || a.y - b.y)
+    const cross = (
+      o: { x: number; y: number },
+      a: { x: number; y: number },
+      b: { x: number; y: number },
+    ): number => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
+    const lower: { x: number; y: number }[] = []
+    for (const p of pts) {
+      while (lower.length >= 2 &&
+        cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
+        lower.pop()
+      }
+      lower.push(p)
+    }
+    const upper: { x: number; y: number }[] = []
+    for (let i = pts.length - 1; i >= 0; i--) {
+      const p = pts[i]
+      while (upper.length >= 2 &&
+        cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
+        upper.pop()
+      }
+      upper.push(p)
+    }
+    lower.pop()
+    upper.pop()
+    return lower.concat(upper)
   }
 
   project(x: number, y: number, z: number): { x: number; y: number } {

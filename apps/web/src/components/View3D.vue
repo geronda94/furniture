@@ -30,7 +30,8 @@ import {
 import PlanView from './PlanView.vue'
 import CameraPad from './CameraPad.vue'
 import { moduleInfo, relationsFor } from '../module/info'
-import { roomWalls } from '../render25d/room'
+import { outlinePoints, roomWalls } from '../render25d/room'
+import { footprintOf } from '../state/geometry'
 
 const canvasEl = ref<HTMLCanvasElement | null>(null)
 let renderer: import('../render3d/babylonScene').BabylonRenderer | null = null
@@ -461,17 +462,22 @@ const viewNameLabel = computed(() => {
   }
   return labels[viewName.value] ?? 'Вид'
 })
-const selRect = ref<{ x: number; y: number; w: number; h: number } | null>(null)
+const selHull = ref<{ x: number; y: number }[]>([])
 const DIM_W = '#ffbe55'
 const DIM_H = '#7fe0c2'
 const DIM_D = '#7fb9f0'
 const DIM_POS = '#ffd28a'
 const DIM_REL = '#d8a6ff'
+const DIM_OUT_WALL = '#dfe7ee'
+const DIM_OUT_OBJ = '#9eabb8'
 const dimLines = ref<{
   x1: number; y1: number; x2: number; y2: number
   tx: number; ty: number; label: string; color: string; labelW: number; marker: string
-  e1: [number, number, number, number]
-  e2: [number, number, number, number]
+  /** Подсказка (что именно за препятствие). */
+  hint: string
+  /** Проекции реальных граней, к которым относится размер (у размера между
+   *  двумя объектами их две). */
+  edges: [number, number, number, number][]
 }[]>([])
 const partPill = ref<{ id: string; part: number } | null>(null)
 const pillPos = ref({ x: 0, y: 0 })
@@ -548,7 +554,7 @@ function toWorld(
 }
 
 function updateDims(): void {
-  if (!renderer || !ui.dims3d || !state.selection || state.selected.length > 1) {
+  if (!renderer || (!ui.dims3d && !ui.dimsOuter) || !state.selection || state.selected.length > 1) {
     if (dimLines.value.length) dimLines.value = []
     return
   }
@@ -600,43 +606,109 @@ function updateDims(): void {
   const H = z1 - z0
   const pad = Math.max(45, Math.max(W, D, H) * 0.06)
   const out: typeof dimLines.value = []
+  type EdgeSpec = {
+    a: [number, number, number]
+    b: [number, number, number]
+    from?: number
+    to?: number
+  }
+  const lerpLocal = (
+    a: [number, number, number],
+    b: [number, number, number],
+    f: number,
+  ): [number, number, number] => [
+    a[0] + (b[0] - a[0]) * f,
+    a[1] + (b[1] - a[1]) * f,
+    a[2] + (b[2] - a[2]) * f,
+  ]
   const add = (
     a: { x: number; y: number; z: number },
     b: { x: number; y: number; z: number },
     label: string,
     color: string,
     t = 0.5,
+    edges: EdgeSpec[] = [],
+    hint = '',
   ) => {
     const marker = color === DIM_H ? 'dim-arrow-h'
       : color === DIM_D ? 'dim-arrow-d'
         : color === DIM_POS ? 'dim-arrow-p'
-          : color === DIM_REL ? 'dim-arrow-r' : 'dim-arrow-w'
+          : color === DIM_REL ? 'dim-arrow-r'
+            : color === DIM_OUT_WALL ? 'dim-arrow-wall'
+              : color === DIM_OUT_OBJ ? 'dim-arrow-out'
+                : 'dim-arrow-w'
     const p1 = renderer!.project(a.x, a.y, a.z)
     const p2 = renderer!.project(b.x, b.y, b.z)
-    // Короткие цветные штрихи поперёк концов размера: слегка подкрашивают
-    // грань, к которой относится стрелка, но не заливают всю плоскость.
-    const dx = p2.x - p1.x
-    const dy = p2.y - p1.y
-    const dl = Math.hypot(dx, dy) || 1
-    const nx = (-dy / dl) * 7
-    const ny = (dx / dl) * 7
+    // Реальные грани деталей: цветные отрезки прямо по рёбрам, а не
+    // поперечные засечки. У размера между двумя объектами — две грани.
+    const edgePts: [number, number, number, number][] = []
+    for (const edge of edges) {
+      const f0 = edge.from ?? 0
+      const f1 = edge.to ?? Math.min(1, f0 + 1 / 3)
+      const ea = lerpLocal(edge.a, edge.b, f0)
+      const eb = lerpLocal(edge.a, edge.b, f1)
+      const wa = Wp(ea[0], ea[1], ea[2])
+      const wb = Wp(eb[0], eb[1], eb[2])
+      const pa = renderer!.project(wa.x, wa.y, wa.z)
+      const pb = renderer!.project(wb.x, wb.y, wb.z)
+      if (Math.hypot(pb.x - pa.x, pb.y - pa.y) >= 5) {
+        edgePts.push([pa.x, pa.y, pb.x, pb.y])
+      }
+    }
     out.push({
-      e1: [p1.x - nx, p1.y - ny, p1.x + nx, p1.y + ny],
-      e2: [p2.x - nx, p2.y - ny, p2.x + nx, p2.y + ny],
+      edges: edgePts,
       x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y,
       tx: p1.x + (p2.x - p1.x) * t,
       ty: p1.y + (p2.y - p1.y) * t - 4,
       label,
       color,
       marker,
+      hint,
       labelW: Math.max(36, label.length * 7.8 + 14),
     })
   }
   const Wp = (lx: number, ly: number, lz: number) => toWorld(inst, lx, ly, lz)
+  // Кромка объекта на нужной высоте: для размера между полками подсвечиваем
+  // обе грани — и выбранную, и соседнюю, к которой размер относится.
+  const atZ = (z: number, yRef: number): { x0: number; x1: number } | null => {
+    if (!info) return null
+    let best: (typeof info.elements)[number] | null = null
+    for (const e of info.elements) {
+      const dz = Math.min(Math.abs(e.z - z), Math.abs(e.z + e.h - z))
+      // Только детали на той же передней плоскости: иначе вторая грань
+      // уезжает на заднюю стенку/в глубину модуля.
+      if (dz > 1.5 || Math.abs(e.y - yRef) > 40) continue
+      if (!best || e.w > best.w) best = e
+    }
+    return best ? { x0: best.x, x1: best.x + best.w } : null
+  }
+  const edgeAtZ = (
+    z: number,
+    fx0: number,
+    fx1: number,
+    fy: number,
+    from = 0.36,
+    to = 0.63,
+  ): EdgeSpec => {
+    const at = atZ(z, fy)
+    return {
+      a: [at ? at.x0 : fx0, fy, z],
+      b: [at ? at.x1 : fx1, fy, z],
+      from,
+      to,
+    }
+  }
+  if (ui.dims3d) {
   const depthMark = D < 60 ? 'Т' : 'Г'
+  // Грань берём на той же плоскости, что и сам размер (передняя грань y0,
+  // правое ребро x1), иначе подсветка уезжает на противоположную сторону.
+  // Ширина и так очевидна по линии размера — отдельную подсветку грани
+  // не рисуем, чтобы не плодить лишние жёлтые полосы на детали.
   add(Wp(x0, y0 - pad, z0), Wp(x1, y0 - pad, z0), `Ш ${Math.round(W)}`, DIM_W, 0.26)
-  add(Wp(x1 + pad, y0 - pad, z0), Wp(x1 + pad, y0 - pad, z1), `В ${Math.round(H)}`, DIM_H)
-  add(Wp(x1 + pad, y0, z0), Wp(x1 + pad, y1, z0), `${depthMark} ${Math.round(D)}`, DIM_D, 0.84)
+  add(Wp(x1 + pad, y0 - pad, z0), Wp(x1 + pad, y0 - pad, z1), `В ${Math.round(H)}`, DIM_H, 0.5,
+    [{ a: [x1, y0, z0], b: [x1, y0, z1], from: 0.36, to: 0.63 }])
+  add(Wp(x1 + pad, y0, z0), Wp(x1 + pad, y1, z0), `${depthMark} ${Math.round(D)}`, DIM_D, 0.84,
+    [{ a: [x1, y0, z0], b: [x1, y1, z0], from: 0.02, to: 0.33 }])
   // Относительные размеры: высоты полок в выбранном модуле и просветы
   // до соседних полок у выбранной детали — то, что нужно при проектировании.
   if (info) {
@@ -644,19 +716,31 @@ function updateDims(): void {
       for (const g of info.shelves) {
         if (g.size <= 2) continue
         add(Wp(x0 + 22, y0, g.from), Wp(x0 + 22, y0, g.to),
-          `↕ ${Math.round(g.size)}`, DIM_REL)
+          `↕ ${Math.round(g.size)}`, DIM_REL, 0.5,
+          [
+            edgeAtZ(g.from, x0, x1, y0, 0.67, 0.97),
+            edgeAtZ(g.to, x0, x1, y0, 0.67, 0.97),
+          ])
       }
     } else {
       const rel = relationsFor(info, part)
       if (rel?.above && rel.above.distance > 2 &&
           rel.above.distance < info.totalH - 2) {
         add(Wp(x1 - 18, y0, z1), Wp(x1 - 18, y0, rel.above.to),
-          `↕ ${Math.round(rel.above.distance)}`, DIM_REL)
+          `↕ ${Math.round(rel.above.distance)}`, DIM_REL, 0.5,
+          [
+            { a: [x0, y0, z1], b: [x1, y0, z1], from: 0.67, to: 0.97 },
+            edgeAtZ(rel.above.to, x0, x1, y0, 0.67, 0.97),
+          ])
       }
       if (rel?.below && rel.below.distance > 2 &&
           rel.below.distance < info.totalH - 2) {
         add(Wp(x1 - 18, y0, rel.below.from), Wp(x1 - 18, y0, z0),
-          `↕ ${Math.round(rel.below.distance)}`, DIM_REL)
+          `↕ ${Math.round(rel.below.distance)}`, DIM_REL, 0.5,
+          [
+            { a: [x0, y0, z0], b: [x1, y0, z0], from: 0.67, to: 0.97 },
+            edgeAtZ(rel.below.from, x0, x1, y0, 0.67, 0.97),
+          ])
       }
     }
   }
@@ -666,22 +750,166 @@ function updateDims(): void {
     const abs = relationsFor(info, part)
     if (abs) {
       const gap = Math.max(28, Math.min(60, W * 0.12))
+      // Абсолютные ↓/↑ ведут к левому углу корпуса: подсветка начинается
+      // ровно под линией стрелки и идёт вправо по грани дна/крыши.
+      const absX = el.x - gap * 0.45
+      const absLen = Math.min(140, Math.max(60, info.W * 0.3))
       if (abs.toLeft > 30) {
         add(Wp(0, y0 - gap * 0.45, z0 - gap * 0.3),
-          Wp(el.x, y0 - gap * 0.45, z0 - gap * 0.3), `← ${Math.round(abs.toLeft)}`, DIM_POS)
+          Wp(el.x, y0 - gap * 0.45, z0 - gap * 0.3), `← ${Math.round(abs.toLeft)}`, DIM_POS, 0.5,
+          [{ a: [el.x, y0, z0], b: [el.x, y0, z1], from: 0.36, to: 0.63 }])
       }
       if (abs.toRight > 30) {
         add(Wp(el.x + el.w, y0 - gap * 0.45, z0 - gap * 0.3),
-          Wp(info.W, y0 - gap * 0.45, z0 - gap * 0.3), `→ ${Math.round(abs.toRight)}`, DIM_POS)
+          Wp(info.W, y0 - gap * 0.45, z0 - gap * 0.3), `→ ${Math.round(abs.toRight)}`, DIM_POS, 0.5,
+          [{ a: [el.x + el.w, y0, z0], b: [el.x + el.w, y0, z1], from: 0.05, to: 0.32 }])
       }
       if (abs.toBottom > 2) {
         add(Wp(el.x - gap * 0.45, y0 - gap * 0.2, 0),
-          Wp(el.x - gap * 0.45, y0 - gap * 0.2, el.z), `↓ ${Math.round(abs.toBottom)}`, DIM_POS)
+          Wp(el.x - gap * 0.45, y0 - gap * 0.2, el.z), `↓ ${Math.round(abs.toBottom)}`, DIM_POS, 0.5,
+          [{ a: [absX, y0, 0], b: [absX + absLen, y0, 0], from: 0, to: 1 }])
       }
       if (abs.toTop > 2) {
         add(Wp(el.x - gap * 0.45, y0 - gap * 0.2, el.z),
-          Wp(el.x - gap * 0.45, y0 - gap * 0.2, info.totalH), `↑ ${Math.round(abs.toTop)}`, DIM_POS)
+          Wp(el.x - gap * 0.45, y0 - gap * 0.2, info.totalH), `↑ ${Math.round(abs.toTop)}`, DIM_POS, 0.5,
+          [{ a: [absX, y0, info.totalH], b: [absX + absLen, y0, info.totalH], from: 0, to: 1 }])
       }
+    }
+  }
+  }
+  // Снаружи: расстояния от модуля до стен и соседних объектов. Рисуем в
+  // своей палитре (стена — белая, объект — серая), чтобы не путать с
+  // размерами деталей внутри.
+  if (ui.dimsOuter) {
+    const room = state.project.room
+    const pts = outlinePoints(room)
+    const rMinX = Math.min(...pts.map((p) => p.x))
+    const rMaxX = Math.max(...pts.map((p) => p.x))
+    const rMinY = Math.min(...pts.map((p) => p.y))
+    const rMaxY = Math.max(...pts.map((p) => p.y))
+    const p = inst.params
+    const zStart = inst.z || 0
+    const total = p.mount === 'wall'
+      ? p.H
+      : (p.plinthH || 0) + p.H + (p.worktopT || 0)
+    const zEnd = zStart + total
+    // Внешние расстояния рисуем у нижней плоскости объекта: длинные линии
+    // не перечёркивают фасады и читаются как размеры на плане.
+    const zMid = zStart + 4
+    const box = footprintOf(
+      inst.x, inst.y,
+      d.corpus.W || p.W, d.corpus.D || p.D,
+      inst.rot,
+    )
+    const xMid = box.x + box.w / 2
+    const yMid = box.y + box.d / 2
+    type Outer = {
+      gap: number
+      a: { x: number; y: number; z: number }
+      b: { x: number; y: number; z: number }
+      label: string
+      color: string
+      hint: string
+    }
+    let left: Outer = {
+      gap: box.x - rMinX,
+      a: { x: rMinX, y: yMid, z: zMid },
+      b: { x: box.x, y: yMid, z: zMid },
+      label: `← ${Math.round(box.x - rMinX)}`,
+      color: DIM_OUT_WALL,
+      hint: 'до стены',
+    }
+    let right: Outer = {
+      gap: rMaxX - (box.x + box.w),
+      a: { x: box.x + box.w, y: yMid, z: zMid },
+      b: { x: rMaxX, y: yMid, z: zMid },
+      label: `→ ${Math.round(rMaxX - (box.x + box.w))}`,
+      color: DIM_OUT_WALL,
+      hint: 'до стены',
+    }
+    let back: Outer = {
+      gap: box.y - rMinY,
+      a: { x: xMid, y: rMinY, z: zMid },
+      b: { x: xMid, y: box.y, z: zMid },
+      label: `↑ ${Math.round(box.y - rMinY)}`,
+      color: DIM_OUT_WALL,
+      hint: 'до стены',
+    }
+    let front: Outer = {
+      gap: rMaxY - (box.y + box.d),
+      a: { x: xMid, y: box.y + box.d, z: zMid },
+      b: { x: xMid, y: rMaxY, z: zMid },
+      label: `↓ ${Math.round(rMaxY - (box.y + box.d))}`,
+      color: DIM_OUT_WALL,
+      hint: 'до стены',
+    }
+    for (const o of state.project.instances) {
+      if (o.id === inst.id) continue
+      const od = derived[o.id]
+      const op = o.params
+      const ot = op.mount === 'wall'
+        ? op.H
+        : (op.plinthH || 0) + op.H + (op.worktopT || 0)
+      const oz0 = o.z || 0
+      const oz1 = oz0 + ot
+      if (oz1 <= zStart + 0.5 || oz0 >= zEnd - 0.5) continue
+      const ob = footprintOf(
+        o.x, o.y,
+        od?.corpus.W || op.W, od?.corpus.D || op.D, o.rot,
+      )
+      const name = o.name || 'объект'
+      if (ob.y < box.y + box.d - 0.5 && ob.y + ob.d > box.y + 0.5 &&
+          ob.x + ob.w <= box.x + 0.5) {
+        const gap = box.x - (ob.x + ob.w)
+        if (gap >= 0 && gap < left.gap) {
+          left = { gap, a: { x: ob.x + ob.w, y: yMid, z: zMid },
+            b: { x: box.x, y: yMid, z: zMid },
+            label: `← ${Math.round(gap)}`, color: DIM_OUT_OBJ,
+            hint: `до «${name}»` }
+        }
+      }
+      if (ob.y < box.y + box.d - 0.5 && ob.y + ob.d > box.y + 0.5 &&
+          ob.x >= box.x + box.w - 0.5) {
+        const gap = ob.x - (box.x + box.w)
+        if (gap >= 0 && gap < right.gap) {
+          right = { gap, a: { x: box.x + box.w, y: yMid, z: zMid },
+            b: { x: ob.x, y: yMid, z: zMid },
+            label: `→ ${Math.round(gap)}`, color: DIM_OUT_OBJ,
+            hint: `до «${name}»` }
+        }
+      }
+      if (ob.x < box.x + box.w - 0.5 && ob.x + ob.w > box.x + 0.5 &&
+          ob.y + ob.d <= box.y + 0.5) {
+        const gap = box.y - (ob.y + ob.d)
+        if (gap >= 0 && gap < back.gap) {
+          back = { gap, a: { x: xMid, y: ob.y + ob.d, z: zMid },
+            b: { x: xMid, y: box.y, z: zMid },
+            label: `↑ ${Math.round(gap)}`, color: DIM_OUT_OBJ,
+            hint: `до «${name}»` }
+        }
+      }
+      if (ob.x < box.x + box.w - 0.5 && ob.x + ob.w > box.x + 0.5 &&
+          ob.y >= box.y + box.d - 0.5) {
+        const gap = ob.y - (box.y + box.d)
+        if (gap >= 0 && gap < front.gap) {
+          front = { gap, a: { x: xMid, y: box.y + box.d, z: zMid },
+            b: { x: xMid, y: ob.y, z: zMid },
+            label: `↓ ${Math.round(gap)}`, color: DIM_OUT_OBJ,
+            hint: `до «${name}»` }
+        }
+      }
+    }
+    const all = [left, right, back, front].filter((c) => c.gap > 2)
+    // Показываем только близкие расстояния (до 1,5 м): длинные линии через
+    // всю комнату только мешают. Если рядом ничего нет — одно ближайшее.
+    const near = all.filter((c) => c.gap <= 1500)
+    const show = near.length
+      ? near
+      : all.length
+        ? [all.reduce((a, b) => (a.gap <= b.gap ? a : b))]
+        : []
+    for (const c of show) {
+      add(c.a, c.b, c.label, c.color, 0.5, [], c.hint)
     }
   }
   // Подписи близких размеров не должны наезжать друг на друга.
@@ -718,42 +946,22 @@ function updatePartPill(): void {
   }
 }
 
-/** Рамка выбора: для детали — из рендерера, для модуля — по деталям
- *  из состояния (не зависит от того, успел ли синхронизироваться рендерер). */
-function selectionFrame(): { x: number; y: number; w: number; h: number } | null {
-  if (!renderer) return null
-  const ids = state.selected.length ? state.selected
-    : state.selection ? [state.selection] : []
-  if (!ids.length || (partSelection.instanceId && partSelection.part != null)) {
-    return renderer.selectionScreenBounds()
-  }
-  let minX = Infinity
-  let minY = Infinity
-  let maxX = -Infinity
-  let maxY = -Infinity
-  for (const id of ids) {
-    const inst = state.project.instances.find((i) => i.id === id)
-    const d = inst ? derived[inst.id] : null
-    if (!inst || !d) continue
-    for (const o of d.objects) {
-      for (const [lx, ly, lz] of [
-        [o.x, o.y, o.z], [o.x + o.sx, o.y, o.z],
-        [o.x, o.y + o.sy, o.z], [o.x, o.y, o.z + o.sz],
-        [o.x + o.sx, o.y + o.sy, o.z], [o.x + o.sx, o.y, o.z + o.sz],
-        [o.x, o.y + o.sy, o.z + o.sz],
-        [o.x + o.sx, o.y + o.sy, o.z + o.sz],
-      ] as const) {
-        const w = toWorld(inst, lx, ly, lz)
-        const p = renderer.project(w.x, w.y, w.z)
-        minX = Math.min(minX, p.x)
-        minY = Math.min(minY, p.y)
-        maxX = Math.max(maxX, p.x)
-        maxY = Math.max(maxY, p.y)
-      }
-    }
-  }
-  if (!Number.isFinite(minX)) return renderer.selectionScreenBounds()
-  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+/** Контур выбора: проекция самого объекта (выпуклая оболочка), а не
+ *  прямоугольник вокруг него — обводка идёт строго по выбранной детали. */
+function selectionHull(): { x: number; y: number }[] {
+  const pts = renderer?.selectionScreenHull() ?? []
+  if (pts.length < 3) return pts
+  // Отодвигаем пунктир наружу от детали: иначе он ложится прямо на
+  // цветные подсветки рёбер и перекрывает их.
+  const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length
+  const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length
+  const pad = 7
+  return pts.map((p) => {
+    const dx = p.x - cx
+    const dy = p.y - cy
+    const len = Math.hypot(dx, dy) || 1
+    return { x: p.x + (dx / len) * pad, y: p.y + (dy / len) * pad }
+  })
 }
 
 function controlLoop(t: number): void {
@@ -786,7 +994,7 @@ function controlLoop(t: number): void {
         renderer.setSelectedPart(partSelection.instanceId, partSelection.part)
       }
       renderer.refreshSelectionGlow()
-      selRect.value = selectionFrame()
+      selHull.value = selectionHull()
     }
     // Комнаты меняются редко: пересчёт раз в ~0.4 с достаточен.
     if (t - walkLast > 400) {
@@ -1125,6 +1333,8 @@ function onLookMove(e: PointerEvent): void {
 
 function onDown(e: PointerEvent): void {
   if (!renderer || !canvasEl.value) return
+  renderer.cancelCameraTween()
+  if (!canvasEl.value) return
   // В прогулке/полёте мышь смотрит без зажатой кнопки: клик — захват.
   if ((camMode.value === 'first' || camMode.value === 'fly') &&
       e.pointerType !== 'touch') {
@@ -1145,14 +1355,17 @@ function onDown(e: PointerEvent): void {
   const isInstance = hit?.type === 'instance' && !!hit.instanceId
   const isProp = hit?.type === 'prop' && !!hit.propId
   const canDrag = (isInstance || isProp) && ui.dragMove
+  const mod = e.shiftKey || e.ctrlKey || e.metaKey || e.altKey
   // Выбор — на отпускании, если это был клик, а не вращение камеры.
   // Исключение — режим «Двигать»: там объект нужен выбранным сразу.
   if (canDrag) {
     if (isProp) selectProp(hit.propId!, false)
     if (isInstance) {
-      if (e.shiftKey || e.ctrlKey || e.metaKey) toggleSelection(hit.instanceId!)
-      else if (hit.part != null) selectQuiet(hit.instanceId!)
-      else select(hit.instanceId!)
+      if (mod) toggleSelection(hit.instanceId!)
+      else if (hit.part != null) {
+        selectQuiet(hit.instanceId!)
+        selectPart(hit.instanceId!, hit.part, false)
+      } else select(hit.instanceId!)
       for (const id of state.selected.length ? state.selected : [hit.instanceId!]) {
         const i = state.project.instances.find((x) => x.id === id)
         if (i) starts[id] = { x: i.x, y: i.y }
@@ -1178,7 +1391,7 @@ function onDown(e: PointerEvent): void {
     propStart: prop ? { x: prop.x, y: prop.y } : undefined,
     propGrab: grab ?? undefined,
     move: canDrag,
-    mod: e.shiftKey || e.ctrlKey || e.metaKey,
+    mod,
     startFloor: grab,
     starts,
     dragged: false,
@@ -1211,6 +1424,10 @@ function onMove(e: PointerEvent): void {
   moveSelection(floor.x - down.startFloor.x, floor.y - down.startFloor.y, down.starts)
 }
 
+function onCanvasWheel(): void {
+  renderer?.cancelCameraTween()
+}
+
 function onUp(e: PointerEvent): void {
   activePointers.delete(e.pointerId)
   if (!down || !renderer) return
@@ -1220,6 +1437,9 @@ function onUp(e: PointerEvent): void {
   down = null
   if (wasMove) renderer.orbit.attachControl(canvasEl.value!, true)
   if (moved >= 4) return
+  // В режиме «Двигать» выбор уже сделан на pointerdown — второй раз не
+  // трогаем его, иначе Ctrl/Alt-группа схлопнется в одиночный выбор.
+  if (wasMove) return
   if (d.type === 'wall' && d.wallIndex != null) {
     selectWall(d.wallIndex)
     return
@@ -1242,7 +1462,7 @@ function onUp(e: PointerEvent): void {
   }
   const inst = state.project.instances.find((i) => i.id === d.instanceId)
   if (!inst) return
-  if (!wasMove && d.mod) {
+  if (d.mod) {
     toggleSelection(d.instanceId)
     return
   }
@@ -1254,7 +1474,11 @@ function onUp(e: PointerEvent): void {
   renderer.setMode('orbit')
   if (pivotToInstance(d.instanceId)) orbitPivot.value = 'object'
   if (!isBlueprint.value) {
-    renderer.focusInstance(d.instanceId, 'front', 1, 1)
+    // Если объект уже хорошо виден и вписан — камеру не трогаем: клики по
+    // соседним деталям одного модуля не должны сбивать удобный ракурс.
+    if (!renderer.isInstanceWellFramed(d.instanceId)) {
+      renderer.focusInstance(d.instanceId, 'front', 1, 1)
+    }
   } else {
     setBlueprintPivot('object')
   }
@@ -1394,6 +1618,7 @@ function clearMoveKeys(): void {
 
 watch(() => state.rev, sync)
 watch(() => ui.facades, () => renderer?.markAnimDirty())
+watch(() => [ui.dims3d, ui.dimsOuter] as const, () => renderer?.refreshSelectionBox())
 watch(() => state.project.materials, sync, { deep: true })
 watch(() => state.project.props, sync, { deep: true })
 watch(
@@ -1691,6 +1916,7 @@ onBeforeUnmount(() => {
         @pointerdown="onDown"
         @pointermove="onMove"
         @pointerup="onUp"
+        @wheel.passive="onCanvasWheel"
         @pointercancel="onUp"
         @dblclick="onDoubleClick"
         @dragover.prevent
@@ -1752,33 +1978,40 @@ onBeforeUnmount(() => {
         </span>
       </div>
 
-      <svg v-if="ui.dims3d && dimLines.length" class="view__dims">
+      <svg v-if="(ui.dims3d || ui.dimsOuter) && dimLines.length" class="view__dims">
         <defs>
           <marker
             id="dim-arrow"
             viewBox="0 0 10 10"
             refX="9"
             refY="5"
-            markerWidth="7"
-            markerHeight="7"
+            markerWidth="5.5"
+            markerHeight="5.5"
             orient="auto-start-reverse"
           >
-            <path d="M0,0 L10,5 L0,10 z" fill="#ffbe55" stroke="#0b0d0f" stroke-width="0.8" />
+            <path d="M0,0 L10,5 L0,10 z" fill="#ffbe55" stroke="#0b0d0f" stroke-width="0.6" />
           </marker>
-          <marker id="dim-arrow-h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M0,0 L10,5 L0,10 z" fill="#7fe0c2" stroke="#0b0d0f" stroke-width="0.8" />
+          <marker id="dim-arrow-h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#7fe0c2" stroke="#0b0d0f" stroke-width="0.6" />
           </marker>
-          <marker id="dim-arrow-d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M0,0 L10,5 L0,10 z" fill="#7fb9f0" stroke="#0b0d0f" stroke-width="0.8" />
+          <marker id="dim-arrow-d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#7fb9f0" stroke="#0b0d0f" stroke-width="0.6" />
           </marker>
-          <marker id="dim-arrow-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M0,0 L10,5 L0,10 z" fill="#ffd28a" stroke="#0b0d0f" stroke-width="0.8" />
+          <marker id="dim-arrow-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#ffd28a" stroke="#0b0d0f" stroke-width="0.6" />
           </marker>
-          <marker id="dim-arrow-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M0,0 L10,5 L0,10 z" fill="#d8a6ff" stroke="#0b0d0f" stroke-width="0.8" />
+          <marker id="dim-arrow-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#d8a6ff" stroke="#0b0d0f" stroke-width="0.6" />
+          </marker>
+          <marker id="dim-arrow-wall" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#e9eff5" stroke="#0b0d0f" stroke-width="0.6" />
+          </marker>
+          <marker id="dim-arrow-out" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#aeb9c4" stroke="#0b0d0f" stroke-width="0.6" />
           </marker>
         </defs>
         <g v-for="(d, i) in dimLines" :key="i">
+          <title v-if="d.hint">{{ d.hint }}</title>
           <line
             :x1="d.x1" :y1="d.y1" :x2="d.x2" :y2="d.y2"
             :style="{ stroke: d.color }"
@@ -1786,13 +2019,10 @@ onBeforeUnmount(() => {
             :marker-end="`url(#${d.marker})`"
           />
           <line
+            v-for="(e, ei) in d.edges"
+            :key="ei"
             class="view__dims-edge"
-            :x1="d.e1[0]" :y1="d.e1[1]" :x2="d.e1[2]" :y2="d.e1[3]"
-            :style="{ stroke: d.color }"
-          />
-          <line
-            class="view__dims-edge"
-            :x1="d.e2[0]" :y1="d.e2[1]" :x2="d.e2[2]" :y2="d.e2[3]"
+            :x1="e[0]" :y1="e[1]" :x2="e[2]" :y2="e[3]"
             :style="{ stroke: d.color }"
           />
           <rect
@@ -1809,17 +2039,11 @@ onBeforeUnmount(() => {
       </svg>
 
       <svg
-        v-if="selRect && !state.presentation"
+        v-if="selHull.length && !state.presentation"
         class="view__sel"
         aria-hidden="true"
       >
-        <rect
-          :x="selRect.x - 6"
-          :y="selRect.y - 6"
-          :width="selRect.w + 12"
-          :height="selRect.h + 12"
-          rx="4"
-        />
+        <polygon :points="selHull.map((p) => `${p.x},${p.y}`).join(' ')" />
       </svg>
 
       <button
@@ -1961,7 +2185,8 @@ onBeforeUnmount(() => {
               <button class="tab" :class="{ 'tab--active': state.wallMode === 'low' }" @click="setWallMode('low')">Низкие стены</button>
             </div>
             <div class="view__sheet-row">
-              <button class="tab" :class="{ 'tab--active': ui.dims3d }" @click="ui.dims3d = !ui.dims3d">Размеры</button>
+              <button class="tab" :class="{ 'tab--active': ui.dims3d }" title="Размеры деталей внутри объекта" @click="ui.dims3d = !ui.dims3d">Внутри</button>
+              <button class="tab" :class="{ 'tab--active': ui.dimsOuter }" title="Расстояния до стен и соседних объектов" @click="ui.dimsOuter = !ui.dimsOuter">Снаружи</button>
               <button class="tab" :class="{ 'tab--active': ui.facades }" @click="ui.facades = !ui.facades">Фасады</button>
               <button class="tab" :class="{ 'tab--active': ui.dragMove }" @click="ui.dragMove = !ui.dragMove">Двигать модули</button>
               <button class="tab" :class="{ 'tab--active': ui.onlyRoom }" @click="ui.onlyRoom = !ui.onlyRoom">Только комната</button>

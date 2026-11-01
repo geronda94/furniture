@@ -148,8 +148,8 @@ async function run(profile) {
       // а пользователю важно, что панели действительно скрылись.
       check('мастер-режим включается (панели скрыты)',
         !st.cam.includes('Камера'), st.cam.join(','))
-      check('в мастер-режиме скрыты вкладки «Помещение/Декор»',
-        st.tabs.length === 1, st.tabs.join(','))
+      check('в мастер-режиме вкладки объектов на месте',
+        st.tabs.length === 3, st.tabs.join(','))
       await page.locator('[data-tour="more"]').click().catch(() => {})
       await page.waitForTimeout(400)
       await page.getByText(/Мастер-режим включён/).first().click().catch(() => {})

@@ -75,6 +75,7 @@ let drag: {
   sy: number
   ox: number
   oy: number
+  moved: boolean
 } | null = null
 let panning = false
 let lastX = 0
@@ -653,7 +654,8 @@ function onDown(e: PointerEvent) {
   const hit = pickObject(faces, x, y)
 
   if (hit && e.button === 0) {
-    if (e.shiftKey || e.ctrlKey || e.metaKey) toggleSelection(hit)
+    const mod = e.shiftKey || e.ctrlKey || e.metaKey || e.altKey
+    if (mod) toggleSelection(hit)
     else if (!state.selected.includes(hit)) select(hit)
     const inst = state.project.instances.find((i) => i.id === hit)
     if (inst) {
@@ -665,6 +667,7 @@ function onDown(e: PointerEvent) {
         sy: f[1],
         ox: inst.x,
         oy: inst.y,
+        moved: false,
       }
     }
   } else {
@@ -757,6 +760,7 @@ function onMove(e: PointerEvent) {
     return
   }
   if (drag) {
+    drag.moved = true
     const r = canvasEl.value?.getBoundingClientRect()
     if (!r) return
     const f = screenToFloor(
@@ -800,6 +804,12 @@ function onUp(e?: PointerEvent) {
     return
   }
   if (drag) state.followToken++
+  // Клик без перетаскивания по одному из группы — обычное одиночное
+  // выделение: группа была собрана модификатором, клик её схлопывает.
+  if (drag && !drag.moved && state.selected.length > 1 &&
+      state.selected.includes(drag.id)) {
+    select(drag.id)
+  }
   if (wallDrag && !wallDrag.moved) {
     if (wallDrag.kind === 'opening') selectOpening(wallDrag.id)
     else selectWall(wallDrag.index)

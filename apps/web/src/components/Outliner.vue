@@ -120,7 +120,12 @@ function addItem(wall: number, kind: WallItemKind): void {
   addWallItem(kind, wall)
 }
 function onFolderAdd(folderId: string): void {
-  addToFolder(folderId, state.selected.length ? state.selected : [])
+  addToFolder(
+    folderId,
+    state.selected.length
+      ? state.selected
+      : state.selection ? [state.selection] : [],
+  )
 }
 function floorSelected(): boolean {
   return state.roomSelected && state.roomNode === 'floor'
@@ -155,20 +160,21 @@ function floorSelected(): boolean {
         class="tab" role="tab"
         :class="{ 'tab--active': outlinerTab === 'furniture' }"
         :aria-selected="outlinerTab === 'furniture'"
+        title="Модули и техника"
         @click="outlinerTab = 'furniture'"
       >Мебель ({{ state.project.instances.length }})</button>
       <button
-        v-if="!ui.master"
         class="tab" role="tab"
         :class="{ 'tab--active': outlinerTab === 'room' }"
         :aria-selected="outlinerTab === 'room'"
+        title="Стены, проёмы, окна, двери, розетки, пол и потолок"
         @click="outlinerTab = 'room'"
       >Помещение ({{ walls.length }})</button>
       <button
-        v-if="!ui.master"
         class="tab" role="tab"
         :class="{ 'tab--active': outlinerTab === 'decor' }"
         :aria-selected="outlinerTab === 'decor'"
+        title="Диваны, столы, техника и другие объекты декора"
         @click="outlinerTab = 'decor'"
       >Декор ({{ state.project.props?.length ?? 0 }})</button>
     </div>

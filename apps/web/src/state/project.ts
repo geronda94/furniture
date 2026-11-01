@@ -202,8 +202,10 @@ export const ui = reactive({
   })(),
   /** перемещение модулей мышью по 3D-канвасу (по умолчанию выключено) */
   dragMove: false,
-  /** размеры поверх 3D-канваса */
+  /** размеры деталей поверх 3D-канваса */
   dims3d: true,
+  /** расстояния от модуля до стен и соседних объектов */
+  dimsOuter: false,
   /** единая модалка объекта: быстрые действия или детальный режим */
   object: {
     open: false,
@@ -357,6 +359,13 @@ export const partSelection = reactive<{
   part: number | null
 }>({ instanceId: null, part: null })
 
+/** Снять выбор детали, не трогая выбор объекта. */
+function clearPart(): void {
+  if (partSelection.instanceId == null && partSelection.part == null) return
+  partSelection.instanceId = null
+  partSelection.part = null
+}
+
 /** Показать декоративный объект в 3D (ошибки расстановки по декору). */
 export function focusProp(propId: string): void {
   state.focusInstanceId = null
@@ -371,11 +380,12 @@ export function selectPart(
   part: number | null,
   openModal = true,
 ): void {
-  // Выбор детали — всегда одиночный: активным становится один модуль
-  // и одна деталь внутри него.
+  // Выбор детали — всегда одиночный и исключающий: активна либо деталь,
+  // либо сам объект. Модуль остаётся контекстом в state.selection (панель,
+  // камера), но не в state.selected — иначе подсвечивается и он, и деталь.
   if (part != null && instanceId) {
     state.selection = instanceId
-    state.selected = [instanceId]
+    state.selected = []
   }
   partSelection.instanceId = part == null ? null : instanceId
   partSelection.part = part
@@ -846,6 +856,7 @@ export function selectProp(id: string | null, openPanel = true): void {
   state.propId = id
   state.selection = null
   state.selected = []
+  clearPart()
   state.openingId = null
   state.folderId = null
   state.roomSelected = false
@@ -1047,7 +1058,9 @@ export function selectQuiet(id: string): void {
 
 export function select(id: string | null): void {
   if (id) ensureSolved(id)
-  if (state.selection !== id) selectPart(id ?? '', null)
+  // Обычный клик — всегда одиночное выделение: деталь внутри модуля
+  // снимаем, даже если модуль тот же самый.
+  clearPart()
   state.selection = id
   state.selected = id ? [id] : []
   state.openingId = null
@@ -1102,6 +1115,7 @@ export function selectRoom(
 ): void {
   state.selection = null
   state.selected = []
+  clearPart()
   state.openingId = null
   state.folderId = null
   state.roomSelected = true
@@ -1122,6 +1136,7 @@ export function selectWallItem(wall: number, item: string): void {
 export function selectWall(index: number, openModal = true): void {
   state.selection = null
   state.selected = []
+  clearPart()
   state.openingId = null
   state.propId = null
   state.folderId = null
@@ -1137,6 +1152,7 @@ export function selectOpening(id: string | null, openModal = true): void {
   state.openingId = id
   state.selection = null
   state.selected = []
+  clearPart()
   state.propId = null
   state.folderId = null
   state.roomSelected = false
@@ -1149,6 +1165,7 @@ export function selectOpening(id: string | null, openModal = true): void {
 
 export function selectFolder(id: string | null): void {
   state.folderId = id
+  clearPart()
   if (id && ui.onlyRoom) {
     // Освобождаем расчёт скрытых комнат, чтобы не держать весь проект в памяти.
     const f = state.project.folders.find((x) => x.id === id)
@@ -1174,6 +1191,7 @@ export function selectFolder(id: string | null): void {
 export function clearSelection(): void {
   state.selected = []
   state.selection = null
+  clearPart()
   state.openingId = null
   state.propId = null
   state.folderId = null
@@ -1244,26 +1262,88 @@ export function moveSelection(
  * Повернуть выделение. Группа поворачивается как целое вокруг общего центра:
  * взаимное расположение модулей сохраняется. Один модуль — вокруг себя.
  */
+/** Можно ли поставить модуль в новые координаты, не задев стену/соседа/потолок. */
+export function canPlaceInstance(
+  id: string,
+  patch: { x?: number; y?: number; z?: number },
+): boolean {
+  const inst = state.project.instances.find((i) => i.id === id)
+  if (!inst) return false
+  const x = patch.x ?? inst.x
+  const y = patch.y ?? inst.y
+  const z = Math.max(0, patch.z ?? (inst.z || 0))
+  const p = inst.params
+  const total = p.mount === 'wall'
+    ? p.H
+    : (p.plinthH || 0) + p.H + (p.worktopT || 0)
+  const z1 = z + total
+  if (z1 > state.project.room.h + 0.5) return false
+  // Навесной шкаф ниже 1100 мм — ошибка стандарта (опасно для головы).
+  if (patch.z != null && p.mount === 'wall' && z < 1100) return false
+  if (!roomContains(x, y, p.W, p.D, inst.rot)) return false
+  if (wallBodyHit(x, y, p.W, p.D, inst.rot, z, z1)) return false
+  const r: Box3 = { ...footprintOf(x, y, p.W, p.D, inst.rot), z0: z, z1 }
+  if (state.project.instances.some(
+    (i) => i.id !== id && overlaps(r, footprint(i)),
+  )) return false
+  // Декор (кроме ковра) тоже не должен оказаться внутри модуля.
+  return !(state.project.props ?? []).some((pr) => {
+    if (pr.type === 'rug') return false
+    const pb = propBox(pr.x, pr.y, pr.w, pr.d, pr.rot ?? 0)
+    const pz0 = Number(pr.z) || 0
+    return overlaps(r, { ...pb, z0: pz0, z1: pz0 + (Number(pr.h) || 0) })
+  })
+}
+
 /** Координаты объекта в комнате (X, Y, Z). Z залочен у напольной мебели. */
 export function setInstancePosition(
   id: string,
   patch: { x?: number; y?: number; z?: number },
-): void {
+): boolean {
   const inst = state.project.instances.find((i) => i.id === id)
-  if (!inst) return
+  if (!inst) return false
+  const axis: 'x' | 'y' | 'z' | null =
+    patch.x != null ? 'x' : patch.y != null ? 'y' : patch.z != null ? 'z' : null
+  if (!axis) return false
+  if (axis === 'z' && inst.zLocked) return false
+  const current = axis === 'z' ? (inst.z || 0) : inst[axis]
+  const target = Math.max(0, Math.round(patch[axis]!))
+  if (target === current) return true
+  const fits = (v: number): boolean =>
+    canPlaceInstance(id, { [axis]: v })
+  let best = current
+  if (fits(target)) {
+    best = target
+  } else {
+    // Не влезает — подбираем ближайшее допустимое значение в сторону
+    // запрошенного, чтобы модуль упёрся в стену/соседа, а не прошёл сквозь.
+    const dir = target > current ? 1 : -1
+    for (let v = target; v !== current; v -= dir * 10) {
+      if (fits(v)) {
+        best = v
+        break
+      }
+    }
+  }
+  if (best === current) {
+    notify('Не помещается: стена, потолок или другой объект', null, 'error')
+    return false
+  }
   pushHistory('Позиция модуля')
-  if (patch.x != null) {
-    inst.x = Math.max(0, Math.round(patch.x))
-  }
-  if (patch.y != null) {
-    inst.y = Math.max(0, Math.round(patch.y))
-  }
-  if (patch.z != null && !inst.zLocked) {
-    inst.z = Math.max(0, Math.round(patch.z))
+  if (axis === 'x') inst.x = best
+  else if (axis === 'y') inst.y = best
+  else inst.z = best
+  if (best !== target) {
+    notify(
+      `Ограничено до ${best} мм: упор в стену, потолок или соседа`,
+      null,
+      'error',
+    )
   }
   clearGuides()
   touch()
   scheduleSave()
+  return true
 }
 
 export function toggleZLock(id: string): void {
@@ -2271,6 +2351,67 @@ export function resizeInstance(
   touch()
   scheduleSolve(inst)
   scheduleSave()
+}
+
+/** Можно ли поставить модуль с новыми Ш/В, не задев стену, проём или соседа. */
+export function canResizeModule(
+  id: string,
+  patch: Partial<Pick<Params, 'W' | 'H'>>,
+): boolean {
+  const inst = state.project.instances.find((i) => i.id === id)
+  if (!inst) return false
+  const next = sanitizeParams({ ...inst.params, ...patch })
+  const z0 = inst.z || 0
+  const total = next.mount === 'wall'
+    ? next.H
+    : (next.plinthH || 0) + next.H + (next.worktopT || 0)
+  const z1 = z0 + total
+  // Потолок и высота комнаты.
+  if (z1 > state.project.room.h + 0.5) return false
+  // Габарит в плане: стены, проёмы, другие модули (с учётом высоты).
+  if (!roomContains(inst.x, inst.y, next.W, next.D, inst.rot)) return false
+  if (wallBodyHit(inst.x, inst.y, next.W, next.D, inst.rot, z0, z1)) return false
+  const r: Box3 = { ...footprintOf(inst.x, inst.y, next.W, next.D, inst.rot), z0, z1 }
+  if (state.project.instances.some(
+    (i) => i.id !== id && overlaps(r, footprint(i)),
+  )) return false
+  return !(state.project.props ?? []).some((pr) => {
+    if (pr.type === 'rug') return false
+    const pb = propBox(pr.x, pr.y, pr.w, pr.d, pr.rot ?? 0)
+    const pz0 = Number(pr.z) || 0
+    return overlaps(r, { ...pb, z0: pz0, z1: pz0 + (Number(pr.h) || 0) })
+  })
+}
+
+/**
+ * Изменить габарит модуля с проверкой: не в стену/потолок/другой объект.
+ * Возвращает false, если такой размер не помещается.
+ */
+export function resizeModule(
+  id: string,
+  patch: Partial<Pick<Params, 'W' | 'H'>>,
+): boolean {
+  if (!canResizeModule(id, patch)) return false
+  const inst = state.project.instances.find((i) => i.id === id)
+  if (!inst) return false
+  const next = sanitizeParams({ ...inst.params, ...patch })
+  if (next.W === inst.params.W && next.H === inst.params.H) return true
+  pushHistory('Размер модуля')
+  const managed = MANAGED_PARAMS.filter((k) => k in patch)
+  if (managed.length) {
+    const set = new Set<ManagedParam>(inst.overrides ?? [])
+    for (const k of managed) set.add(k)
+    inst.overrides = [...set]
+  }
+  // При смене ширины число створок подстраиваем под стандарт.
+  if (patch.W != null && patch.H == null && !next.fronts?.length) {
+    next.doors = Math.min(next.doors, suggestDoors(next.W))
+  }
+  inst.params = next
+  touch()
+  scheduleSolve(inst)
+  scheduleSave()
+  return true
 }
 
 export function setPlacement(id: string, x: number, y: number): void {

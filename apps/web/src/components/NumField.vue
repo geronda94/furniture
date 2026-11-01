@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { ref, watch } from 'vue'
+
 const props = defineProps<{
   label: string
   value: number
@@ -6,9 +8,22 @@ const props = defineProps<{
   max?: number
   step?: number
   disabled?: boolean
+  /** Растёт, когда ввод отклонён: вернуть в поле актуальное значение. */
+  rev?: number
 }>()
 
 const emit = defineEmits<{ (e: 'change', value: number): void }>()
+
+const inputEl = ref<HTMLInputElement | null>(null)
+watch(
+  () => [props.value, props.rev] as const,
+  () => {
+    if (inputEl.value && inputEl.value.value !== String(props.value)) {
+      inputEl.value.value = String(props.value)
+    }
+  },
+  { flush: 'post' },
+)
 
 function clampVal(v: number): number {
   const lo = props.min ?? -Infinity
@@ -40,6 +55,7 @@ function commit(e: Event) {
         −
       </button>
       <input
+        ref="inputEl"
         class="numfield__input"
         type="number"
         :min="min"

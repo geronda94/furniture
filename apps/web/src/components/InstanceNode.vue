@@ -44,7 +44,7 @@ watch(selected, (on) => {
 })
 
 function onRow(e: MouseEvent): void {
-  if (e.shiftKey || e.ctrlKey || e.metaKey) toggleSelection(props.inst.id)
+  if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) toggleSelection(props.inst.id)
   else select(props.inst.id)
   revealProps()
 }

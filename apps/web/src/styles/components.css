@@ -2655,6 +2655,10 @@
   align-items: end;
 }
 
+.om__coords--two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .om__z {
   display: flex;
   align-items: flex-end;
@@ -2957,7 +2961,7 @@
 
 .view__dims line {
   stroke: #ffc55d;
-  stroke-width: 3;
+  stroke-width: 2.2;
   stroke-linecap: round;
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.85));
 }
@@ -2971,7 +2975,7 @@
   font-variant-numeric: tabular-nums;
   fill: #fff8e8;
   stroke: rgba(5, 7, 9, 0.95);
-  stroke-width: 4.5px;
+  stroke-width: 3.6px;
   paint-order: stroke fill;
   text-anchor: middle;
   dominant-baseline: middle;
@@ -4323,22 +4327,28 @@ input[type='number'].numfield__input {
   overflow: visible;
 }
 
-.view__sel rect {
+.view__sel rect,
+.view__sel polygon,
+.view__sel polyline {
   fill: none;
-  stroke: #ffbe55;
-  stroke-width: 2.6;
-  stroke-dasharray: 9 5;
+  stroke: #f2bd6a;
+  stroke-width: 2;
+  stroke-dasharray: 8 6;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  opacity: 0.9;
   filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.9));
 }
 
 .view__dims-badge {
   fill: rgba(10, 13, 16, 0.86);
-  stroke-width: 1.2;
+  stroke-width: 1;
 }
 
-/* Мягкая подкраска граней, к которым относятся размеры */
+/* Цветной отрезок прямо по ребру детали: какой грани принадлежит размер */
 .view__dims-edge {
-  stroke-width: 5;
+  stroke-width: 3.6;
   stroke-linecap: round;
-  opacity: 0.3;
+  opacity: 0.88;
+  filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.9));
 }
