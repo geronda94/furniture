@@ -487,7 +487,7 @@ export interface SavedView {
   id: string
   name: string
   camera: Camera
-  wallMode: 'cutaway' | 'low'
+  wallMode: 'cutaway' | 'all'
   viewMode: ViewStyle
 }
 
@@ -543,7 +543,7 @@ export interface Project {
   /** декоративная мебель/сантехника демо-сцены (вне BOM) */
   props?: Prop[]
   /** как показывать стены при открытии проекта */
-  wallMode?: 'cutaway' | 'low'
+  wallMode?: 'cutaway' | 'all'
   /** стартовый ракурс 3D для демо-проекта, градусы */
   camera3d?: { alpha: number; beta: number }
   views: SavedView[]
@@ -1175,7 +1175,7 @@ export function normalizeProject(raw: unknown): Project {
             price_m2: Math.max(0, Number(f.price_m2) || 0),
           }))
       : [],
-    wallMode: d.wallMode === 'low' ? 'low' : 'cutaway',
+    wallMode: d.wallMode === 'all' ? 'all' : 'cutaway',
     camera3d: (() => {
       const c = d.camera3d
       if (!c || typeof c !== 'object') return undefined
@@ -1249,7 +1249,7 @@ export function normalizeProject(raw: unknown): Project {
               distance: Number(v.camera.distance) || 6000,
               fov: Number(v.camera.fov) || 35,
             },
-            wallMode: v.wallMode === 'low' ? 'low' : 'cutaway',
+            wallMode: v.wallMode === 'all' ? 'all' : 'cutaway',
             viewMode: v.viewMode === 'schematic' || v.viewMode === 'blueprint'
               ? v.viewMode
               : 'realistic',

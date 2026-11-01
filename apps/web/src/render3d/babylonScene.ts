@@ -121,7 +121,7 @@ export class BabylonRenderer {
   private matsSig = ''
   private roots = new Map<string, TransformNode>()
   private mode: 'orbit' | 'first' | 'fly' = 'orbit'
-  private wallMode: 'cutaway' | 'low' = 'cutaway'
+  private wallMode: 'cutaway' | 'all' = 'cutaway'
   private selected = ''
   private quality: 'realistic' | 'schematic' | 'blueprint' = 'realistic'
   private clayMats = new Map<string, ShaderMaterial>()
@@ -360,7 +360,6 @@ export class BabylonRenderer {
     this.roomRoot.getChildMeshes().forEach((m) => m.dispose())
     this.roomRoot.dispose()
     this.walls = []
-    this.lowWalls = false
     this.wallDecor = []
     this.ceilingMesh = null
     this.openingMeshes.clear()
@@ -919,7 +918,6 @@ export class BabylonRenderer {
     return this.scene.meshes.length
   }
 
-  private lowWalls = false
   private lastDraws = 0
   private lastFrameId = 0
 
@@ -1813,7 +1811,7 @@ export class BabylonRenderer {
     // потолок показываем только изнутри; сверху в разрезе он закрывает комнату
     if (this.ceilingMesh) {
       this.ceilingMesh.setEnabled(
-        this.wallMode !== 'low' && cam.position.y < this.roomH * MM * 0.98,
+        this.wallMode === 'all' && cam.position.y < this.roomH * MM * 0.98,
       )
     }
     if (!this.walls.length) return
@@ -1824,32 +1822,13 @@ export class BabylonRenderer {
       this.ceilingMesh?.setEnabled(true)
       return
     }
-    if (this.wallMode === 'low') {
-      // «Низкие стены»: не просто показать все, а реально опустить их,
-      // иначе снаружи стена закрывает комнату (серый экран).
-      // roomH уже в миллиметрах.
-      if (!this.lowWalls) {
-        this.lowWalls = true
-        const low = Math.min(1, 1100 / Math.max(1, this.roomH))
-        for (const w of this.walls) {
-          w.mesh.scaling.y = low
-          // Мерж-меши у стен с проёмами имеют разный «нуль»: после сжатия
-          // выравниваем низ каждой стены по полу.
-          w.mesh.computeWorldMatrix(true)
-          const minY = w.mesh.getBoundingInfo().boundingBox.minimumWorld.y
-          w.mesh.position.y -= minY
-        }
-      }
-      for (const w of this.walls) w.mesh.setEnabled(true)
-      this.ceilingMesh?.setEnabled(false)
-      return
-    }
-    if (this.lowWalls) {
-      this.lowWalls = false
+    if (this.wallMode === 'all') {
+      // Все стены полностью: ничего не прячем и не опускаем.
       for (const w of this.walls) {
-        w.mesh.scaling.y = 1
-        w.mesh.position.y = 0
+        if (w.mesh.scaling.y !== 1) w.mesh.scaling.y = 1
+        w.mesh.setEnabled(true)
       }
+      return
     }
     for (const w of this.walls) {
       w.mesh.scaling.y = 1
@@ -2195,7 +2174,7 @@ export class BabylonRenderer {
     return { on: this.blueprint, view: this.bpView, pivot: this.bpPivot }
   }
 
-  setWallMode(mode: 'cutaway' | 'low'): void {
+  setWallMode(mode: 'cutaway' | 'all'): void {
     this.wallMode = mode
   }
 

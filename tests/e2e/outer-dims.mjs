@@ -43,8 +43,11 @@ try {
     .locator('.tree__row--item').click()
   await page.waitForTimeout(800)
 
-  const insideBtn = page.locator('.object-modal .tab', { hasText: 'Внутри' })
-  const outsideBtn = page.locator('.object-modal .tab', { hasText: 'Снаружи' })
+  await page.keyboard.press('Escape').catch(() => {})
+  await page.waitForTimeout(400)
+  const dimGroup = page.locator('.view__group[aria-label="Размеры"]')
+  const insideBtn = dimGroup.locator('.tab', { hasText: 'Внутри' })
+  const outsideBtn = dimGroup.locator('.tab', { hasText: 'Снаружи' })
   check('есть две отдельные кнопки размеров',
     await insideBtn.count() === 1 && await outsideBtn.count() === 1)
 

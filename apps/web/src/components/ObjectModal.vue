@@ -302,20 +302,6 @@ watch(() => ui.object.mode, () => {
           </div>
           <div class="modal__tools">
             <button
-              v-if="inst"
-              class="tab"
-              :class="{ 'tab--active': ui.dims3d }"
-              title="Размеры деталей внутри объекта"
-              @click="ui.dims3d = !ui.dims3d"
-            >Внутри</button>
-            <button
-              v-if="inst"
-              class="tab"
-              :class="{ 'tab--active': ui.dimsOuter }"
-              title="Расстояния до стен и соседних объектов"
-              @click="ui.dimsOuter = !ui.dimsOuter"
-            >Снаружи</button>
-            <button
               v-if="inst && !full"
               class="tab"
               :class="{ 'tab--active': ui.facades }"

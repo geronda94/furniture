@@ -232,7 +232,7 @@ export interface SceneInput {
   width: number
   height: number
   style: ViewStyle
-  wallMode: 'cutaway' | 'low'
+  wallMode: 'cutaway' | 'all'
 }
 
 export interface ShadowSpec {
@@ -322,11 +322,11 @@ function wallQuad(
 
 function roomFaces(
   room: Room,
-  wallMode: 'cutaway' | 'low',
+  wallMode: 'cutaway' | 'all',
   camera: Camera,
 ): FaceInput[] {
   const out: FaceInput[] = []
-  const h = wallMode === 'low' ? Math.min(room.h, 1100) : room.h
+  const h = wallMode === 'cutaway' ? Math.min(room.h, 1100) : room.h
   const wallT = Math.max(40, Math.min(300, room.wallT ?? 100))
   const mid = wallT / 2
   const p = DEFAULT_ROOM

@@ -149,7 +149,7 @@ export const state = reactive({
   } as Camera,
   viewMode: 'realistic' as ViewStyle,
   presentation: false,
-  wallMode: 'cutaway' as 'cutaway' | 'low',
+  wallMode: 'cutaway' as 'cutaway' | 'all',
   guides: { x: null as number | null, y: null as number | null },
   rev: 0,
   fitToken: 0,
@@ -206,6 +206,8 @@ export const ui = reactive({
   dims3d: true,
   /** расстояния от модуля до стен и соседних объектов */
   dimsOuter: false,
+  /** все зазоры между полками/ящиками модуля, а не только у выбранной детали */
+  dimsAll: false,
   /** единая модалка объекта: быстрые действия или детальный режим */
   object: {
     open: false,
@@ -3119,7 +3121,7 @@ export function setViewMode(mode: ViewStyle): void {
   state.viewMode = mode
 }
 
-export function setWallMode(mode: 'cutaway' | 'low'): void {
+export function setWallMode(mode: 'cutaway' | 'all'): void {
   state.wallMode = mode
 }
 
@@ -3163,7 +3165,7 @@ export function applyView(id: string): void {
     distance: v.camera.distance,
     fov: v.camera.fov,
   }
-  state.wallMode = v.wallMode
+  state.wallMode = v.wallMode === 'all' ? 'all' : 'cutaway'
   state.viewMode = v.viewMode
   touch()
 }
@@ -3679,7 +3681,7 @@ export async function init(): Promise<void> {
     const f = state.project.folders.find((x) => x.ids.includes(state.selection!))
     if (f) state.folderId = f.id
   }
-  state.wallMode = state.project.wallMode ?? 'cutaway'
+  state.wallMode = state.project.wallMode === 'all' ? 'all' : 'cutaway'
   state.fitToken++
 
   for (const key of Object.keys(derived)) delete derived[key]

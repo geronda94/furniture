@@ -554,7 +554,7 @@ function toWorld(
 }
 
 function updateDims(): void {
-  if (!renderer || (!ui.dims3d && !ui.dimsOuter) || !state.selection || state.selected.length > 1) {
+  if (!renderer || (!ui.dims3d && !ui.dimsOuter && !ui.dimsAll) || !state.selection || state.selected.length > 1) {
     if (dimLines.value.length) dimLines.value = []
     return
   }
@@ -711,7 +711,7 @@ function updateDims(): void {
     [{ a: [x1, y0, z0], b: [x1, y1, z0], from: 0.02, to: 0.33 }])
   // Относительные размеры: высоты полок в выбранном модуле и просветы
   // до соседних полок у выбранной детали — то, что нужно при проектировании.
-  if (info) {
+  if (!ui.dimsAll && info) {
     if (!el) {
       for (const g of info.shelves) {
         if (g.size <= 2) continue
@@ -777,24 +777,49 @@ function updateDims(): void {
     }
   }
   }
+  // Все зазоры модуля: между всеми полками и ящиками, а не только у
+  // выбранной детали. Абсолютные размеры при этом остаются только у детали.
+  if (ui.dimsAll && info) {
+    const Wmod = d.corpus.W
+    const yMod = 0
+    for (const g of info.shelves) {
+      if (g.size <= 2) continue
+      add(Wp(Wmod - 18, yMod, g.from), Wp(Wmod - 18, yMod, g.to),
+        `↕ ${Math.round(g.size)}`, DIM_REL, 0.5,
+        [
+          edgeAtZ(g.from, 0, Wmod, yMod, 0.67, 0.97),
+          edgeAtZ(g.to, 0, Wmod, yMod, 0.67, 0.97),
+        ])
+    }
+    const fronts = info.elements
+      .filter((e) => e.kind === 'drawerfront')
+      .sort((a, b) => a.z - b.z)
+    for (let i = 0; i < fronts.length - 1; i++) {
+      const lower = fronts[i]
+      const upper = fronts[i + 1]
+      const gap = upper.z - (lower.z + lower.h)
+      if (gap <= 2) continue
+      add(Wp(Wmod - 18, yMod, lower.z + lower.h),
+        Wp(Wmod - 18, yMod, upper.z),
+        `↕ ${Math.round(gap)}`, DIM_REL, 0.5,
+        [
+          edgeAtZ(lower.z + lower.h, 0, Wmod, yMod, 0.67, 0.97),
+          edgeAtZ(upper.z, 0, Wmod, yMod, 0.67, 0.97),
+        ])
+    }
+  }
   // Снаружи: расстояния от модуля до стен и соседних объектов. Рисуем в
   // своей палитре (стена — белая, объект — серая), чтобы не путать с
   // размерами деталей внутри.
   if (ui.dimsOuter) {
     const room = state.project.room
-    const pts = outlinePoints(room)
-    const rMinX = Math.min(...pts.map((p) => p.x))
-    const rMaxX = Math.max(...pts.map((p) => p.x))
-    const rMinY = Math.min(...pts.map((p) => p.y))
-    const rMaxY = Math.max(...pts.map((p) => p.y))
     const p = inst.params
     const zStart = inst.z || 0
     const total = p.mount === 'wall'
       ? p.H
       : (p.plinthH || 0) + p.H + (p.worktopT || 0)
     const zEnd = zStart + total
-    // Внешние расстояния рисуем у нижней плоскости объекта: длинные линии
-    // не перечёркивают фасады и читаются как размеры на плане.
+    // Внешние расстояния рисуем у нижней плоскости объекта.
     const zMid = zStart + 4
     const box = footprintOf(
       inst.x, inst.y,
@@ -811,35 +836,72 @@ function updateDims(): void {
       color: string
       hint: string
     }
+    // Стены и перегородки — реальные препятствия: расстояние считаем до
+    // ближайшей стены вдоль луча, а не по габариту комнаты. Иначе модуль
+    // «видит» объект в другой комнате через стену.
+    const wallSegs = roomWalls(room)
+    const wallGap = (
+      axis: 'x' | 'y',
+      sign: -1 | 1,
+      fixed: number,
+    ): number => {
+      let best = Infinity
+      for (const w of wallSegs) {
+        const ax = w.a.x
+        const ay = w.a.y
+        const bx = w.a.x + w.dx * w.len
+        const by = w.a.y + w.dy * w.len
+        if (axis === 'x') {
+          if (Math.abs(by - ay) < 0.5) continue
+          const t = (fixed - ay) / (by - ay)
+          if (t < 0 || t > 1) continue
+          const x = ax + (bx - ax) * t
+          const d = sign < 0 ? box.x - x : x - (box.x + box.w)
+          if (d >= 0) best = Math.min(best, d)
+        } else {
+          if (Math.abs(bx - ax) < 0.5) continue
+          const t = (fixed - ax) / (bx - ax)
+          if (t < 0 || t > 1) continue
+          const y = ay + (by - ay) * t
+          const d = sign < 0 ? box.y - y : y - (box.y + box.d)
+          if (d >= 0) best = Math.min(best, d)
+        }
+      }
+      return best
+    }
+    const gLeft = wallGap('x', -1, yMid)
+    const gRight = wallGap('x', 1, yMid)
+    const gBack = wallGap('y', -1, xMid)
+    const gFront = wallGap('y', 1, xMid)
     let left: Outer = {
-      gap: box.x - rMinX,
-      a: { x: rMinX, y: yMid, z: zMid },
+      gap: gLeft,
+      a: { x: box.x - gLeft, y: yMid, z: zMid },
       b: { x: box.x, y: yMid, z: zMid },
-      label: `← ${Math.round(box.x - rMinX)}`,
+      label: `← ${Math.round(gLeft)}`,
       color: DIM_OUT_WALL,
       hint: 'до стены',
     }
     let right: Outer = {
-      gap: rMaxX - (box.x + box.w),
+      gap: gRight,
       a: { x: box.x + box.w, y: yMid, z: zMid },
-      b: { x: rMaxX, y: yMid, z: zMid },
-      label: `→ ${Math.round(rMaxX - (box.x + box.w))}`,
+      b: { x: box.x + box.w + gRight, y: yMid, z: zMid },
+      label: `→ ${Math.round(gRight)}`,
       color: DIM_OUT_WALL,
       hint: 'до стены',
     }
     let back: Outer = {
-      gap: box.y - rMinY,
-      a: { x: xMid, y: rMinY, z: zMid },
+      gap: gBack,
+      a: { x: xMid, y: box.y - gBack, z: zMid },
       b: { x: xMid, y: box.y, z: zMid },
-      label: `↑ ${Math.round(box.y - rMinY)}`,
+      label: `↑ ${Math.round(gBack)}`,
       color: DIM_OUT_WALL,
       hint: 'до стены',
     }
     let front: Outer = {
-      gap: rMaxY - (box.y + box.d),
+      gap: gFront,
       a: { x: xMid, y: box.y + box.d, z: zMid },
-      b: { x: xMid, y: rMaxY, z: zMid },
-      label: `↓ ${Math.round(rMaxY - (box.y + box.d))}`,
+      b: { x: xMid, y: box.y + box.d + gFront, z: zMid },
+      label: `↓ ${Math.round(gFront)}`,
       color: DIM_OUT_WALL,
       hint: 'до стены',
     }
@@ -899,16 +961,9 @@ function updateDims(): void {
         }
       }
     }
-    const all = [left, right, back, front].filter((c) => c.gap > 2)
-    // Показываем только близкие расстояния (до 1,5 м): длинные линии через
-    // всю комнату только мешают. Если рядом ничего нет — одно ближайшее.
-    const near = all.filter((c) => c.gap <= 1500)
-    const show = near.length
-      ? near
-      : all.length
-        ? [all.reduce((a, b) => (a.gap <= b.gap ? a : b))]
-        : []
-    for (const c of show) {
+    // Все четыре стороны, если расстояние положительное.
+    for (const c of [left, right, back, front]) {
+      if (!Number.isFinite(c.gap) || c.gap <= 2) continue
       add(c.a, c.b, c.label, c.color, 0.5, [], c.hint)
     }
   }
@@ -1279,7 +1334,7 @@ function addRoom(): void {
   if (f) selectFolder(f.id)
 }
 
-function setWallMode(mode: 'cutaway' | 'low'): void {
+function setWallMode(mode: 'cutaway' | 'all'): void {
   state.wallMode = mode
   renderer?.setWallMode(mode)
   state.rev++
@@ -1618,7 +1673,7 @@ function clearMoveKeys(): void {
 
 watch(() => state.rev, sync)
 watch(() => ui.facades, () => renderer?.markAnimDirty())
-watch(() => [ui.dims3d, ui.dimsOuter] as const, () => renderer?.refreshSelectionBox())
+watch(() => [ui.dims3d, ui.dimsOuter, ui.dimsAll] as const, () => renderer?.refreshSelectionBox())
 watch(() => state.project.materials, sync, { deep: true })
 watch(() => state.project.props, sync, { deep: true })
 watch(
@@ -1874,6 +1929,13 @@ onBeforeUnmount(() => {
           <button class="tab" title="Камера в центр комнаты" @click="centerRoom">Центр</button>
         </div>
 
+        <div class="view__group" role="group" aria-label="Размеры">
+          <span class="view__group-label">Размеры</span>
+          <button class="tab" :class="{ 'tab--active': ui.dims3d }" title="Размеры деталей внутри объекта" @click="ui.dims3d = !ui.dims3d">Внутри</button>
+          <button class="tab" :class="{ 'tab--active': ui.dimsOuter }" title="Расстояния до стен и соседних объектов" @click="ui.dimsOuter = !ui.dimsOuter">Снаружи</button>
+          <button class="tab" :class="{ 'tab--active': ui.dimsAll }" title="Все зазоры между полками и ящиками модуля" @click="ui.dimsAll = !ui.dimsAll">Зазоры</button>
+        </div>
+
         <button v-if="ui.master" class="tab" title="Вписать комнату в кадр" @click="fit('room')">Вписать</button>
         <button class="tab" title="2D-развёртки стен без WebGL" @click="ui.renderMode = 'draft'; ui.draftTab = 'walls'; ui.viewSheetOpen = false">2D-стены</button>
         <button v-if="!ui.master" class="tab view__more" title="Все настройки вида и камеры" @click="viewMore = true">Ещё</button>
@@ -1978,7 +2040,7 @@ onBeforeUnmount(() => {
         </span>
       </div>
 
-      <svg v-if="(ui.dims3d || ui.dimsOuter) && dimLines.length" class="view__dims">
+      <svg v-if="(ui.dims3d || ui.dimsOuter || ui.dimsAll) && dimLines.length" class="view__dims">
         <defs>
           <marker
             id="dim-arrow"
@@ -2067,8 +2129,8 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-if="!state.presentation" class="wallmode">
-        <button class="tab" :class="{ 'tab--active': state.wallMode === 'cutaway' }" @click="setWallMode('cutaway')">Срез</button>
-        <button class="tab" :class="{ 'tab--active': state.wallMode === 'low' }" @click="setWallMode('low')">Низкие</button>
+        <button class="tab" :class="{ 'tab--active': state.wallMode === 'cutaway' }" title="Срез стен: стены перед камерой скрываются — видно объект" @click="setWallMode('cutaway')">◩ Срез</button>
+        <button class="tab" :class="{ 'tab--active': state.wallMode === 'all' }" title="Все стены: показывать стены полностью" @click="setWallMode('all')">▦ Все стены</button>
       </div>
 
       <div
@@ -2181,12 +2243,10 @@ onBeforeUnmount(() => {
               <button class="tab" :class="{ 'tab--active': blueprintPivot === 'object' }" @click="setBlueprintPivot('object')">Ось: объект</button>
             </div>
             <div class="view__sheet-row">
-              <button class="tab" :class="{ 'tab--active': state.wallMode === 'cutaway' }" @click="setWallMode('cutaway')">Срез стен</button>
-              <button class="tab" :class="{ 'tab--active': state.wallMode === 'low' }" @click="setWallMode('low')">Низкие стены</button>
+              <button class="tab" :class="{ 'tab--active': state.wallMode === 'cutaway' }" title="Стены перед камерой скрываются — видно, что внутри" @click="setWallMode('cutaway')">◩ Срез стен</button>
+              <button class="tab" :class="{ 'tab--active': state.wallMode === 'all' }" title="Показывать все стены полностью" @click="setWallMode('all')">▦ Все стены</button>
             </div>
             <div class="view__sheet-row">
-              <button class="tab" :class="{ 'tab--active': ui.dims3d }" title="Размеры деталей внутри объекта" @click="ui.dims3d = !ui.dims3d">Внутри</button>
-              <button class="tab" :class="{ 'tab--active': ui.dimsOuter }" title="Расстояния до стен и соседних объектов" @click="ui.dimsOuter = !ui.dimsOuter">Снаружи</button>
               <button class="tab" :class="{ 'tab--active': ui.facades }" @click="ui.facades = !ui.facades">Фасады</button>
               <button class="tab" :class="{ 'tab--active': ui.dragMove }" @click="ui.dragMove = !ui.dragMove">Двигать модули</button>
               <button class="tab" :class="{ 'tab--active': ui.onlyRoom }" @click="ui.onlyRoom = !ui.onlyRoom">Только комната</button>
