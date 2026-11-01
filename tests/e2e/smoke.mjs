@@ -88,9 +88,12 @@ try {
   const decorCards = page.locator('.add__grid .cat-card')
   check('библиотека декора открылась', await decorCards.count() >= 10,
     String(await decorCards.count()))
+  // Мебель и декор теперь разделены на две вкладки: мебель сцены уходит
+  // в «Мебель», поэтому считаем сумму обеих вкладок.
   const decorCount = async () => {
-    const t = await page.getByRole('tab', { name: /^Декор/ }).innerText()
-    return Number((t.match(/\((\d+)\)/) || [])[1] ?? -1)
+    const tabs = await page.getByRole('tab', { name: /^(Мебель|Декор)/ }).allInnerTexts()
+    return tabs.reduce((s, t) =>
+      s + Number((t.match(/\((\d+)\)/) || [])[1] ?? 0), 0)
   }
   const propsBefore = await decorCount()
   await decorCards.nth(8).click()
