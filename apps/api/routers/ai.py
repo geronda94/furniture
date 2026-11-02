@@ -42,6 +42,9 @@ def _tools() -> list[dict[str, Any]]:
     for t in TOOLS:
         if not t.get("implemented"):
             continue
+        # Эти два — действия панели расстановки, не чата (пока).
+        if t["name"] in ("normalize_layout", "validate"):
+            continue
         out.append({
             "type": "function",
             "function": {

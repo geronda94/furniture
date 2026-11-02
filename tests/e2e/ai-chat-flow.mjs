@@ -28,12 +28,6 @@ try {
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()) })
   page.on('pageerror', (e) => errors.push('pageerror: ' + e.message))
 
-  page.on('request', (r) => {
-    if (r.url().includes('/api/')) console.log('REQ', r.method(), r.url().replace(BASE, ''))
-  })
-  page.on('response', (r) => {
-    if (r.url().includes('/api/')) console.log('RES', r.status(), r.url().replace(BASE, ''))
-  })
   await page.route('**/api/ai/status', (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -94,8 +88,11 @@ try {
   await page.keyboard.press('Escape').catch(() => {})
   await page.waitForTimeout(500)
 
-  const id = await page.evaluate(() =>
-    window.__furnitureDbg.state.project.instances[0]?.id)
+  const { id, originalName, pid } = await page.evaluate(() => {
+    const s = window.__furnitureDbg.state
+    const first = s.project.instances[0]
+    return { id: first?.id, originalName: first?.name, pid: s.projectId }
+  })
   await page.locator('.ai-launcher').click()
   const panel = page.locator('.ai-panel')
   await page.waitForTimeout(800)
@@ -117,6 +114,18 @@ try {
     window.__furnitureDbg.state.project.instances.find((i) => i.id === id)?.name, id)
   check('изменение применено и проект перезагружен', name === 'ИИ-тест',
     String(name))
+  // Вернуть демо-проект в исходное имя, чтобы не засорять окружение.
+  await page.evaluate(async ({ pid, id, name }) => {
+    await fetch(`/api/projects/${pid}/actions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        actions: [{ op: 'update_instance', id, name }],
+        commit: true,
+        strict: true,
+      }),
+    })
+  }, { pid, id, name: originalName })
   check('ошибок консоли нет', errors.length === 0, errors.slice(0, 2).join(' | '))
 } finally {
   await browser.close()

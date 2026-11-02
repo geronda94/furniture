@@ -129,6 +129,24 @@ function serverActions(
       return { actions: [{ op: 'set_room', patch: args.patch || {} }] }
     case 'set_globals':
       return { actions: [{ op: 'set_globals', patch: args.patch || {} }] }
+    case 'update_opening':
+      return { actions: [{ op: 'update_opening', id: args.id, patch: args.patch || {} }] }
+    case 'delete_opening':
+      return { actions: [{ op: 'delete_opening', id: args.id }] }
+    case 'add_wall_item':
+      return { actions: [{ op: 'add_wall_item', ...args }] }
+    case 'update_wall_item':
+      return { actions: [{ op: 'update_wall_item', id: args.id, patch: args.patch || {} }] }
+    case 'delete_wall_item':
+      return { actions: [{ op: 'delete_wall_item', id: args.id }] }
+    case 'add_decor':
+      return { actions: [{ op: 'add_decor', ...args }] }
+    case 'update_decor':
+      return { actions: [{ op: 'update_decor', id: args.id, patch: args.patch || {} }] }
+    case 'delete_decor':
+      return { actions: [{ op: 'delete_decor', id: args.id }] }
+    case 'set_materials':
+      return { actions: [{ op: 'set_materials', materials: args.materials || {} }] }
     case 'preview_actions':
       return {
         actions: Array.isArray(args.actions)

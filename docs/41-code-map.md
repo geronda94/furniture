@@ -34,6 +34,9 @@ UI **не считает** деталировку сам; движок **не з
 | `components/View3D.vue` | 3D-вьюпорт: ввод, камера, размеры, HUD, панели |
 | `components/DimOverlay.vue` | SVG-оверлей размеров (линии, стрелки, подписи) |
 | `components/ObjectModal.vue` | быстрая карточка: положение, размеры модуля, действия |
+| `ai/context.ts` | снимок сцены для ИИ: камера, выделение, комната, объекты, ошибки |
+| `ai/tools.ts` | клиентские инструменты ИИ (камера/выделение/вид/размеры/снимок) |
+| `components/AiChatPanel.vue` | ИИ-чат: сообщения, tool-calls, preview, apply/undo |
 | `components/ModuleWorkbench.vue` | детальный конструктор модуля и вкладки |
 | `components/LayoutPanel.vue` | валидация: список, галочки, физические фиксы |
 | `components/Outliner.vue` | дерево: Мебель / Помещение / Декор |

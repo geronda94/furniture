@@ -112,6 +112,85 @@ def apply_action(doc: dict, act: dict) -> dict:
             o["open"] = bool(act.get("open", False))
         room.setdefault("openings", []).append(o)
         return {"op": op, "id": o["id"]}
+    if op == "update_opening":
+        room = doc.setdefault("room", {})
+        entry = next((o for o in room.get("openings", [])
+                      if o.get("id") == act.get("id")), None)
+        if not entry:
+            raise ValueError(f"нет проёма {act.get('id')}")
+        entry.update(act.get("patch") or {})
+        return {"op": op, "id": entry["id"]}
+    if op == "delete_opening":
+        room = doc.setdefault("room", {})
+        before = len(room.get("openings", []))
+        room["openings"] = [o for o in room.get("openings", [])
+                            if o.get("id") != act.get("id")]
+        return {"op": op, "removed": before - len(room["openings"])}
+    if op == "add_wall_item":
+        kind = act.get("kind", "socket")
+        defaults = {
+            "shelf": (600, 20, 200, 1000),
+            "mirror": (600, 800, 20, 1200),
+            "socket": (80, 80, 12, 300),
+            "switch": (80, 80, 12, 1100),
+        }
+        w0, h0, d0, z0 = defaults.get(kind, (300, 300, 12, 900))
+        item = {
+            "id": new_id("wi"), "kind": kind,
+            "wall": int(act.get("wall", 0)),
+            "x": float(act.get("x", 0)),
+            "z": float(act.get("z", z0)),
+            "w": float(act.get("w", w0)),
+            "h": float(act.get("h", h0)),
+            "depth": float(act.get("depth", d0)),
+        }
+        doc.setdefault("room", {}).setdefault("wallItems", []).append(item)
+        return {"op": op, "id": item["id"]}
+    if op == "update_wall_item":
+        room = doc.setdefault("room", {})
+        item = next((i for i in room.get("wallItems", [])
+                     if i.get("id") == act.get("id")), None)
+        if not item:
+            raise ValueError(f"нет предмета {act.get('id')}")
+        item.update(act.get("patch") or {})
+        return {"op": op, "id": item["id"]}
+    if op == "delete_wall_item":
+        room = doc.setdefault("room", {})
+        before = len(room.get("wallItems", []))
+        room["wallItems"] = [i for i in room.get("wallItems", [])
+                             if i.get("id") != act.get("id")]
+        return {"op": op, "removed": before - len(room["wallItems"])}
+    if op == "add_decor":
+        kind = act.get("type", "plant")
+        prop = {
+            "id": new_id("p"), "type": kind,
+            "name": act.get("name") or "Декор",
+            "x": float(act.get("x", 100)), "y": float(act.get("y", 100)),
+            "z": float(act.get("z", 0)), "rot": float(act.get("rot", 0)),
+            "w": float(act.get("w", 400)), "d": float(act.get("d", 400)),
+            "h": float(act.get("h", 800)),
+            "color": act.get("color") or "#7a8a6a",
+        }
+        if act.get("accent"):
+            prop["accent"] = act["accent"]
+        doc.setdefault("props", []).append(prop)
+        return {"op": op, "id": prop["id"]}
+    if op == "update_decor":
+        prop = next((p for p in doc.get("props", [])
+                     if p.get("id") == act.get("id")), None)
+        if not prop:
+            raise ValueError(f"нет декора {act.get('id')}")
+        prop.update(act.get("patch") or {})
+        return {"op": op, "id": prop["id"]}
+    if op == "delete_decor":
+        before = len(doc.get("props", []))
+        doc["props"] = [p for p in doc.get("props", [])
+                        if p.get("id") != act.get("id")]
+        return {"op": op, "removed": before - len(doc["props"])}
+    if op == "set_materials":
+        mats = doc.setdefault("materials", {})
+        mats.update(act.get("materials") or {})
+        return {"op": op}
     if op == "set_room":
         room = doc.setdefault("room", {})
         room.update(act.get("patch") or {})

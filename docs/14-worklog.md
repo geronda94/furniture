@@ -1155,3 +1155,15 @@ No module named 'reportlab'` → воркер uvicorn падал на каждо
 | BT5 | `openProject(..., preserveView)` — после применения камера/выделение не сбрасываются | ✅ | `state/project.ts` |
 | BT6 | env: `DEEPSEEK_API_KEY`, `AI_BASE_URL`, `AI_MODEL`, лимит `RATE_AI_PER_MIN` | ✅ | `.env.example`, `compose.yaml` |
 | BT7 | Тесты: API status/chat/preview, e2e ai-context/ai-chat | ✅ | `tests/api.py`, `tests/e2e/` |
+
+## BU. Сессия 2026-11-02: DeepSeek-чат и все объекты в инструментах
+
+| # | Задача | Статус | Где |
+|---|---|---|---|
+| BU1 | Чат-панель: launcher, контекст, сообщения, tool-calls, preview-карточка, apply/undo | ✅ | `AiChatPanel.vue`, `ui.aiOpen` |
+| BU2 | Серверный чат: DeepSeek/OpenAI-совместимый, системный промпт, контекст, tools | ✅ | `apps/api/routers/ai.py` |
+| BU3 | Инструменты для проёмов, предметов на стенах, декора и материалов | ✅ | `actions.py`, `ai_tools.py`, `AiChatPanel.vue` |
+| BU4 | Предпросмотр цены быстрый: только изменённые модули | ✅ | `routers/projects.py` |
+| BU5 | Применение: flush → preview → strict actions → reload без сброса камеры; один undo | ✅ | `AiChatPanel.vue`, `openProject(..., preserveView)` |
+| BU6 | e2e `ai-chat` (настройка) и `ai-chat-flow` (mock LLM: tool-call → preview → apply) | ✅ | `tests/e2e/` |
+| BU7 | env: `DEEPSEEK_API_KEY` (или `AI_API_KEY`), `AI_BASE_URL`, `AI_MODEL`; ключ только на сервере | ✅ | `.env.example`, `compose.yaml` |

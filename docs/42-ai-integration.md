@@ -103,9 +103,10 @@
 Реализованы: `add_module`, `update_module`, `delete_module`, `add_opening`,
 `set_room`, `set_globals`, `normalize_layout`, `preview_actions`, `validate`.
 
-Планируются: `update_opening`, `delete_opening`, `add_wall_item`,
+Добавлены: `update_opening`, `delete_opening`, `add_wall_item`,
 `update_wall_item`, `delete_wall_item`, `add_decor`, `update_decor`,
-`delete_decor`, `set_materials`, `apply_template`, `quote`, `export`.
+`delete_decor`, `set_materials`.
+Планируются: `apply_template`, `quote`, `export`.
 
 Правило: каждая операция — типизированная, с JSON Schema, предусловиями и
 человеческим сообщением об ошибке (`docs/32` A1).

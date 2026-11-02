@@ -247,6 +247,16 @@ def main() -> int:
                     len(c.get(f"/api/projects/{pid}").json()
                         .get("instances", [])) == before_count)
         r = c.post(f"/api/projects/{pid}/preview", json={
+            "actions": [{
+                "op": "add_decor", "type": "plant", "name": "Тест-декор",
+                "x": 100, "y": 100,
+            }],
+        })
+        ok &= check("ai: preview декора", r.status_code == 200
+                    and len(r.json().get("changes", {}).get("props", {})
+                            .get("added", [])) == 1)
+
+        r = c.post(f"/api/projects/{pid}/preview", json={
             "actions": [
                 {"op": "add_instance", "preset": "base600"},
                 {"op": "update_instance", "id": "no-such-id", "x": 100},
