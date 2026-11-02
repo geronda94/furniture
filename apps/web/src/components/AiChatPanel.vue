@@ -230,7 +230,7 @@ function previewText(pv: Record<string, any>): string {
     parts.push('декор меняется')
   }
   const d = pv.cost?.delta ?? 0
-  const cur = pv.cost?.after?.currency || ''
+  const cur = pv.cost?.currency || pv.cost?.after?.currency || ''
   return `${parts.join(' · ')}; смета ${d > 0 ? '+' : ''}${d} ${cur}; `
     + `ошибок ${pv.errors ?? 0}, предупреждений ${pv.warnings ?? 0}`
 }

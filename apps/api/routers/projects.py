@@ -136,25 +136,50 @@ def _all_layout_issues(doc: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 
-def _project_cost(doc: dict[str, Any]) -> dict[str, Any]:
-    """Стоимость проекта «как в смете»: сумма total по модулям."""
+def _module_cost(doc: dict[str, Any], inst: dict[str, Any]) -> tuple[float, Any]:
+    """Стоимость одного модуля (total, currency)."""
     cfg, _ = cfg_for_shop(doc.get("shop"))
     globals_ = {k: v for k, v in (doc.get("globals") or {}).items()
                 if k != "autoApply"}
-    total = 0.0
+    product = {**inst, "params": {**globals_,
+                                  **(inst.get("params") or {})}}
+    try:
+        res = solve(product, cfg, market=doc.get("market"),
+                    shop=doc.get("shop"), supplier=doc.get("supplier"))
+    except Exception:
+        return 0.0, None
+    cost = res.get("cost") or {}
+    return float(cost.get("total") or 0), cost.get("currency")
+
+
+def _preview_cost_delta(
+    before: dict[str, Any],
+    after: dict[str, Any],
+    changes: dict[str, Any],
+) -> dict[str, Any]:
+    """Считаем цену только по изменённым модулям — preview быстрый."""
+    b = {str(x.get("id")): x for x in before.get("instances", [])}
+    a = {str(x.get("id")): x for x in after.get("instances", [])}
+    delta = 0.0
     currency = None
-    for inst in doc.get("instances", []):
-        product = {**inst, "params": {**globals_,
-                                      **(inst.get("params") or {})}}
-        try:
-            res = solve(product, cfg, market=doc.get("market"),
-                        shop=doc.get("shop"), supplier=doc.get("supplier"))
-        except Exception:
-            continue
-        cost = res.get("cost") or {}
-        total += float(cost.get("total") or 0)
-        currency = cost.get("currency") or currency
-    return {"total": round(total, 2), "currency": currency}
+    try:
+        for row in changes["instances"]["added"]:
+            cost, cur = _module_cost(after, row)
+            delta += cost
+            currency = cur or currency
+        for row in changes["instances"]["removed"]:
+            cost, cur = _module_cost(before, row)
+            delta -= cost
+            currency = cur or currency
+        for row in changes["instances"]["updated"]:
+            iid = str(row["id"])
+            cost_b, cur = _module_cost(before, b[iid])
+            cost_a, _ = _module_cost(after, a[iid])
+            delta += cost_a - cost_b
+            currency = cur or currency
+    except Exception:
+        pass
+    return {"delta": round(delta, 2), "currency": currency}
 
 
 def _diff_dict(before: dict, after: dict) -> dict[str, Any]:
@@ -217,8 +242,7 @@ def project_preview(pid: str, body: ActionIn, request: Request):
         "materials": _diff_dict(before.get("materials") or {},
                                 after.get("materials") or {}),
     }
-    before_cost = _project_cost(before)
-    after_cost = _project_cost(after)
+    cost = _preview_cost_delta(before, after, changes)
     return {
         "ok": True,
         "committed": False,
@@ -227,12 +251,7 @@ def project_preview(pid: str, body: ActionIn, request: Request):
             "instances": len(after.get("instances", [])),
             "props": len(after.get("props", [])),
         },
-        "cost": {
-            "before": before_cost,
-            "after": after_cost,
-            "delta": round((after_cost.get("total") or 0)
-                           - (before_cost.get("total") or 0), 2),
-        },
+        "cost": cost,
         "issues": issues,
         "errors": len(errors),
         "warnings": len(warnings),
