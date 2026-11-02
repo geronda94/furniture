@@ -303,6 +303,103 @@ def main() -> int:
                     and float(added_wi.get("x") or 0) > 0,
                     str(added_wi.get("x")))
 
+        # --- Коллизии при автопостановке и изменении модуля (BW) ---
+        qpid = f"test-placement-{int(time.time() * 1000):x}"
+        try:
+            qdoc = project("Placement")
+            qdoc["room"].update({
+                "outline": [[0, 0], [3600, 0], [3600, 2800], [0, 2800]],
+                "partitions": [],
+                "openings": [
+                    {"id": "w1", "kind": "window", "wall": 0,
+                     "x": 600, "w": 1200, "z0": 900, "z1": 2300},
+                ],
+                "wallItems": [],
+            })
+            qdoc["instances"] = [{
+                "id": "q1", "name": "Тумба 1", "x": 620, "y": 560,
+                "z": 0, "rot": 180, "params": {
+                    "W": 600, "D": 560, "H": 720, "mount": "floor",
+                    "doors": 1, "plinthH": 100, "worktopT": 38,
+                },
+            }, {
+                "id": "q2", "name": "Тумба 2", "x": 2420, "y": 560,
+                "z": 0, "rot": 180, "params": {
+                    "W": 600, "D": 560, "H": 720, "mount": "floor",
+                    "doors": 1, "plinthH": 100, "worktopT": 38,
+                },
+            }]
+            r = c.put(f"/api/projects/{qpid}", json=qdoc)
+            ok &= check("placement: проект создан", r.status_code == 200)
+
+            for preset, why in (("tall600", "две створки"),
+                                ("wall800", "окно")):
+                r = c.post(f"/api/projects/{qpid}/preview", json={
+                    "actions": [{"op": "add_instance", "preset": preset}],
+                })
+                pvee = r.json() if r.status_code == 200 else {}
+                ok &= check(f"placement: авто {preset} без ошибок ({why})",
+                            r.status_code == 200
+                            and pvee.get("errors") == 0,
+                            f'errors={pvee.get("errors")} {r.text[:80]}')
+
+            def reason(resp):
+                body = resp.json() if resp.content else {}
+                detail = body.get("detail") if isinstance(body, dict) else {}
+                if isinstance(detail, dict):
+                    return detail.get("message", "")
+                return str(detail or body.get("detail") or "")
+
+            r = c.post(f"/api/projects/{qpid}/preview", json={
+                "actions": [{"op": "update_instance", "id": "q1",
+                             "x": -100, "y": 300}],
+            })
+            ok &= check("placement: перенос в стену отклонён",
+                        r.status_code == 422
+                        and "Свободное место" in reason(r), reason(r)[:70])
+
+            r = c.post(f"/api/projects/{qpid}/preview", json={
+                "actions": [{"op": "update_instance", "id": "q1",
+                             "params": {"W": 2000}}],
+            })
+            ok &= check("placement: расширение в соседа отклонено",
+                        r.status_code == 422, reason(r)[:70])
+
+            r = c.post(f"/api/projects/{qpid}/preview", json={
+                "actions": [{"op": "add_instance", "preset": "tall600",
+                             "params": {"H": 3000}}],
+            })
+            ok &= check("placement: выше потолка — отказ с причиной",
+                        r.status_code == 422 and "высоте" in reason(r),
+                        reason(r)[:70])
+
+            r = c.post(f"/api/projects/{qpid}/preview", json={
+                "actions": [{"op": "add_instance", "preset": "base600",
+                             "x": 2000}],
+            })
+            ok &= check("placement: одна координата — понятная ошибка",
+                        r.status_code == 422 and "x и y" in reason(r),
+                        reason(r)[:70])
+        finally:
+            c.delete(f"/api/projects/{qpid}")
+
+        # Все пресеты каталога должны ставиться без ошибок (включая ГОСТ).
+        failed_presets = []
+        for preset in ("base600", "base800", "drawers600",
+                       "drawers-cabinet", "sink800", "wardrobe1200",
+                       "chest900", "nightstand", "tall600", "open600",
+                       "island", "wall600", "wall800", "mix900"):
+            r = c.post(f"/api/projects/{pid}/preview", json={
+                "actions": [{"op": "add_instance", "preset": preset}],
+            })
+            pv = r.json() if r.status_code == 200 else {}
+            if r.status_code != 200 or pv.get("errors") != 0:
+                failed_presets.append(
+                    f'{preset}: {r.status_code} {pv.get("errors")}',
+                )
+        ok &= check("placement: все пресеты без ошибок",
+                    not failed_presets, "; ".join(failed_presets))
+
         r = c.post(f"/api/projects/{pid}/preview", json={
             "actions": [
                 {"op": "add_instance", "preset": "base600"},
@@ -413,6 +510,166 @@ def main() -> int:
                         and "strict" in rules_text)
         finally:
             c.delete(f"/api/projects/{lpid}")
+
+        # --- Полное управление проектом через actions (ИИ-чат) ---
+        rpid = f"test-design-{int(time.time() * 1000):x}"
+        try:
+            ddoc = project("Design")
+            ddoc["room"].update({
+                "outline": [[0, 0], [3600, 0], [3600, 2800], [0, 2800]],
+                "partitions": [], "openings": [], "wallItems": [],
+            })
+            c.put(f"/api/projects/{rpid}", json=ddoc)
+            act = lambda acts: c.post(
+                f"/api/projects/{rpid}/actions",
+                json={"actions": acts, "commit": True, "strict": True})
+
+            r = act([{"op": "resize_room", "w": 4200, "d": 3000,
+                      "h": 2700, "wallT": 100}])
+            doc_room = c.get(f"/api/projects/{rpid}").json()["room"]
+            ok &= check("design: resize_room",
+                        r.status_code == 200
+                        and doc_room["w"] == 4200 and doc_room["d"] == 3000
+                        and len(doc_room["outline"]) == 4,
+                        str(doc_room.get("outline")))
+
+            act([{"op": "resize_room", "w": 4200, "d": 3000,
+                  "shape": "l", "cutW": 1200, "cutD": 1000}])
+            doc_room = c.get(f"/api/projects/{rpid}").json()["room"]
+            ok &= check("design: L-комната", len(doc_room["outline"]) == 6,
+                        str(doc_room.get("outline")))
+            act([{"op": "resize_room", "w": 4200, "d": 3000,
+                  "shape": "rect"}])
+
+            r = act([{"op": "add_opening", "kind": "window", "wall": 0,
+                      "x": 1000, "w": 1500, "z0": 900, "z1": 2200}])
+            doc_room = c.get(f"/api/projects/{rpid}").json()["room"]
+            ok &= check("design: окно", r.status_code == 200
+                        and len(doc_room["openings"]) == 1,
+                        str(doc_room.get("openings")))
+
+            r = c.post(f"/api/projects/{rpid}/preview", json={
+                "actions": [{"op": "add_opening", "kind": "window",
+                             "wall": 0, "x": 4000, "w": 900}],
+            })
+            msg = ((r.json().get("detail") or {}).get("message") or "")
+            ok &= check("design: проём за стеной отклонён",
+                        r.status_code == 422 and "стену" in msg, msg[:70])
+
+            r = act([{"op": "add_partition", "a": [2000, 0],
+                      "b": [2000, 3000]}])
+            doc_room = c.get(f"/api/projects/{rpid}").json()["room"]
+            ok &= check("design: перегородка", r.status_code == 200
+                        and len(doc_room["partitions"]) == 1,
+                        str(doc_room.get("partitions")))
+
+            r = act([{"op": "add_opening", "kind": "window", "wall": 4,
+                      "x": 300, "w": 900, "z0": 900, "z1": 2200}])
+            ok &= check("design: проём в перегородке", r.status_code == 200,
+                        r.text[:80])
+
+            r = c.post(f"/api/projects/{rpid}/preview", json={
+                "actions": [{"op": "delete_partition", "index": 0}],
+            })
+            msg = ((r.json().get("detail") or {}).get("message") or "")
+            ok &= check("design: перегородку с проёмом не удалить",
+                        r.status_code == 422 and "перегородк" in msg,
+                        msg[:70])
+
+            doc = c.get(f"/api/projects/{rpid}").json()
+            oid = doc["room"]["openings"][-1]["id"]
+            act([{"op": "delete_opening", "id": oid}])
+            act([{"op": "delete_partition", "index": 0}])
+            doc_room = c.get(f"/api/projects/{rpid}").json()["room"]
+            ok &= check("design: перегородка удалена",
+                        not doc_room["partitions"])
+
+            r = act([{"op": "add_instance", "preset": "base600"}])
+            inst_id = r.json()["results"][0]["id"]
+            r = act([{"op": "duplicate_instance", "id": inst_id}])
+            layers = c.get(f"/api/projects/{rpid}/layout").json()
+            ok &= check("design: копия модуля",
+                        r.status_code == 200 and layers["errors"] == 0
+                        and len(c.get(f"/api/projects/{rpid}").json()
+                                ["instances"]) == 2,
+                        str(layers.get("issues"))[:120])
+
+            act([{"op": "set_instance_material", "id": inst_id,
+                  "role": "facade",
+                  "patch": {"name": "МДФ графит", "color": "#303030"}}])
+            doc = c.get(f"/api/projects/{rpid}").json()
+            got = next(i for i in doc["instances"] if i["id"] == inst_id)
+            ok &= check("design: материал модуля",
+                        got.get("materials", {}).get("facade", {})
+                        .get("color") == "#303030",
+                        str(got.get("materials")))
+
+            r = act([{"op": "add_folder", "name": "Кухня",
+                      "ids": [inst_id]}])
+            fid = r.json()["results"][0]["id"]
+            doc = c.get(f"/api/projects/{rpid}").json()
+            ok &= check("design: папка", doc["folders"][0]["ids"] == [inst_id],
+                        str(doc.get("folders")))
+            act([{"op": "rename_project", "name": "Проект ИИ"}])
+            ok &= check("design: переименование проекта",
+                        c.get(f"/api/projects/{rpid}").json()["name"]
+                        == "Проект ИИ")
+
+            r = c.post(f"/api/projects/{rpid}/preview", json={
+                "actions": [
+                    {"op": "resize_room", "w": 5000, "d": 3200},
+                    {"op": "add_folder", "name": "Зона 2"},
+                ],
+            })
+            pvd = r.json()
+            ok &= check("design: preview комнаты и папок",
+                        r.status_code == 200
+                        and "w" in pvd["changes"]["room"]
+                        and len(pvd["changes"]["folders"]["added"]) == 1,
+                        str(list(pvd.get("changes", {}).keys())))
+
+            act([{"op": "normalize_layout"}])
+            ok &= check("design: нормализация",
+                        c.get(f"/api/projects/{rpid}/layout").json()
+                        ["errors"] == 0)
+            act([{"op": "delete_folder", "id": fid}])
+            ok &= check("design: папка удалена",
+                        not c.get(f"/api/projects/{rpid}").json()["folders"])
+        finally:
+            c.delete(f"/api/projects/{rpid}")
+
+        fpid = f"test-fix-{int(time.time() * 1000):x}"
+        try:
+            fdoc = project("Fix")
+            fdoc["room"].update({
+                "outline": [[0, 0], [5000, 0], [5000, 4000], [0, 4000]],
+                "partitions": [], "openings": [], "wallItems": [],
+            })
+            c.put(f"/api/projects/{fpid}", json=fdoc)
+            r = c.post(f"/api/projects/{fpid}/actions", json={
+                "actions": [{"op": "add_instance", "preset": "base600",
+                             "params": {"W": 1200, "doors": 1}}],
+                "commit": True, "strict": False,
+            })
+            fid2 = r.json()["results"][0]["id"]
+            lay = c.get(f"/api/projects/{fpid}/layout").json()
+            codes = {i["code"] for i in lay.get("issues", [])}
+            ok &= check("fix: ошибка ширины створки есть",
+                        "std-door-width" in codes, str(codes))
+            r = c.post(f"/api/projects/{fpid}/actions", json={
+                "actions": [{"op": "fix_issues", "issues": [
+                    {"code": "std-door-width", "instance": fid2},
+                    {"code": "std-shelf-span", "instance": fid2},
+                ]}],
+                "commit": True, "strict": False,
+            })
+            lay = c.get(f"/api/projects/{fpid}/layout").json()
+            ok &= check("fix: створки исправлены",
+                        r.status_code == 200
+                        and lay["errors"] == 0,
+                        str([i["code"] for i in lay.get("issues", [])]))
+        finally:
+            c.delete(f"/api/projects/{fpid}")
 
         # Выгрузки для цеха: SVG раскроя, DXF деталей, XLSX.
         for fmt in ("svg", "dxf", "xlsx"):

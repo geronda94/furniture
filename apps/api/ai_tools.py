@@ -1,8 +1,8 @@
 """Каталог инструментов для ИИ-слоя (JSON Schema, без привязки к LLM).
 
 Серверные инструменты меняют проект через /actions (или /preview);
-клиентские — камеру, выделение, вид и размеры в браузере. Модель не пишет
-сырой project.json: только эти операции + preview/strict.
+клиентские — камеру, выделение, вид, проект и чтение состояния в браузере.
+Модель не пишет сырой project.json: только эти операции + preview/strict.
 """
 from __future__ import annotations
 
@@ -21,71 +21,232 @@ def _obj(props: dict[str, Any], required: list[str] | None = None) -> dict:
 NUM = {"type": "number"}
 STR = {"type": "string"}
 BOOL = {"type": "boolean"}
+ARR = {"type": "array", "items": NUM}
+POINTS = {"type": "array", "items": {"type": "array", "items": NUM}}
+OBJ = {"type": "object"}
+
+CONFIRM = {
+    "type": "boolean",
+    "description": "true — человек явно подтвердил удаление/необратимое действие.",
+}
+
+MODULE_PARAMS: dict[str, str] = {
+    "W": "ширина корпуса, мм",
+    "H": "высота корпуса, мм",
+    "D": "глубина корпуса, мм",
+    "mount": "floor | wall — напольный или навесной",
+    "z": "низ модуля от пола, мм (навесной обычно 1450)",
+    "doors": "число створок",
+    "drawers": "число ящиков",
+    "shelves": "число полок",
+    "dividers": "число стоек внутри",
+    "plinthH": "высота цоколя, мм (0 — без цоколя)",
+    "worktopT": "толщина столешницы, мм (0 — без столешницы)",
+    "fronts": "компоновка фасадов сверху вниз: [{type:'doors'|'drawers', count, height?}]",
+    "frame": "inset | overlay — вкладные или накладные фасады",
+    "facadeMaterial": "ldsp | mdf | solid — материал фасадов",
+    "facadeStyle": "handle | push — ручка или push-to-open",
+    "handle": "id ручки из каталога (например bar-128)",
+    "runners": "направляющие (tandem-21 и т.п.)",
+    "t": "толщина ЛДСП, мм",
+    "back": "none | dvp | hdf — задняя стенка",
+    "backT": "толщина задней стенки, мм",
+    "roof": "bool — крышка",
+    "cutouts": "вырезы под мойку/варочную: [{x,y,w,h}]",
+    "edges": "правила кромки: {visible, hidden, byPart}",
+    "hiddenFasteners": "bool — скрытый крепёж",
+}
+
+COORDS = (
+    "Координаты — миллиметры. Комната: x вправо, y в глубину плана, z вверх "
+    "от пола. У модуля x/y — опорный угол подошвы: при rot=0 это левый-"
+    "передний угол, модуль растёт по +x на W и по +y на D; при rot=180 "
+    "модуль растёт по −x, поэтому x — ПРАВЫЙ край. Поворот rot в градусах "
+    "вокруг опорного угла. У декора x/y — центр. Стены нумеруются с 0: "
+    "сначала стены контура, затем перегородки.\n"
+    "Для ряда вдоль стены НЕ задавай x/y: добавляй модули по одному, сервер "
+    "сам поставит их вплотную друг к другу. Если координаты всё же нужны — "
+    "пересчитай край с учётом rot и не загоняй корпус в стену."
+)
+
+GUIDE: list[str] = [
+    "Ты — полноценный конструктор: можешь менять комнату, проёмы, стены, "
+    "перегородки, предметы на стенах, мебель, материалы, раскладку и вид.",
+    "Сначала пойми задачу. Если не хватает размеров/материала/сценария — "
+    "задай ОДИН точный вопрос, не выдумывай числа.",
+    "План действий объясни одной-двумя фразами, затем вызывай инструменты.",
+    "Порядок для комнаты: resize_room → перегородки → проёмы → предметы на "
+    "стенах → мебель. Если добавляешь проём там, где стоит мебель, сначала "
+    "подвинь/удали мебель, потом проём.",
+    "add_module без x/y сам встаёт в свободное место у стены. Указывай x/y "
+    "только если человек назвал точное место.",
+    "Не удаляй объекты без явного подтверждения: передавай confirm=true "
+    "только когда человек попросил удалить.",
+    "За один ответ — не больше 12 операций. Большую задачу дели на шаги: "
+    "комната → мебель → материалы → проверка.",
+    "Любое изменение попадает в предпросмотр; не говори «готово», пока "
+    "человек не нажал «Применить».",
+    "Для вопросов «сколько стоит / какие детали / всё ли хорошо» используй "
+    "get_quote, get_parts, validate — они ничего не меняют.",
+    "Если валидатор дал ошибки — вызови fix_issues с их кодами или предложи "
+    "человеку выбор; не сохраняй проект с errors > 0.",
+    "Материалы: set_materials меняет проект целиком, set_module_material — "
+    "конкретный модуль (роль + патч цвета/названия/рисунка).",
+    "Корпусная мебель с раскроем — add_module. Техника и мягкая мебель "
+    "(вытяжка, холодильник, плита, диван, растение, ТВ) — add_decor: это "
+    "объекты сцены, они не входят в деталировку.",
+    "Новые проекты: project_quickstart (кухня/гардероб/хранение по сценарию) "
+    "или project_create (пустая комната). Текущий проект можно открыть "
+    "через project_open по id из project_list.",
+    "Создание/открытие проекта — отдельный шаг: не смешивай его в одном "
+    "ответе с другими изменениями. Сначала открой проект, дождись "
+    "результата, затем строй комнату и мебель.",
+]
 
 TOOLS: list[dict[str, Any]] = [
+    # ---------- мебель ----------
     {
         "name": "add_module",
         "kind": "server",
-        "action": "add_instance",
         "implemented": True,
-        "description": "Добавить модуль из пресета: base600, base800, drawers600, drawers-cabinet, sink800, wardrobe1200, chest900, nightstand, tall600, open600, island, wall600, wall800, mix900.",
+        "description": (
+            "Добавить мебельный модуль. Пресеты: base600, base800, drawers600, "
+            "drawers-cabinet, sink800, wardrobe1200, chest900, nightstand, "
+            "tall600, open600, island, wall600, wall800, mix900. Можно задать "
+            "свои params (W/H/D, doors/drawers/shelves, mount, plinthH, "
+            "worktopT, fronts, facadeMaterial, handle…). Без x/y сервер сам "
+            "поставит модуль в свободное место у стены."
+        ),
         "schema": _obj({
             "preset": STR, "name": STR, "x": NUM, "y": NUM, "z": NUM,
-            "rot": NUM, "params": {"type": "object"},
+            "rot": NUM, "params": OBJ,
         }),
     },
     {
         "name": "update_module",
         "kind": "server",
-        "action": "update_instance",
         "implemented": True,
-        "description": "Изменить параметры/позицию/поворот модуля по id.",
+        "description": (
+            "Изменить модуль по id: позицию, поворот, имя, любые params "
+            "(габариты, створки/ящики/полки, цоколь, столешница, фасады, "
+            "фурнитура). Геометрия проверяется на коллизии."
+        ),
         "schema": _obj({
             "id": STR, "name": STR, "x": NUM, "y": NUM, "z": NUM,
-            "rot": NUM, "params": {"type": "object"},
+            "rot": NUM, "params": OBJ,
         }, ["id"]),
+    },
+    {
+        "name": "duplicate_module",
+        "kind": "server",
+        "implemented": True,
+        "description": "Скопировать модуль: копия встаёт вплотную или в свободное место.",
+        "schema": _obj({"id": STR, "name": STR}, ["id"]),
     },
     {
         "name": "delete_module",
         "kind": "server",
-        "action": "delete_instance",
         "implemented": True,
-        "description": "Удалить модуль (только после подтверждения человека).",
-        "schema": _obj({"id": STR}, ["id"]),
+        "description": "Удалить модуль. Только при confirm=true.",
+        "schema": _obj({"id": STR, "confirm": CONFIRM}, ["id"]),
+    },
+    # ---------- комната ----------
+    {
+        "name": "resize_room",
+        "kind": "server",
+        "implemented": True,
+        "description": (
+            "Размеры и форма комнаты: w/d/h/wallT в мм, shape 'rect' или 'l' "
+            "(cutW/cutD), либо произвольный контур outline [[x,y],…]. "
+            "Проёмы и предметы на стенах подгоняются; мебель не двигается — "
+            "если она не влезла, валидатор покажет ошибки."
+        ),
+        "schema": _obj({
+            "w": NUM, "d": NUM, "h": NUM, "wallT": NUM,
+            "shape": {"type": "string", "enum": ["rect", "l"]},
+            "cutW": NUM, "cutD": NUM,
+            "outline": POINTS,
+        }),
+    },
+    {
+        "name": "set_room",
+        "kind": "server",
+        "implemented": True,
+        "description": (
+            "Настройки комнаты, не геометрия: пол/потолок (enabled, material, t), "
+            "названия зон и прочие поля room. Размеры/контур — resize_room."
+        ),
+        "schema": _obj({"patch": OBJ}, ["patch"]),
+    },
+    {
+        "name": "add_partition",
+        "kind": "server",
+        "implemented": True,
+        "description": (
+            "Добавить перегородку a=[x,y] → b=[x,y] (мм), wallT. Без координат — "
+            "по центру комнаты от стены до стены."
+        ),
+        "schema": _obj({"a": ARR, "b": ARR, "wallT": NUM}),
+    },
+    {
+        "name": "update_partition",
+        "kind": "server",
+        "implemented": True,
+        "description": "Изменить перегородку по index (0-based) или patch a/b/wallT.",
+        "schema": _obj({"index": NUM, "patch": OBJ}, ["index"]),
+    },
+    {
+        "name": "delete_partition",
+        "kind": "server",
+        "implemented": True,
+        "description": (
+            "Удалить перегородку по index. Если на ней есть проёмы/предметы — "
+            "сначала уберите их."
+        ),
+        "schema": _obj({"index": NUM}, ["index"]),
     },
     {
         "name": "add_opening",
         "kind": "server",
-        "action": "add_opening",
         "implemented": True,
-        "description": "Добавить окно/дверь/арку в стену.",
+        "description": (
+            "Окно/дверь/арка в стене: kind, wall (индекс), x (от начала стены), "
+            "w, z0/z1 для окна. Без x — свободный участок. Не даст поставить "
+            "проём за стену, на другой проём или на мебель."
+        ),
         "schema": _obj({
             "kind": {"type": "string", "enum": ["window", "door", "arch"]},
             "wall": NUM, "x": NUM, "w": NUM, "z0": NUM, "z1": NUM,
+            "hinge": {"type": "string", "enum": ["left", "right"]},
+            "angle": NUM,
         }, ["kind", "wall"]),
     },
     {
         "name": "update_opening",
         "kind": "server",
         "implemented": True,
-        "description": "Изменить проём по id (patch).",
-        "schema": _obj({"id": STR, "patch": {"type": "object"}}, ["id"]),
+        "description": "Изменить проём по id (patch: kind/wall/x/w/z0/z1/hinge/angle).",
+        "schema": _obj({"id": STR, "patch": OBJ}, ["id"]),
     },
     {
         "name": "delete_opening",
         "kind": "server",
         "implemented": True,
-        "description": "Удалить проём по id.",
-        "schema": _obj({"id": STR}, ["id"]),
+        "description": "Удалить проём. Только при confirm=true.",
+        "schema": _obj({"id": STR, "confirm": CONFIRM}, ["id"]),
     },
     {
         "name": "add_wall_item",
         "kind": "server",
         "implemented": True,
-        "description": "Розетка/выключатель/полка/зеркало на стене.",
+        "description": (
+            "Розетка/выключатель/полка/зеркало на стене. Без x — свободное "
+            "место вдоль стены. Проверяются проёмы, мебель и другие предметы."
+        ),
         "schema": _obj({
-            "kind": STR, "wall": NUM, "x": NUM, "z": NUM, "w": NUM,
-            "h": NUM, "depth": NUM,
+            "kind": {"type": "string",
+                     "enum": ["socket", "switch", "shelf", "mirror"]},
+            "wall": NUM, "x": NUM, "z": NUM, "w": NUM, "h": NUM, "depth": NUM,
         }, ["kind", "wall"]),
     },
     {
@@ -93,20 +254,21 @@ TOOLS: list[dict[str, Any]] = [
         "kind": "server",
         "implemented": True,
         "description": "Изменить предмет на стене по id (patch).",
-        "schema": _obj({"id": STR, "patch": {"type": "object"}}, ["id"]),
+        "schema": _obj({"id": STR, "patch": OBJ}, ["id"]),
     },
     {
         "name": "delete_wall_item",
         "kind": "server",
         "implemented": True,
-        "description": "Удалить предмет со стены по id.",
-        "schema": _obj({"id": STR}, ["id"]),
+        "description": "Удалить предмет со стены. Только при confirm=true.",
+        "schema": _obj({"id": STR, "confirm": CONFIRM}, ["id"]),
     },
+    # ---------- декор ----------
     {
         "name": "add_decor",
         "kind": "server",
         "implemented": True,
-        "description": "Добавить декор/мебель сцены (диван, растение, техника).",
+        "description": "Добавить декор/мебель сцены (диван, растение, техника). Без x/y — свободное место.",
         "schema": _obj({
             "type": STR, "name": STR, "x": NUM, "y": NUM, "z": NUM,
             "rot": NUM, "w": NUM, "d": NUM, "h": NUM, "color": STR,
@@ -117,67 +279,229 @@ TOOLS: list[dict[str, Any]] = [
         "kind": "server",
         "implemented": True,
         "description": "Изменить декор по id (patch).",
-        "schema": _obj({"id": STR, "patch": {"type": "object"}}, ["id"]),
+        "schema": _obj({"id": STR, "patch": OBJ}, ["id"]),
     },
     {
         "name": "delete_decor",
         "kind": "server",
         "implemented": True,
-        "description": "Удалить декор по id.",
-        "schema": _obj({"id": STR}, ["id"]),
+        "description": "Удалить декор. Только при confirm=true.",
+        "schema": _obj({"id": STR, "confirm": CONFIRM}, ["id"]),
     },
-    {
-        "name": "set_room",
-        "kind": "server",
-        "action": "set_room",
-        "implemented": True,
-        "description": "Изменить комнату: размеры, контур, перегородки.",
-        "schema": _obj({"patch": {"type": "object"}}, ["patch"]),
-    },
-    {
-        "name": "set_globals",
-        "kind": "server",
-        "action": "set_globals",
-        "implemented": True,
-        "description": "Глобальные параметры проекта (толщина, зазоры, материалы).",
-        "schema": _obj({"patch": {"type": "object"}}, ["patch"]),
-    },
+    # ---------- материалы и глобали ----------
     {
         "name": "set_materials",
         "kind": "server",
         "implemented": True,
-        "description": "Материалы проекта (merge в materials).",
-        "schema": _obj({"materials": {"type": "object"}}),
+        "description": (
+            "Материалы проекта (merge в materials): corpus, facade, worktop, "
+            "plinth, back, drawer. Поля: name, color, accent, pattern, texScale."
+        ),
+        "schema": _obj({"materials": OBJ}, ["materials"]),
     },
+    {
+        "name": "set_module_material",
+        "kind": "server",
+        "implemented": True,
+        "description": (
+            "Материал одного модуля: role (corpus/facade/worktop/plinth/back/"
+            "drawer) + patch (name/color/accent/pattern/texScale)."
+        ),
+        "schema": _obj({
+            "id": STR,
+            "role": {"type": "string",
+                     "enum": ["corpus", "facade", "worktop", "plinth",
+                              "back", "drawer"]},
+            "patch": OBJ,
+        }, ["id", "role", "patch"]),
+    },
+    {
+        "name": "set_globals",
+        "kind": "server",
+        "implemented": True,
+        "description": (
+            "Глобальные параметры проекта: t (толщина), gaps (gapSide/"
+            "gapBetween/gapTop/gapBottom), plinthH, worktopT, hardware, "
+            "facadeMaterial и т.п."
+        ),
+        "schema": _obj({"patch": OBJ}, ["patch"]),
+    },
+    # ---------- раскладка и проверка ----------
     {
         "name": "normalize_layout",
         "kind": "server",
         "implemented": True,
-        "description": "Прижать ряд к стене, уплотнить, развернуть фасады.",
-        "schema": _obj({"fix_decor": BOOL}),
+        "description": "Прижать модули к стенам, закрыть зазоры, развернуть фасады, развести декор.",
+        "schema": _obj({"close_gaps": BOOL, "fix_decor": BOOL}),
+    },
+    {
+        "name": "fix_issues",
+        "kind": "server",
+        "implemented": True,
+        "description": (
+            "Исправить ошибки валидатора: передай issues [{code, instance}] "
+            "(из validate/layout). Что можно — поправит параметрами/позицией, "
+            "затем уплотнит ряд. Небезопасные оставит в skipped."
+        ),
+        "schema": _obj({
+            "issues": {"type": "array", "items": OBJ},
+            "normalize": BOOL,
+        }),
+    },
+    {
+        "name": "rename_project",
+        "kind": "server",
+        "implemented": True,
+        "description": "Переименовать текущий проект.",
+        "schema": _obj({"name": STR}, ["name"]),
+    },
+    # ---------- папки ----------
+    {
+        "name": "add_folder",
+        "kind": "server",
+        "implemented": True,
+        "description": "Создать папку/зону и положить в неё модули (ids).",
+        "schema": _obj({"name": STR, "ids": {"type": "array", "items": STR}}),
+    },
+    {
+        "name": "update_folder",
+        "kind": "server",
+        "implemented": True,
+        "description": "Переименовать папку или заменить состав ids.",
+        "schema": _obj({"id": STR, "name": STR,
+                        "ids": {"type": "array", "items": STR}}, ["id"]),
+    },
+    {
+        "name": "delete_folder",
+        "kind": "server",
+        "implemented": True,
+        "description": "Удалить папку (модули остаются в проекте).",
+        "schema": _obj({"id": STR}, ["id"]),
     },
     {
         "name": "preview_actions",
         "kind": "server",
         "implemented": True,
-        "description": "Применить пакет в памяти: diff, ошибки, цена. Ничего не сохраняет.",
-        "schema": _obj({"actions": {"type": "array", "items": {"type": "object"}}},
+        "description": (
+            "Предпросмотр пакета низкоуровневых операций (op: add_instance, "
+            "update_instance, resize_room, …; НЕ имена инструментов). "
+            "Обычно не нужен: просто вызывай инструменты."
+        ),
+        "schema": _obj({"actions": {"type": "array", "items": OBJ}},
                        ["actions"]),
     },
+    # ---------- чтение состояния (клиент) ----------
     {
         "name": "validate",
-        "kind": "server",
+        "kind": "client",
         "implemented": True,
-        "description": "Проверить проект без сохранения (plan/scene/standards).",
+        "description": (
+            "Проверить текущий проект: ошибки/предупреждения с кодами, "
+            "подсказками fix и auto_fixable. Ничего не меняет."
+        ),
         "schema": _obj({}),
     },
+    {
+        "name": "get_quote",
+        "kind": "client",
+        "implemented": True,
+        "description": "Смета проекта: итог по валютам и стоимость по модулям.",
+        "schema": _obj({}),
+    },
+    {
+        "name": "get_parts",
+        "kind": "client",
+        "implemented": True,
+        "description": "Деталировка модуля: список деталей с размерами (по id или выделенному).",
+        "schema": _obj({"id": STR}),
+    },
+    # ---------- проекты (клиент) ----------
+    {
+        "name": "project_list",
+        "kind": "client",
+        "implemented": True,
+        "description": "Список проектов пользователя (id, имя, дата).",
+        "schema": _obj({}),
+    },
+    {
+        "name": "project_open",
+        "kind": "client",
+        "implemented": True,
+        "description": "Открыть существующий проект по id.",
+        "schema": _obj({"id": STR}, ["id"]),
+    },
+    {
+        "name": "project_create",
+        "kind": "client",
+        "implemented": True,
+        "description": "Создать пустой проект и открыть его (комната по умолчанию).",
+        "schema": _obj({"name": STR}, ["name"]),
+    },
+    {
+        "name": "project_quickstart",
+        "kind": "client",
+        "implemented": True,
+        "description": (
+            "Создать проект «под ключ»: комната + проёмы/розетки + сценарий "
+            "(kitchen/wardrobe/storage) с готовой мебелью. Открывает новый проект."
+        ),
+        "schema": _obj({
+            "name": STR,
+            "room": _obj({
+                "w": NUM, "d": NUM, "h": NUM, "wallT": NUM,
+                "shape": {"type": "string", "enum": ["rect", "l"]},
+                "cutW": NUM, "cutD": NUM,
+            }),
+            "kind": {"type": "string",
+                     "enum": ["kitchen", "wardrobe", "storage"]},
+            "wall": NUM,
+            "openings": {"type": "array", "items": _obj({
+                "kind": {"type": "string", "enum": ["window", "door"]},
+                "wall": NUM, "x": NUM, "w": NUM, "z0": NUM, "z1": NUM,
+            }, ["kind", "wall", "x", "w"])},
+            "sockets": {"type": "array", "items": _obj({
+                "kind": {"type": "string", "enum": ["socket", "switch"]},
+                "wall": NUM, "x": NUM, "z": NUM,
+            }, ["wall", "x"])},
+            "height": NUM,
+        }, ["name", "kind", "wall"]),
+    },
+    {
+        "name": "version_create",
+        "kind": "client",
+        "implemented": True,
+        "description": "Сохранить версию проекта (снимок) с именем.",
+        "schema": _obj({"name": STR}),
+    },
+    {
+        "name": "version_list",
+        "kind": "client",
+        "implemented": True,
+        "description": "Список версий текущего проекта.",
+        "schema": _obj({}),
+    },
+    {
+        "name": "version_restore",
+        "kind": "client",
+        "implemented": True,
+        "description": "Откатить текущий проект к версии по id.",
+        "schema": _obj({"id": STR}, ["id"]),
+    },
+    {
+        "name": "project_delete",
+        "kind": "client",
+        "implemented": True,
+        "description": "Удалить проект по id (кроме текущего). Только при confirm=true.",
+        "schema": _obj({"id": STR, "confirm": CONFIRM}, ["id"]),
+    },
+    # ---------- интерфейс / вид ----------
     {
         "name": "camera_set",
         "kind": "client",
         "implemented": True,
-        "description": "Поставить камеру: угол alpha/beta (град), радиус, цель.",
+        "description": "Поставить камеру: alpha/beta (град), радиус, цель [x,y,z] (метры).",
         "schema": _obj({"alpha": NUM, "beta": NUM, "radius": NUM,
-                        "target": {"type": "array", "items": NUM}}),
+                        "target": ARR}),
     },
     {
         "name": "camera_focus",
@@ -202,6 +526,23 @@ TOOLS: list[dict[str, Any]] = [
         }, ["kind"]),
     },
     {
+        "name": "select_all",
+        "kind": "client",
+        "implemented": True,
+        "description": "Выделить все модули.",
+        "schema": _obj({}),
+    },
+    {
+        "name": "toggle_part",
+        "kind": "client",
+        "implemented": True,
+        "description": "Открыть/закрыть створки или ящики модуля для проверки.",
+        "schema": _obj({
+            "id": STR,
+            "kind": {"type": "string", "enum": ["door", "drawer"]},
+        }, ["id", "kind"]),
+    },
+    {
         "name": "view_mode",
         "kind": "client",
         "implemented": True,
@@ -222,40 +563,103 @@ TOOLS: list[dict[str, Any]] = [
         "name": "dims_set",
         "kind": "client",
         "implemented": True,
-        "description": "Включить/выключить размеры: внутри, снаружи, все зазоры.",
+        "description": "Размеры: внутри, снаружи, все зазоры.",
         "schema": _obj({"inside": BOOL, "outside": BOOL, "gaps": BOOL}),
+    },
+    {
+        "name": "ui_panel",
+        "kind": "client",
+        "implemented": True,
+        "description": (
+            "Открыть/закрыть панель: object (карточка), workbench (конструктор "
+            "модуля), layout (проверка), add (добавить), result, quote, "
+            "versions, settings, plan (2D-план), draft (2D-развёртки), "
+            "presentation, ai."
+        ),
+        "schema": _obj({
+            "panel": {"type": "string",
+                      "enum": ["object", "workbench", "layout", "add",
+                               "result", "quote", "versions", "settings",
+                               "plan", "draft", "presentation", "ai"]},
+            "open": BOOL, "id": STR,
+        }, ["panel"]),
+    },
+    {
+        "name": "undo",
+        "kind": "client",
+        "implemented": True,
+        "description": "Отменить последнее действие.",
+        "schema": _obj({}),
+    },
+    {
+        "name": "redo",
+        "kind": "client",
+        "implemented": True,
+        "description": "Вернуть отменённое действие.",
+        "schema": _obj({}),
+    },
+    {
+        "name": "save",
+        "kind": "client",
+        "implemented": True,
+        "description": "Сохранить проект сейчас.",
+        "schema": _obj({}),
+    },
+    {
+        "name": "export_file",
+        "kind": "client",
+        "implemented": True,
+        "description": "Скачать файл: quote (PDF КП), svg (раскрой), dxf (детали), xlsx (спецификация).",
+        "schema": _obj({"format": {"type": "string",
+                                   "enum": ["quote", "svg", "dxf", "xlsx"]}},
+                       ["format"]),
     },
     {
         "name": "scene_screenshot",
         "kind": "client",
         "implemented": True,
-        "description": "Снимок 3D-канваса для зрения (JPEG data URL, maxWidth).",
+        "description": "Снимок 3D-канваса для человека (JPEG data URL, maxWidth).",
         "schema": _obj({"max_width": NUM}),
     },
 ]
 
 RULES = [
-    "Сначала прочитай контекст: камера, выделение, комната, объекты, ошибки.",
-    "Любое изменение — через preview_actions: покажи diff, ошибки и цену.",
-    "Применяй только после подтверждения человека; один пакет — один undo.",
+    "Сначала прочитай контекст: камера, выделение, комната, стены, объекты, ошибки.",
+    "Любое изменение — через инструменты; сырой project.json не пиши.",
+    "Предпросмотр обязателен: покажи diff, ошибки и цену, не утверждай, что применено.",
     "Не сохраняй проект с errors > 0; используй strict=true.",
     "Не выдумывай размеры и артикулы; бери из контекста/каталога.",
-    "Не удаляй объекты без явного подтверждения.",
-    "Максимум N операций за пакет (по умолчанию 8).",
+    "Полная высота модуля = plinthH + H + worktopT. Для шкафа до потолка "
+    "бери H = высота комнаты − plinthH − worktopT (обычно worktopT=0), "
+    "иначе верх выйдет за потолок.",
+    "Для ряда/кухни не задавай x/y — сервер поставит модули вплотную. "
+    "Меняя ширину у стены, не сдвигай корпус в стену: подбери x/y или "
+    "не задавай их.",
+    "Если validate нашёл ошибки — вызови fix_issues один раз с этими "
+    "ошибками; не смешивай его с другими правками в одном пакете.",
+    "validate проверяет СОХРАНЁННЫЙ проект и не видит неприменённый "
+    "предпросмотр. Не вызывай его, чтобы проверить свой же пакет: ошибки "
+    "пакета покажет предпросмотр, и их можно исправить следующим раундом.",
+    "Не удаляй объекты без явного подтверждения (confirm=true).",
+    "Максимум 12 операций за пакет.",
 ]
 
 
 def tools_payload() -> dict[str, Any]:
-    from .actions import MODULE_PRESETS
+    from .actions import MATERIAL_ROLES, MODULE_PRESETS
     return {
-        "schema": "furniture/ai-tools@1",
+        "schema": "furniture/ai-tools@2",
         "presets": [
             {"key": p["key"], "label": p["label"], "group": p.get("group")}
             for p in MODULE_PRESETS
         ],
+        "module_params": MODULE_PARAMS,
+        "material_roles": sorted(MATERIAL_ROLES),
+        "coords": COORDS,
         "preview": "POST /api/projects/{id}/preview",
         "apply": "POST /api/projects/{id}/actions {commit:true, strict:true}",
-        "context": "камера, выделение, комната, объекты, ошибки — собирает клиент",
+        "context": "камера, выделение, комната, стены, объекты, ошибки — собирает клиент",
         "tools": TOOLS,
         "rules": RULES,
+        "guide": GUIDE,
     }

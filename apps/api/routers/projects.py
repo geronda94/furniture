@@ -241,6 +241,15 @@ def project_preview(pid: str, body: ActionIn, request: Request):
                               after.get("globals") or {}),
         "materials": _diff_dict(before.get("materials") or {},
                                 after.get("materials") or {}),
+        "folders": _diff_lists(before.get("folders") or [],
+                               after.get("folders") or []),
+        "zones": {"before": before.get("zones") or [],
+                  "after": after.get("zones") or []},
+        "project": (
+            {"name": {"before": before.get("name"),
+                      "after": after.get("name")}}
+            if before.get("name") != after.get("name") else {}
+        ),
     }
     cost = _preview_cost_delta(before, after, changes)
     return {

@@ -38,8 +38,7 @@ from .layout import (
 OVERLAP_TOL = 1.5       # допуск на касание, мм
 HEIGHT_TOL = 2.0        # допуск по высоте, мм
 WORKTOP_OVERHANG = 20.0  # столешница выступает вперёд, мм
-MIN_DOOR_SWING = 300.0   # не делать зону открывания меньше 300 мм
-DOOR_SWEEP_SEGMENTS = 12
+DOOR_SWEEP_SEGMENTS = 12  # сегментов дуги на створку
 DOOR_OPEN_ANGLE = 90.0   # градусов; 80–110 — допустимый диапазон
 
 
@@ -347,7 +346,9 @@ def door_sweeps(
         if n <= 0:
             continue
         avail = max(50.0, W - 2 * gap_side - max(0, n - 1) * gap_between)
-        width = max(MIN_DOOR_SWING, avail / n)
+        # Створка не может быть шире своего проёма: иначе зона открывания
+        # вылезает за корпус и «задевает» соседа на ровном месте.
+        width = avail / n
         for j in range(n):
             left = (j % 2 == 0)
             span0 = gap_side + j * (width + gap_between)

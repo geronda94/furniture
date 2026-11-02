@@ -17,6 +17,7 @@ export type AiSelection =
       id: string
       name: string
       params: Record<string, unknown>
+      materials?: Record<string, unknown>
       corpus?: { W: number; H: number; D: number }
       world: { x: number; y: number; z: number; rot: number }
       gaps: { label: string; gap: number; hint: string }[]
@@ -60,9 +61,11 @@ export type AiSceneContext = {
     h: number
     wallT: number
     outline: number
-    partitions: number
-    openings: { id: string; kind: string; wall: number; x: number; w: number; z0: number; z1: number }[]
-    wallItems: { id: string; kind: string; wall: number; x: number; z: number; w: number; h: number }[]
+    outlinePoints: [number, number][]
+    partitions: { a: number[]; b: number[]; wallT?: number }[]
+    walls: { index: number; len: number; outer: boolean }[]
+    openings: { id: string; kind: string; wall: number; x: number; w: number; z0: number; z1: number; hinge?: string; angle?: number }[]
+    wallItems: { id: string; kind: string; wall: number; x: number; z: number; w: number; h: number; depth?: number }[]
   }
   project: {
     instances: {
@@ -81,7 +84,9 @@ export type AiSceneContext = {
     props: { id: string; name: string; type: string; x: number; y: number; z: number; w: number; d: number; h: number; rot: number }[]
     folders: { id: string; name: string; count: number }[]
     globals: Record<string, unknown>
+    zones: string[]
     counts: { instances: number; props: number }
+    cost: { totals: Record<string, number>; solved: number; missing: number }
     truncated: boolean
   }
   issues: {
@@ -147,6 +152,7 @@ function selectionContext(): AiSelection {
         id: inst.id,
         name: inst.name || inst.id,
         params: inst.params as unknown as Record<string, unknown>,
+        materials: inst.materials as unknown as Record<string, unknown> | undefined,
         corpus: derived[inst.id]?.corpus,
         world: { x: inst.x, y: inst.y, z: inst.z || 0, rot: inst.rot },
         gaps: outerDims(
@@ -170,10 +176,33 @@ export function buildSceneContext(renderer: BabylonRenderer): AiSceneContext {
   const open = (room.openings ?? []).map((o) => ({
     id: o.id, kind: o.kind, wall: o.wall, x: o.x, w: o.w,
     z0: o.z0, z1: o.z1,
+    hinge: (o as { hinge?: string }).hinge,
+    angle: (o as { angle?: number }).angle,
   }))
   const wallItems = (room.wallItems ?? []).map((w) => ({
     id: w.id, kind: w.kind, wall: w.wall, x: w.x, z: w.z, w: w.w, h: w.h,
+    depth: (w as { depth?: number }).depth,
   }))
+  const walls = roomWalls(room).map((w) => ({
+    index: w.index, len: Math.round(w.len), outer: w.outer,
+  }))
+  const partitions = (room.partitions ?? []).map((p) => ({
+    a: p.a, b: p.b, wallT: p.wallT,
+  }))
+  const outlinePoints = (room.outline ?? []).map(
+    (p) => [p[0], p[1]] as [number, number],
+  )
+  const costTotals: Record<string, number> = {}
+  let solved = 0
+  for (const inst of state.project.instances) {
+    const c = derived[inst.id]?.cost as
+      | { total_with_vat?: number; total?: number; currency?: string }
+      | undefined
+    if (!c?.currency) continue
+    solved++
+    const value = Number(c.total_with_vat ?? c.total ?? 0)
+    costTotals[c.currency] = (costTotals[c.currency] || 0) + value
+  }
   const maxRows = 80
   const instances = state.project.instances.slice(0, maxRows).map((i) => ({
     id: i.id,
@@ -217,7 +246,9 @@ export function buildSceneContext(renderer: BabylonRenderer): AiSceneContext {
       h: room.h,
       wallT: room.wallT,
       outline: (room.outline ?? []).length,
-      partitions: (room.partitions ?? []).length,
+      outlinePoints,
+      partitions,
+      walls,
       openings: open,
       wallItems,
     },
@@ -226,9 +257,15 @@ export function buildSceneContext(renderer: BabylonRenderer): AiSceneContext {
       props,
       folders,
       globals: state.project.globals as unknown as Record<string, unknown>,
+      zones: state.project.zones ?? [],
       counts: {
         instances: state.project.instances.length,
         props: state.project.props?.length ?? 0,
+      },
+      cost: {
+        totals: costTotals,
+        solved,
+        missing: state.project.instances.length - solved,
       },
       truncated:
         state.project.instances.length > maxRows ||

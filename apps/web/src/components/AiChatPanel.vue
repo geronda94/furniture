@@ -19,12 +19,14 @@ import {
   ui,
   undo,
 } from '../state/project'
+import { isClientTool } from '../ai/tools'
 
 type Bridge = {
   context: () => Record<string, unknown>
   tools: { name: string }[]
   run: (name: string, args: Record<string, unknown>) =>
-    Promise<{ ok: boolean; result?: unknown; error?: string }>
+    Promise<{ ok: boolean; result?: unknown; error?: string;
+      switchTo?: string; switchCopy?: boolean }>
 }
 
 type Bubble = {
@@ -155,6 +157,12 @@ async function send(): Promise<void> {
   busy.value = true
   try {
     await runLoop(api)
+    // Предпросмотр с ошибками: даём модели шанс исправить пакет сам.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const pv = preview.value
+      if (!pv || Number(pv.errors || 0) <= 0) break
+      if (!(await repairPreview(api, pv))) break
+    }
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -162,10 +170,39 @@ async function send(): Promise<void> {
   }
 }
 
-const CLIENT = new Set([
-  'camera_set', 'camera_focus', 'selection_set', 'view_mode',
-  'walls_mode', 'dims_set', 'scene_screenshot',
-])
+async function repairPreview(
+  api: Bridge,
+  pv: Record<string, any>,
+): Promise<boolean> {
+  const issues = (pv.issues || [])
+    .filter((i: { level?: string }) => i.level === 'error')
+    .slice(0, 6)
+  const text = issues.length
+    ? issues.map((i: { code?: string; message?: string; fix?: string }) =>
+      `${i.code || 'error'}: ${i.message || ''}${i.fix ? ` — ${i.fix}` : ''}`)
+      .join('\n')
+    : 'пакет не прошёл проверку'
+  add('system', 'Предпросмотр с ошибками — исправляю автоматически.')
+  add('tool', text, { error: true })
+  apiMessages.value.push({
+    role: 'user',
+    content: 'Предпросмотр вернул ошибки:\n' + text +
+      '\nВерни ПОЛНЫЙ исправленный пакет действий заново (все нужные операции, '
+      + 'не только изменённые). Не задавай вопросов — исправь сам: подбери '
+      + 'позицию/размер, убери лишнее или используй свободное место из '
+      + 'подсказки.',
+  })
+  preview.value = null
+  pending.value = []
+  await runLoop(api)
+  return true
+}
+
+function needConfirm(args: Record<string, any>): string | null {
+  return args.confirm === true
+    ? null
+    : 'удаление нужно подтвердить: попросите человека и повторите с confirm=true'
+}
 
 function serverActions(
   name: string,
@@ -176,50 +213,147 @@ function serverActions(
       return { actions: [{ op: 'add_instance', ...args }] }
     case 'update_module':
       return { actions: [{ op: 'update_instance', ...args }] }
-    case 'delete_module':
+    case 'duplicate_module':
+      return { actions: [{ op: 'duplicate_instance', ...args }] }
+    case 'delete_module': {
+      const no = needConfirm(args)
+      if (no) return { error: no }
       return { actions: [{ op: 'delete_instance', id: args.id }] }
+    }
     case 'add_opening':
       return { actions: [{ op: 'add_opening', ...args }] }
-    case 'set_room':
-      return { actions: [{ op: 'set_room', patch: args.patch || {} }] }
-    case 'set_globals':
-      return { actions: [{ op: 'set_globals', patch: args.patch || {} }] }
     case 'update_opening':
       return { actions: [{ op: 'update_opening', id: args.id, patch: args.patch || {} }] }
-    case 'delete_opening':
+    case 'delete_opening': {
+      const no = needConfirm(args)
+      if (no) return { error: no }
       return { actions: [{ op: 'delete_opening', id: args.id }] }
+    }
+    case 'resize_room':
+      return { actions: [{ op: 'resize_room', ...args }] }
+    case 'set_room':
+      return { actions: [{ op: 'set_room', patch: args.patch || {} }] }
+    case 'add_partition':
+      return { actions: [{ op: 'add_partition', ...args }] }
+    case 'update_partition':
+      return { actions: [{ op: 'update_partition', index: args.index, patch: args.patch || {} }] }
+    case 'delete_partition':
+      return { actions: [{ op: 'delete_partition', index: args.index }] }
     case 'add_wall_item':
       return { actions: [{ op: 'add_wall_item', ...args }] }
     case 'update_wall_item':
       return { actions: [{ op: 'update_wall_item', id: args.id, patch: args.patch || {} }] }
-    case 'delete_wall_item':
+    case 'delete_wall_item': {
+      const no = needConfirm(args)
+      if (no) return { error: no }
       return { actions: [{ op: 'delete_wall_item', id: args.id }] }
+    }
     case 'add_decor':
       return { actions: [{ op: 'add_decor', ...args }] }
     case 'update_decor':
       return { actions: [{ op: 'update_decor', id: args.id, patch: args.patch || {} }] }
-    case 'delete_decor':
+    case 'delete_decor': {
+      const no = needConfirm(args)
+      if (no) return { error: no }
       return { actions: [{ op: 'delete_decor', id: args.id }] }
+    }
+    case 'set_globals':
+      return { actions: [{ op: 'set_globals', patch: args.patch || {} }] }
     case 'set_materials':
       return { actions: [{ op: 'set_materials', materials: args.materials || {} }] }
+    case 'set_module_material':
+      return { actions: [{ op: 'set_instance_material', ...args }] }
+    case 'normalize_layout':
+      return {
+        actions: [{
+          op: 'normalize_layout',
+          close_gaps: args.close_gaps !== false,
+          fix_decor: args.fix_decor !== false,
+        }],
+      }
+    case 'fix_issues':
+      return { actions: [{ op: 'fix_issues', ...args }] }
+    case 'add_folder':
+      return { actions: [{ op: 'add_folder', ...args }] }
+    case 'update_folder':
+      return { actions: [{ op: 'update_folder', ...args }] }
+    case 'delete_folder':
+      return { actions: [{ op: 'delete_folder', id: args.id }] }
+    case 'rename_project':
+      return { actions: [{ op: 'rename_project', name: args.name }] }
     case 'preview_actions':
       return {
         actions: Array.isArray(args.actions)
           ? args.actions as Record<string, unknown>[]
           : [],
       }
-    case 'normalize_layout':
-    case 'validate':
-      return { error: 'Это действие пока доступно в панели расстановки' }
     default:
       return { error: `Инструмент «${name}» пока не реализован` }
   }
 }
 
+const TOOL_LABEL: Record<string, string> = {
+  add_module: 'Добавляю модуль',
+  update_module: 'Меняю модуль',
+  duplicate_module: 'Копирую модуль',
+  delete_module: 'Удаляю модуль',
+  add_opening: 'Добавляю проём',
+  update_opening: 'Меняю проём',
+  delete_opening: 'Удаляю проём',
+  resize_room: 'Меняю комнату',
+  set_room: 'Настраиваю комнату',
+  add_partition: 'Добавляю перегородку',
+  update_partition: 'Меняю перегородку',
+  delete_partition: 'Удаляю перегородку',
+  add_wall_item: 'Вешаю предмет на стену',
+  update_wall_item: 'Меняю предмет на стене',
+  delete_wall_item: 'Снимаю предмет со стены',
+  add_decor: 'Добавляю декор',
+  update_decor: 'Меняю декор',
+  delete_decor: 'Удаляю декор',
+  set_globals: 'Меняю общие параметры',
+  set_materials: 'Меняю материалы',
+  set_module_material: 'Меняю материал модуля',
+  normalize_layout: 'Уплотняю расстановку',
+  fix_issues: 'Исправляю ошибки',
+  add_folder: 'Создаю папку',
+  update_folder: 'Меняю папку',
+  delete_folder: 'Удаляю папку',
+  rename_project: 'Переименовываю проект',
+  validate: 'Проверяю проект',
+  get_quote: 'Считаю смету',
+  get_parts: 'Смотрю деталировку',
+  project_list: 'Смотрю проекты',
+  project_open: 'Открываю проект',
+  project_create: 'Создаю проект',
+  project_quickstart: 'Создаю проект по сценарию',
+  project_delete: 'Удаляю проект',
+  undo: 'Отменяю',
+  redo: 'Возвращаю',
+  save: 'Сохраняю',
+  export_file: 'Готовлю файл',
+  version_create: 'Сохраняю версию',
+  version_list: 'Смотрю версии',
+  version_restore: 'Откатываю версию',
+  ui_panel: 'Открываю панель',
+  toggle_part: 'Открываю фасады',
+  select_all: 'Выделяю всё',
+  camera_set: 'Ставлю камеру',
+  camera_focus: 'Навожу камеру',
+  selection_set: 'Выделяю объект',
+  view_mode: 'Меняю вид',
+  walls_mode: 'Меняю стены',
+  dims_set: 'Настраиваю размеры',
+  scene_screenshot: 'Делаю снимок',
+}
+
 async function runLoop(api: Bridge): Promise<void> {
   let ctx = api.context()
   const staged: Record<string, unknown>[] = []
-  for (let round = 0; round < 4; round++) {
+  let switchTo: string | null = null
+  let switchCopy = true
+  let switchName = ''
+  for (let round = 0; round < 6; round++) {
     const reply = await apiAiChat(apiMessages.value, ctx)
     if (!reply.configured) {
       configured.value = false
@@ -243,8 +377,9 @@ async function runLoop(api: Bridge): Promise<void> {
         args = {}
       }
       const name = call.function.name
+      const label = TOOL_LABEL[name] || name
       let result: Record<string, unknown>
-      if (CLIENT.has(name)) {
+      if (isClientTool(name)) {
         const r = await api.run(name, args)
         if (name === 'scene_screenshot' && r.ok && typeof r.result === 'string') {
           add('tool', 'Снимок сцены', { image: r.result })
@@ -254,16 +389,35 @@ async function runLoop(api: Bridge): Promise<void> {
             ? { ok: true, result: r.result }
             : { ok: false, error: r.error }
         }
-        add('tool', `${name}${r.ok ? '' : ': ошибка'}`)
+        let note = `${label}${r.ok ? '' : ': ошибка'}`
+        if (r.ok && name === 'validate') {
+          const v = r.result as { errors?: number; warnings?: number } | undefined
+          note = `Проверка: ошибок ${v?.errors ?? 0}, предупреждений ${v?.warnings ?? 0}`
+        } else if (r.ok && name === 'get_quote') {
+          const q = r.result as { totals?: Record<string, number> } | undefined
+          const t = Object.entries(q?.totals || {})
+            .map(([cur, sum]) => `${Math.round(sum)} ${cur}`).join(', ')
+          note = `Смета: ${t || 'нет расчёта'}`
+        } else if (r.ok && name === 'get_parts') {
+          const p = r.result as { total?: number } | undefined
+          note = `Деталировка: ${p?.total ?? 0} деталей`
+        }
+        add('tool', note)
+        if (r.switchTo) {
+          switchTo = r.switchTo
+          switchCopy = r.switchCopy !== false
+          const res = r.result as { name?: string } | undefined
+          switchName = res?.name || r.switchTo
+        }
       } else {
         const mapped = serverActions(name, args)
         if (mapped.error) {
           result = { ok: false, error: mapped.error }
-          add('tool', `${name}: ${mapped.error}`, { error: true })
+          add('tool', `${label}: ${mapped.error}`, { error: true })
         } else {
           staged.push(...(mapped.actions || []))
           result = { ok: true, staged: true, actions: mapped.actions?.length ?? 0 }
-          add('tool', `${name}: подготовлено`)
+          add('tool', `${label}: подготовлено`)
         }
       }
       apiMessages.value.push({
@@ -273,10 +427,37 @@ async function runLoop(api: Bridge): Promise<void> {
         content: JSON.stringify(result),
       })
     }
+    if (switchTo) break
     ctx = api.context()
   }
-  if (staged.length > 8) {
-    error.value = 'За один раз не больше 8 операций — разбейте на несколько шагов'
+  if (switchTo) {
+    preview.value = null
+    pending.value = []
+    if (staged.length) {
+      add('system', 'Пакет отменён: проект сменился — повторите действия в новом проекте.',
+        { error: true })
+    }
+    if (switchCopy) {
+      // Новый проект: переносим диалог в его историю и открываем.
+      add('system', `Открыт проект «${switchName}».`)
+      try {
+        localStorage.setItem(`furniture.ai.chat.${switchTo}`, JSON.stringify({
+          bubbles: bubbles.value.map((b) => ({
+            id: b.id, role: b.role, text: b.text, tools: b.tools, error: b.error,
+          })),
+          apiMessages: apiMessages.value,
+        }))
+      } catch { /* ignore */ }
+      await openProject(switchTo)
+    } else {
+      // Существующий проект: показываем его собственную историю.
+      await openProject(switchTo)
+      add('system', `Открыт проект «${state.project.name}».`)
+    }
+    return
+  }
+  if (staged.length > 12) {
+    error.value = 'За один раз не больше 12 операций — разбейте на несколько шагов'
     return
   }
   if (staged.length) await showPreview(staged)
@@ -290,22 +471,46 @@ async function showPreview(actions: Record<string, unknown>[]): Promise<void> {
     return
   }
   const pid = state.projectId
-  const pv = await apiPreviewProject(pid, actions)
-  preview.value = pv
+  try {
+    preview.value = await apiPreviewProject(pid, actions)
+  } catch (e) {
+    // Атомарный отказ сервера — тоже показываем как ошибку пакета, чтобы
+    // модель могла исправить его в следующем раунде.
+    const message = e instanceof Error ? e.message : String(e)
+    preview.value = {
+      errors: 1,
+      warnings: 0,
+      issues: [{ code: 'preview', level: 'error', message }],
+      changes: {},
+      cost: { delta: 0, currency: '' },
+    }
+  }
 }
 
 function previewText(pv: Record<string, any>): string {
   const ch = pv.changes || {}
   const inst = ch.instances || {}
   const props = ch.props || {}
+  const room = ch.room || {}
+  const folders = ch.folders || {}
   const parts = [
     `+${inst.added?.length || 0} модулей`,
     `−${inst.removed?.length || 0}`,
     `изменено ${inst.updated?.length || 0}`,
   ]
   if (props.added?.length || props.removed?.length || props.updated?.length) {
-    parts.push('декор меняется')
+    parts.push('декор')
   }
+  const roomBits: string[] = []
+  if ('outline' in room || 'w' in room || 'd' in room || 'h' in room) {
+    roomBits.push('габариты')
+  }
+  if ('openings' in room) roomBits.push('проёмы')
+  if ('partitions' in room) roomBits.push('перегородки')
+  if ('wallItems' in room) roomBits.push('предметы на стенах')
+  if (roomBits.length) parts.push(`комната: ${roomBits.join(', ')}`)
+  if (folders.added?.length || folders.removed?.length) parts.push('папки')
+  if (ch.project?.name) parts.push('название')
   const d = pv.cost?.delta ?? 0
   const cur = pv.cost?.currency || pv.cost?.after?.currency || ''
   return `${parts.join(' · ')}; смета ${d > 0 ? '+' : ''}${d} ${cur}; `
@@ -395,10 +600,12 @@ function parseIssues(pv: Record<string, any>): string[] {
       <div v-if="!bubbles.length" class="ai-empty">
         <p>Опишите, что сделать. Я вижу камеру, выделение и проект.</p>
         <div class="ai-chips">
-          <button @click="quick('Расширь выделенный модуль на 10 см')">Шире на 10 см</button>
-          <button @click="quick('Заполни зазор выделенного модуля до стены')">Заполнить зазор</button>
-          <button @click="quick('Добавь рядом модуль 600')">Добавить модуль</button>
-          <button @click="quick('Поменяй фасад выделенного модуля на МДФ')">Фасад на МДФ</button>
+          <button @click="quick('Создай проект: комната 4×3 м, окно 1.5 м и дверь 0.9 м')">Комната 4×3</button>
+          <button @click="quick('Построй кухню вдоль свободной стены')">Кухня</button>
+          <button @click="quick('Сделай шкаф до потолка шириной 2 метра')">Шкаф до потолка</button>
+          <button @click="quick('Добавь ящики в выделенный модуль и поставь ручки')">Ящики и ручки</button>
+          <button @click="quick('Проверь проект и исправь ошибки')">Проверить и исправить</button>
+          <button @click="quick('Сколько стоит проект?')">Смета</button>
         </div>
       </div>
       <div v-for="b in bubbles" :key="b.id" class="ai-msg" :class="`is-${b.role}`">

@@ -32,6 +32,7 @@
 | Доступ из браузера для отладки | `window.__furnitureAI` (`?perf=1` / dev) | ✅ |
 | LLM-провайдер (DeepSeek, OpenAI-совместимый) | `apps/api/routers/ai.py` | ✅ |
 | Чат-панель | `components/AiChatPanel.vue` | ✅ v1 (без стриминга) |
+| Полное управление: комната, стены, проёмы, мебель, материалы, проекты | `docs/43-ai-chat-full-control.md` | ✅ |
 
 Контекст и инструменты уже проверяются e2e `tests/e2e/ai-context.mjs`.
 
@@ -100,21 +101,26 @@
 
 ### Серверные (меняют проект)
 
-Реализованы: `add_module`, `update_module`, `delete_module`, `add_opening`,
-`set_room`, `set_globals`, `normalize_layout`, `preview_actions`, `validate`.
-
-Добавлены: `update_opening`, `delete_opening`, `add_wall_item`,
-`update_wall_item`, `delete_wall_item`, `add_decor`, `update_decor`,
-`delete_decor`, `set_materials`.
-Планируются: `apply_template`, `quote`, `export`.
+Полный каталог и матрица возможностей — `docs/43-ai-chat-full-control.md`.
+Коротко: `add/update/duplicate/delete_module`, `resize_room`, `set_room`,
+`add/update/delete_partition`, `add/update/delete_opening`,
+`add/update/delete_wall_item`, `add/update/delete_decor`,
+`set_materials`, `set_module_material`, `set_globals`,
+`add/update/delete_folder`, `rename_project`, `normalize_layout`,
+`fix_issues`, `preview_actions`.
 
 Правило: каждая операция — типизированная, с JSON Schema, предусловиями и
 человеческим сообщением об ошибке (`docs/32` A1).
 
-### Клиентские (не меняют проект)
+### Клиентские (браузер)
 
-`camera_set`, `camera_focus`, `selection_set`, `view_mode`, `walls_mode`,
-`dims_set`, `scene_screenshot`.
+Вид: `camera_set`, `camera_focus`, `selection_set`, `select_all`,
+`toggle_part`, `view_mode`, `walls_mode`, `dims_set`, `ui_panel`,
+`scene_screenshot`.
+Проекты: `project_list`, `project_open`, `project_create`,
+`project_quickstart`, `project_delete`.
+Чтение/история/файлы: `validate`, `get_quote`, `get_parts`, `undo`, `redo`,
+`save`, `export_file`, `version_create`, `version_list`, `version_restore`.
 
 Они выполняются в браузере через `runAiTool(name, args, renderer)`.
 
@@ -194,11 +200,14 @@ LLM tool_call
    `/preview`, strict actions, API-тесты.
 2. **Сделано (v1):** `POST /api/ai/chat` с DeepSeek, панель чата, tool-calls,
    предпросмотр, apply/undo; 5 базовых команд.
-3. **Следующее:** стриминг, подсветка изменений, больше операций
-   (стены/декор/материалы), фото/план.
+3. **Сделано:** полное управление комнатой, стенами, мебелью, материалами,
+   проектами, проверкой и сметой (`docs/43`). Осталось: стриминг, фото/план,
+   материал отдельной детали, отделка/виды/версии.
 4. Фото/план как черновик (vision + `add_module/update_module`).
 5. Вместимость v1 (простые объёмы внутри модуля).
-6. 20 eval-сценариев, замеры, пилот.
+6. **Сделано:** `tools/ai_eval.py` — 20 сценариев, прогон 20/20 на
+   DeepSeek, 0 испорченных сохранений (`docs/ai-eval-report.md`). Дальше —
+   пилот на реальных проектах и расширение набора.
 
 ## 11. Чего не делать
 
