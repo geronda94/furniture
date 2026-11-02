@@ -220,6 +220,10 @@ async function runLoop(api: Bridge): Promise<void> {
     }
     ctx = api.context()
   }
+  if (staged.length > 8) {
+    error.value = 'За один раз не больше 8 операций — разбейте на несколько шагов'
+    return
+  }
   if (staged.length) await showPreview(staged)
 }
 
