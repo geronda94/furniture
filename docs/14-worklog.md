@@ -1130,3 +1130,16 @@ No module named 'reportlab'` → воркер uvicorn падал на каждо
 | BR2 | Размерная разметка вынесена из `View3D.vue`: типы, палитра, внешние расстояния, SVG-оверлей | ✅ | `dims/`, `components/DimOverlay.vue` |
 | BR3 | Геометрия ручек вынесена из `babylonScene.ts` в отдельный модуль | ✅ | `render3d/handles.ts` |
 | BR4 | Проверки: tsc, сборка, selection/outer-dims/validation/smoke/workbench/ui-audit, все e2e | ✅ | прод |
+
+## BS. Сессия 2026-11-02: фундамент ИИ — контекст, инструменты, preview
+
+| # | Задача | Статус | Где |
+|---|---|---|---|
+| BS1 | Снимок сцены для ИИ: камера, выделение (модуль/деталь/стена/проём/декор), комната, объекты, ошибки; компактно и с усечением | ✅ | `ai/context.ts` |
+| BS2 | Клиентские инструменты: камера, фокус, выделение, вид, стены, размеры, снимок канваса | ✅ | `ai/tools.ts` |
+| BS3 | Renderer отдаёт `cameraState()` и JPEG-снимок для зрения | ✅ | `babylonScene.ts` |
+| BS4 | Каталог инструментов для LLM: JSON Schema, серверные/клиентские, правила, реализовано/план | ✅ | `apps/api/ai_tools.py`, `GET /api/ai/tools` |
+| BS5 | Предпросмотр пакета: атомарно, diff, ошибки, цена, ничего не сохраняет | ✅ | `POST /api/projects/{pid}/preview` |
+| BS6 | API-тесты: tools, preview diff, атомарность, без сохранения | ✅ | `tests/api.py` |
+| BS7 | Дизайн внедрения ИИ: провайдер, чат, карточки, diff, undo, eval, безопасность | ✅ | `docs/42-ai-integration.md` |
+| BS8 | e2e `ai-context`: контекст, выделение, камера, снимок, tools | ✅ | `tests/e2e/ai-context.mjs` |

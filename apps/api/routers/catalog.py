@@ -120,6 +120,13 @@ def pricing_options(
     }
 
 
+@router.get("/api/ai/tools")
+def ai_tools():
+    """JSON Schema инструментов для ИИ-чата/агента."""
+    from ..ai_tools import tools_payload
+    return tools_payload()
+
+
 @router.get("/api/ai/guide")
 def ai_guide():
     """Короткая инструкция для ИИ-агента: что можно и как."""
@@ -127,6 +134,7 @@ def ai_guide():
         "schema": SCHEMA,
         "endpoints": {
             "GET /api/catalog": "пресеты, толщины, материалы корпуса, правила",
+            "GET /api/ai/tools": "JSON Schema инструментов и правила для ИИ",
             "GET /api/shop": "профиль цеха (плита, кромки, лист, зазоры)",
             "GET /api/hardware": "фурнитура, крепёж, полкодержатели, кромка",
             "GET /api/pricing/options": "рынки, цеха, поставщики, активный прайс",

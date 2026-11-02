@@ -3228,6 +3228,48 @@ export class BabylonRenderer {
     return lower.concat(upper)
   }
 
+  /** Состояние камеры для ИИ-контекста (углы в градусах, цель в метрах). */
+  cameraState(): {
+    alphaDeg: number
+    betaDeg: number
+    radius: number
+    target: [number, number, number]
+    projection: string
+    mode: string
+    quality: string
+    wallMode: string
+    blueprint: boolean
+    blueprintView: string
+  } {
+    const c = this.orbit
+    return {
+      alphaDeg: Math.round((c.alpha * 180) / Math.PI * 10) / 10,
+      betaDeg: Math.round((c.beta * 180) / Math.PI * 10) / 10,
+      radius: Math.round(c.radius * 100) / 100,
+      target: [c.target.x, c.target.y, c.target.z],
+      projection: this.projection,
+      mode: this.mode,
+      quality: this.quality,
+      wallMode: this.wallMode,
+      blueprint: this.blueprint,
+      blueprintView: this.bpView,
+    }
+  }
+
+  /** JPEG-снимок канваса для зрения ИИ (data URL, уменьшенный). */
+  snapshot(maxWidth = 960): string | null {
+    const src = this.canvas
+    if (!src || !src.width || !src.height) return null
+    const scale = Math.min(1, maxWidth / src.width)
+    const out = document.createElement('canvas')
+    out.width = Math.max(1, Math.round(src.width * scale))
+    out.height = Math.max(1, Math.round(src.height * scale))
+    const ctx = out.getContext('2d')
+    if (!ctx) return null
+    ctx.drawImage(src, 0, 0, out.width, out.height)
+    return out.toDataURL('image/jpeg', 0.72)
+  }
+
   project(x: number, y: number, z: number): { x: number; y: number } {
     const cam = this.scene.activeCamera ?? this.orbit
     const v = Vector3.Project(

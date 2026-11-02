@@ -306,7 +306,15 @@ export const derived = reactive<Record<string, SolveResponse>>({})
 export const layoutState = reactive({
   errors: 0,
   warnings: 0,
-  issues: [] as { code: string; level: string; message: string }[],
+  issues: [] as {
+    code: string
+    level: string
+    message: string
+    instance?: string | null
+    prop?: string | null
+    fix?: string
+    auto_fixable?: boolean
+  }[],
   busy: false,
   checkedAt: 0,
 })

@@ -30,6 +30,8 @@ import {
 import PlanView from './PlanView.vue'
 import CameraPad from './CameraPad.vue'
 import { moduleInfo, relationsFor } from '../module/info'
+import { buildSceneContext } from '../ai/context'
+import { CLIENT_TOOLS, runAiTool } from '../ai/tools'
 import { outlinePoints, roomWalls } from '../render25d/room'
 import { footprintOf } from '../state/geometry'
 import DimOverlay from './DimOverlay.vue'
@@ -1672,6 +1674,17 @@ onMounted(async () => {
     const { BabylonRenderer } = await import('../render3d/babylonScene')
     if (!canvasEl.value) return
     renderer = new BabylonRenderer(canvasEl.value)
+    if (perfOn || import.meta.env.DEV) {
+      const ai = {
+        context: () => (renderer ? buildSceneContext(renderer) : null),
+        tools: CLIENT_TOOLS,
+        run: (name: string, args: Record<string, unknown> = {}) =>
+          renderer
+            ? runAiTool(name, args, renderer)
+            : Promise.resolve({ ok: false, error: 'renderer не готов' }),
+      }
+      ;(window as unknown as Record<string, unknown>).__furnitureAI = ai
+    }
     if (perfOn) {
       ;(window as unknown as Record<string, unknown>).__furnitureRenderer = renderer
       ;(window as unknown as Record<string, unknown>).__furnitureDbg = {

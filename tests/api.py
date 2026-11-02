@@ -214,6 +214,38 @@ def main() -> int:
         ok &= check("actions: глобальная толщина унаследована",
                     inst["params"].get("t") == 16)
 
+        tools = c.get("/api/ai/tools")
+        tj = tools.json()
+        ok &= check("ai: tools endpoint",
+                    tools.status_code == 200
+                    and any(t["name"] == "add_module" for t in tj.get("tools", []))
+                    and any(t["kind"] == "client" for t in tj.get("tools", [])),
+                    f'{len(tj.get("tools", []))} инструментов')
+
+        before_count = len(c.get(f"/api/projects/{pid}").json()
+                             .get("instances", []))
+        r = c.post(f"/api/projects/{pid}/preview", json={
+            "actions": [{"op": "add_instance", "preset": "base800"}],
+        })
+        pv = r.json()
+        ok &= check("ai: preview diff",
+                    r.status_code == 200
+                    and len(pv["changes"]["instances"]["added"]) == 1
+                    and pv["cost"]["delta"] > 0,
+                    f'delta={pv.get("cost", {}).get("delta")}')
+        ok &= check("ai: preview ничего не сохранил",
+                    len(c.get(f"/api/projects/{pid}").json()
+                        .get("instances", [])) == before_count)
+        r = c.post(f"/api/projects/{pid}/preview", json={
+            "actions": [
+                {"op": "add_instance", "preset": "base600"},
+                {"op": "update_instance", "id": "no-such-id", "x": 100},
+            ],
+        })
+        ok &= check("ai: preview атомарный", r.status_code == 422
+                    and len(c.get(f"/api/projects/{pid}").json()
+                            .get("instances", [])) == before_count)
+
         r = c.post(f"/api/projects/{pid}/actions", json={
             "actions": [
                 {"op": "add_instance", "preset": "base800"},

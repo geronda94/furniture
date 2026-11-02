@@ -1,6 +1,8 @@
 """Проекты: CRUD, снимки, расстановка, preflight и strict-сохранение."""
 from __future__ import annotations
 
+import copy
+
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -131,6 +133,111 @@ def _all_layout_issues(doc: dict[str, Any]) -> list[dict[str, Any]]:
         seen.add(key)
         out.append(issue)
     return out
+
+
+
+def _project_cost(doc: dict[str, Any]) -> dict[str, Any]:
+    """Стоимость проекта «как в смете»: сумма total по модулям."""
+    cfg, _ = cfg_for_shop(doc.get("shop"))
+    globals_ = {k: v for k, v in (doc.get("globals") or {}).items()
+                if k != "autoApply"}
+    total = 0.0
+    currency = None
+    for inst in doc.get("instances", []):
+        product = {**inst, "params": {**globals_,
+                                      **(inst.get("params") or {})}}
+        try:
+            res = solve(product, cfg, market=doc.get("market"),
+                        shop=doc.get("shop"), supplier=doc.get("supplier"))
+        except Exception:
+            continue
+        cost = res.get("cost") or {}
+        total += float(cost.get("total") or 0)
+        currency = cost.get("currency") or currency
+    return {"total": round(total, 2), "currency": currency}
+
+
+def _diff_dict(before: dict, after: dict) -> dict[str, Any]:
+    keys = set(before) | set(after)
+    keys.discard("id")
+    changed: dict[str, Any] = {}
+    for k in sorted(keys):
+        if before.get(k) != after.get(k):
+            changed[k] = {"before": before.get(k), "after": after.get(k)}
+    return changed
+
+
+def _diff_lists(before: list, after: list, key: str = "id") -> dict[str, Any]:
+    b = {str(x.get(key)): x for x in before}
+    a = {str(x.get(key)): x for x in after}
+    added = [a[i] for i in a if i not in b]
+    removed = [b[i] for i in b if i not in a]
+    updated = []
+    for i in a:
+        if i not in b:
+            continue
+        changed = _diff_dict(b[i], a[i])
+        if changed:
+            updated.append({"id": i, "name": a[i].get("name"),
+                            "fields": changed})
+    return {"added": added, "removed": removed, "updated": updated}
+
+
+@router.post("/api/projects/{pid}/preview")
+def project_preview(pid: str, body: ActionIn, request: Request):
+    """Предпросмотр пакета: ничего не сохраняет, отдаёт diff/ошибки/цену."""
+    project_for(request, pid)
+    common.heavy_limit(request, "layout", common.LAYOUT_PER_MIN)
+    base = repo_get(pid)
+    if base is None:
+        raise HTTPException(404, "проект не найден")
+    before = copy.deepcopy(base)
+    after = copy.deepcopy(base)
+    try:
+        results = [apply_action(after, act) for act in body.actions]
+    except Exception as exc:
+        # Пакет атомарный: after выбрасывается, проект не меняется.
+        raise HTTPException(422, {
+            "message": str(exc), "atomic": True,
+            "errors": 1,
+        }) from exc
+    issues = _all_layout_issues(after)
+    errors = [i for i in issues if i["level"] == "error"]
+    warnings = [i for i in issues if i["level"] != "error"]
+    changes = {
+        "instances": _diff_lists(before.get("instances", []),
+                                 after.get("instances", [])),
+        "props": _diff_lists(before.get("props", []),
+                             after.get("props", [])),
+        "openings": _diff_lists((before.get("room") or {}).get("openings", []),
+                                (after.get("room") or {}).get("openings", [])),
+        "room": _diff_dict(before.get("room") or {}, after.get("room") or {}),
+        "globals": _diff_dict(before.get("globals") or {},
+                              after.get("globals") or {}),
+        "materials": _diff_dict(before.get("materials") or {},
+                                after.get("materials") or {}),
+    }
+    before_cost = _project_cost(before)
+    after_cost = _project_cost(after)
+    return {
+        "ok": True,
+        "committed": False,
+        "changes": changes,
+        "summary": {
+            "instances": len(after.get("instances", [])),
+            "props": len(after.get("props", [])),
+        },
+        "cost": {
+            "before": before_cost,
+            "after": after_cost,
+            "delta": round((after_cost.get("total") or 0)
+                           - (before_cost.get("total") or 0), 2),
+        },
+        "issues": issues,
+        "errors": len(errors),
+        "warnings": len(warnings),
+        "results": results,
+    }
 
 
 @router.post("/api/projects/{pid}/cutting")
