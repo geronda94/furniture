@@ -2,6 +2,14 @@
 from __future__ import annotations
 
 from .common import new_id
+from .placement import (
+    candidate_free,
+    find_free_placement,
+    find_free_prop_placement,
+    find_free_wall_item,
+    prop_free,
+    wall_item_free,
+)
 
 DEFAULT_PARAMS = {
     "W": 800, "H": 720, "D": 560, "doors": 2, "drawers": 0, "shelves": 2,
@@ -70,15 +78,55 @@ def apply_action(doc: dict, act: dict) -> dict:
                     if k != "autoApply"}
         params = {**DEFAULT_PARAMS, **globals_,
                   **preset["params"], **(act.get("params") or {})}
+        room = doc.setdefault("room", {})
+        instances = doc.setdefault("instances", [])
+        props = doc.get("props", [])
+        W = float(params.get("W") or 800)
+        D = float(params.get("D") or 560)
+        H = float(params.get("H") or 720)
+        mount = str(params.get("mount") or "floor")
+        z = float(act.get("z", 1450 if mount == "wall" else 0))
+        has_xy = act.get("x") is not None and act.get("y") is not None
+        if has_xy:
+            x = float(act["x"])
+            y = float(act["y"])
+            rot = float(act.get("rot", 0))
+            if not candidate_free(
+                room, instances, props, x, y, rot, W, D, H, mount,
+                float(params.get("plinthH") or 0),
+                float(params.get("worktopT") or 0), z,
+            ):
+                free = find_free_placement(
+                    room, instances, props, W, D, H, mount=mount,
+                    plinthH=float(params.get("plinthH") or 0),
+                    worktopT=float(params.get("worktopT") or 0),
+                )
+                hint = (
+                    f" Свободное место: x={free[0]}, y={free[1]}, rot={free[2]}."
+                    if free else " Свободного места у стен нет."
+                )
+                raise ValueError(
+                    "модуль пересекает стену, проём, мебель или декор." + hint,
+                )
+        else:
+            free = find_free_placement(
+                room, instances, props, W, D, H, mount=mount,
+                plinthH=float(params.get("plinthH") or 0),
+                worktopT=float(params.get("worktopT") or 0),
+            )
+            if not free:
+                raise ValueError("нет свободного места у стен для нового модуля")
+            x, y, rot = free
         inst = {
             "id": new_id("i"), "product": "base-cabinet",
-            "name": act.get("name") or f"Модуль {len(doc.get('instances', [])) + 1}",
-            "x": float(act.get("x", 50)), "y": float(act.get("y", 50)),
-            "z": float(act.get("z", 0)), "rot": float(act.get("rot", 0)),
+            "name": act.get("name") or f"Модуль {len(instances) + 1}",
+            "x": round(x, 1), "y": round(y, 1), "z": round(z, 1),
+            "rot": round(rot, 1),
             "zLocked": bool(act.get("zLocked", True)), "params": params,
         }
-        doc.setdefault("instances", []).append(inst)
-        return {"op": op, "id": inst["id"]}
+        instances.append(inst)
+        return {"op": op, "id": inst["id"], "x": inst["x"],
+                "y": inst["y"], "rot": inst["rot"]}
     if op == "update_instance":
         inst = next((i for i in doc.get("instances", [])
                      if i.get("id") == act.get("id")), None)
@@ -135,24 +183,69 @@ def apply_action(doc: dict, act: dict) -> dict:
             "switch": (80, 80, 12, 1100),
         }
         w0, h0, d0, z0 = defaults.get(kind, (300, 300, 12, 900))
+        room = doc.setdefault("room", {})
+        instances = doc.get("instances", [])
+        props = doc.get("props", [])
+        wall_index = int(act.get("wall", 0))
+        w = float(act.get("w", w0))
+        h = float(act.get("h", h0))
+        depth = float(act.get("depth", d0))
+        z = float(act.get("z", z0))
+        if act.get("x") is not None:
+            x = float(act["x"])
+            if not wall_item_free(
+                room, instances, props, wall_index, x, z, w, h, depth,
+                kind=kind,
+            ):
+                free = find_free_wall_item(
+                    room, instances, props, wall_index, z, w, h, depth,
+                    kind=kind,
+                )
+                hint = (
+                    f" Свободное место на стене: x={free}."
+                    if free is not None else " На этой стене нет места."
+                )
+                raise ValueError(
+                    "предмет пересекает проём, мебель или другой предмет."
+                    + hint,
+                )
+        else:
+            free = find_free_wall_item(
+                room, instances, props, wall_index, z, w, h, depth,
+                kind=kind,
+            )
+            if free is None:
+                raise ValueError("на этой стене нет свободного места")
+            x = free
         item = {
             "id": new_id("wi"), "kind": kind,
-            "wall": int(act.get("wall", 0)),
-            "x": float(act.get("x", 0)),
-            "z": float(act.get("z", z0)),
-            "w": float(act.get("w", w0)),
-            "h": float(act.get("h", h0)),
-            "depth": float(act.get("depth", d0)),
+            "wall": wall_index,
+            "x": round(x, 1),
+            "z": z, "w": w, "h": h, "depth": depth,
         }
-        doc.setdefault("room", {}).setdefault("wallItems", []).append(item)
-        return {"op": op, "id": item["id"]}
+        room.setdefault("wallItems", []).append(item)
+        return {"op": op, "id": item["id"], "x": item["x"]}
     if op == "update_wall_item":
         room = doc.setdefault("room", {})
         item = next((i for i in room.get("wallItems", [])
                      if i.get("id") == act.get("id")), None)
         if not item:
             raise ValueError(f"нет предмета {act.get('id')}")
-        item.update(act.get("patch") or {})
+        patch = act.get("patch") or {}
+        merged = {**item, **patch}
+        if not wall_item_free(
+            room, doc.get("instances", []), doc.get("props", []),
+            int(merged.get("wall", 0)),
+            float(merged.get("x", 0)), float(merged.get("z", 0)),
+            float(merged.get("w", 0)), float(merged.get("h", 0)),
+            float(merged.get("depth", 12)),
+            kind=str(merged.get("kind") or "socket"),
+            ignore=str(item.get("id")),
+        ):
+            raise ValueError(
+                "предмет пересекает проём, мебель или другой предмет",
+            )
+        item.update(patch)
         return {"op": op, "id": item["id"]}
     if op == "delete_wall_item":
         room = doc.setdefault("room", {})
@@ -162,25 +255,71 @@ def apply_action(doc: dict, act: dict) -> dict:
         return {"op": op, "removed": before - len(room["wallItems"])}
     if op == "add_decor":
         kind = act.get("type", "plant")
+        room = doc.setdefault("room", {})
+        instances = doc.get("instances", [])
+        props = doc.setdefault("props", [])
+        w = float(act.get("w", 400))
+        d = float(act.get("d", 400))
+        h = float(act.get("h", 800))
+        z = float(act.get("z", 0))
+        rot = float(act.get("rot", 0))
+        has_xy = act.get("x") is not None and act.get("y") is not None
+        if has_xy:
+            x = float(act["x"])
+            y = float(act["y"])
+            if not prop_free(room, instances, props, x, y, rot,
+                             w, d, h, z, kind=kind):
+                free = find_free_prop_placement(
+                    room, instances, props, w, d, h, kind=kind, z=z)
+                hint = (
+                    f" Свободное место: x={free[0]}, y={free[1]}."
+                    if free else " Свободного места в комнате нет."
+                )
+                raise ValueError(
+                    "декор пересекает стену, проём, мебель или другой "
+                    "декор." + hint,
+                )
+        else:
+            free = find_free_prop_placement(
+                room, instances, props, w, d, h, kind=kind, z=z)
+            if not free:
+                raise ValueError("нет свободного места для декора")
+            x, y = free
         prop = {
             "id": new_id("p"), "type": kind,
             "name": act.get("name") or "Декор",
-            "x": float(act.get("x", 100)), "y": float(act.get("y", 100)),
-            "z": float(act.get("z", 0)), "rot": float(act.get("rot", 0)),
-            "w": float(act.get("w", 400)), "d": float(act.get("d", 400)),
-            "h": float(act.get("h", 800)),
+            "x": round(x, 1), "y": round(y, 1),
+            "z": z, "rot": rot,
+            "w": w, "d": d, "h": h,
             "color": act.get("color") or "#7a8a6a",
         }
         if act.get("accent"):
             prop["accent"] = act["accent"]
-        doc.setdefault("props", []).append(prop)
-        return {"op": op, "id": prop["id"]}
+        props.append(prop)
+        return {"op": op, "id": prop["id"], "x": prop["x"], "y": prop["y"]}
     if op == "update_decor":
         prop = next((p for p in doc.get("props", [])
                      if p.get("id") == act.get("id")), None)
         if not prop:
             raise ValueError(f"нет декора {act.get('id')}")
-        prop.update(act.get("patch") or {})
+        patch = act.get("patch") or {}
+        merged = {**prop, **patch}
+        room = doc.setdefault("room", {})
+        instances = doc.get("instances", [])
+        props = doc.get("props", [])
+        if not prop_free(
+            room, instances, props,
+            float(merged.get("x", 0)), float(merged.get("y", 0)),
+            float(merged.get("rot", 0)),
+            float(merged.get("w", 0)), float(merged.get("d", 0)),
+            float(merged.get("h", 0)), float(merged.get("z", 0)),
+            kind=str(merged.get("type") or "decor"),
+            ignore=str(prop.get("id")),
+        ):
+            raise ValueError(
+                "декор пересекает стену, проём, мебель или другой декор",
+            )
+        prop.update(patch)
         return {"op": op, "id": prop["id"]}
     if op == "delete_decor":
         before = len(doc.get("props", []))

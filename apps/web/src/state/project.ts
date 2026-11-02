@@ -2254,9 +2254,16 @@ function collides(
   if (wallBodyHit(x, y, W, D, rot, z0, z1)) return true
   const flat = footprintOf(x, y, W, D, rot)
   const r: Box3 = { ...flat, z0, z1 }
-  return state.project.instances.some(
+  if (state.project.instances.some(
     (i) => i.id !== inst.id && overlaps(r, footprint(i)),
-  )
+  )) return true
+  // Декор (кроме ковра) — тоже препятствие.
+  return (state.project.props ?? []).some((pr) => {
+    if (pr.type === 'rug') return false
+    const pz0 = Number(pr.z) || 0
+    const pb = propBox(pr.x, pr.y, pr.w, pr.d, pr.rot ?? 0)
+    return overlaps(r, { ...pb, z0: pz0, z1: pz0 + (Number(pr.h) || 0) })
+  })
 }
 
 function findFreeNear(
@@ -2282,7 +2289,7 @@ function findFreeNear(
     const ny = clamp(Math.round(c.y / 10) * 10, 0, Math.max(0, room.d - D))
     if (!collides(inst, nx, ny, W, D)) return { x: nx, y: ny }
   }
-  return findFreeSpot(W, D, zSpan(inst))
+  return findFreeSpot(W, D, zSpan(inst), inst.rot)
 }
 
 function snapPlacement(
@@ -2572,16 +2579,35 @@ function findFreeSpot(
   W: number,
   D: number,
   span: [number, number] = [0, 720],
+  rot = 0,
 ): { x: number; y: number } {
   const room = state.project.room
   const others = state.project.instances.map(footprint)
+  const props = state.project.props ?? []
   const b = roomBounds(room)
   for (let y = b.maxY - D; y >= b.minY; y -= 25) {
     for (let x = b.minX + 25; x <= b.maxX - W - 25; x += 25) {
-      if (!roomContains(x, y, W, D, 0)) continue
-      if (wallBodyHit(x, y, W, D, 0, span[0], span[1])) continue
-      const box: Box3 = { x, y, w: W, d: D, z0: span[0], z1: span[1] }
-      if (!others.some((o) => overlaps(box, o))) return { x, y }
+      if (!roomContains(x, y, W, D, rot)) continue
+      if (wallBodyHit(x, y, W, D, rot, span[0], span[1])) continue
+      const flat = footprintOf(x, y, W, D, rot)
+      const box: Box3 = { ...flat, z0: span[0], z1: span[1] }
+      if (others.some((o) => overlaps(box, o))) continue
+      const propHit = props.some((pr) => {
+        if (pr.type === 'rug') return false
+        const pz0 = Number(pr.z) || 0
+        const pz1 = pz0 + (Number(pr.h) || 0)
+        const pb: Box3 = {
+          x: Number(pr.x) - (Number(pr.w) || 0) / 2,
+          y: Number(pr.y) - (Number(pr.d) || 0) / 2,
+          w: Number(pr.w) || 0,
+          d: Number(pr.d) || 0,
+          z0: pz0,
+          z1: pz1,
+        }
+        return overlaps(box, pb)
+      })
+      if (propHit) continue
+      return { x, y }
     }
   }
   return { x: b.minX + 50, y: Math.max(b.minY + 50, b.maxY - D - 100) }

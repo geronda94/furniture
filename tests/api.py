@@ -249,12 +249,59 @@ def main() -> int:
         r = c.post(f"/api/projects/{pid}/preview", json={
             "actions": [{
                 "op": "add_decor", "type": "plant", "name": "Тест-декор",
-                "x": 100, "y": 100,
             }],
         })
         ok &= check("ai: preview декора", r.status_code == 200
                     and len(r.json().get("changes", {}).get("props", {})
                             .get("added", [])) == 1)
+
+        r = c.post(f"/api/projects/{pid}/preview", json={
+            "actions": [{"op": "add_instance", "preset": "base600"}],
+        })
+        pv = r.json()
+        added = (pv.get("changes", {}).get("instances", {})
+                 .get("added") or [{}])[0]
+        ok &= check("ai: авто-постановка не в стену",
+                    r.status_code == 200
+                    and (added.get("x"), added.get("y")) != (50.0, 50.0)
+                    and pv.get("errors") == 0,
+                    f'x={added.get("x")} y={added.get("y")} '
+                    f'errors={pv.get("errors")}')
+
+        r = c.post(f"/api/projects/{pid}/preview", json={
+            "actions": [{
+                "op": "add_instance", "preset": "base600", "x": 1, "y": 1,
+            }],
+        })
+        detail = (r.json().get("detail") or {}) if r.headers.get(
+            "content-type", "").startswith("application/json") else {}
+        msg = detail.get("message", "") if isinstance(detail, dict) else str(detail)
+        ok &= check("ai: наложение отклонено с подсказкой",
+                    r.status_code == 422 and "Свободное место" in msg,
+                    msg[:60])
+
+        r = c.post(f"/api/projects/{pid}/preview", json={
+            "actions": [{
+                "op": "add_decor", "type": "plant", "name": "В стену",
+                "x": 1, "y": 1,
+            }],
+        })
+        detail = (r.json().get("detail") or {}) if r.headers.get(
+            "content-type", "").startswith("application/json") else {}
+        msg = detail.get("message", "") if isinstance(detail, dict) else str(detail)
+        ok &= check("ai: декор в стену отклонён",
+                    r.status_code == 422 and "Свободное место" in msg,
+                    msg[:60])
+
+        r = c.post(f"/api/projects/{pid}/preview", json={
+            "actions": [{"op": "add_wall_item", "kind": "socket"}],
+        })
+        room_ch = r.json().get("changes", {}).get("room", {})
+        added_wi = ((room_ch.get("wallItems") or {}).get("after") or [{}])[0]
+        ok &= check("ai: розетка ставится в свободное место",
+                    r.status_code == 200
+                    and float(added_wi.get("x") or 0) > 0,
+                    str(added_wi.get("x")))
 
         r = c.post(f"/api/projects/{pid}/preview", json={
             "actions": [
