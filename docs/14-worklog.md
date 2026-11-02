@@ -1167,3 +1167,11 @@ No module named 'reportlab'` → воркер uvicorn падал на каждо
 | BU5 | Применение: flush → preview → strict actions → reload без сброса камеры; один undo | ✅ | `AiChatPanel.vue`, `openProject(..., preserveView)` |
 | BU6 | e2e `ai-chat` (настройка) и `ai-chat-flow` (mock LLM: tool-call → preview → apply) | ✅ | `tests/e2e/` |
 | BU7 | env: `DEEPSEEK_API_KEY` (или `AI_API_KEY`), `AI_BASE_URL`, `AI_MODEL`; ключ только на сервере | ✅ | `.env.example`, `compose.yaml` |
+
+## BV. Сессия 2026-11-02: история чата и подсветка изменённого
+
+| # | Задача | Статус | Где |
+|---|---|---|---|
+| BV1 | История ИИ-диалога хранится на проект (localStorage); «＋» — новый диалог | ✅ | `AiChatPanel.vue` |
+| BV2 | После применения выделяется первый изменённый модуль, в чат пишется число изменённых объектов | ✅ | `AiChatPanel.vue` |
+| BV3 | e2e ai-chat-flow: выделение изменённого и новый диалог | ✅ | `tests/e2e/ai-chat-flow.mjs` |

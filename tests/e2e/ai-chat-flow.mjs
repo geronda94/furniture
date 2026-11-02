@@ -114,6 +114,14 @@ try {
     window.__furnitureDbg.state.project.instances.find((i) => i.id === id)?.name, id)
   check('изменение применено и проект перезагружен', name === 'ИИ-тест',
     String(name))
+  const selected = await page.evaluate(() =>
+    window.__furnitureDbg.state.selection)
+  check('изменённый объект выделен', selected === id, String(selected))
+  const newBtn = panel.locator('.ai-new')
+  check('есть кнопка нового диалога', await newBtn.count() === 1)
+  await newBtn.click()
+  check('новый диалог очищает ленту',
+    (await panel.locator('.ai-msg').count()) === 0)
   // Вернуть демо-проект в исходное имя, чтобы не засорять окружение.
   await page.evaluate(async ({ pid, id, name }) => {
     await fetch(`/api/projects/${pid}/actions`, {

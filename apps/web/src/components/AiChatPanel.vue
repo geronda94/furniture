@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import {
   apiAiChat,
   apiAiStatus,
@@ -14,6 +14,7 @@ import {
   openProject,
   partSelection,
   pushHistory,
+  selectQuiet,
   state,
   ui,
   undo,
@@ -46,6 +47,59 @@ const error = ref('')
 const preview = ref<Record<string, any> | null>(null)
 const pending = ref<Record<string, unknown>[]>([])
 let seq = 0
+let restoring = false
+
+const storageKey = (): string => `furniture.ai.chat.${state.projectId}`
+
+function persist(): void {
+  if (restoring) return
+  try {
+    const plain = bubbles.value.map((b) => ({
+      id: b.id, role: b.role, text: b.text, tools: b.tools,
+      error: b.error,
+    }))
+    localStorage.setItem(storageKey(), JSON.stringify({
+      bubbles: plain,
+      apiMessages: apiMessages.value,
+    }))
+  } catch { /* переполнение/приватный режим — не критично */ }
+}
+
+function restore(): void {
+  restoring = true
+  try {
+    const raw = localStorage.getItem(storageKey())
+    if (!raw) {
+      bubbles.value = []
+      apiMessages.value = []
+      return
+    }
+    const data = JSON.parse(raw) as {
+      bubbles?: Bubble[]
+      apiMessages?: AiChatMessage[]
+    }
+    bubbles.value = (data.bubbles || []).map((b) => ({ ...b }))
+    apiMessages.value = data.apiMessages || []
+    seq = bubbles.value.reduce((m, b) => Math.max(m, b.id), 0)
+  } catch {
+    bubbles.value = []
+    apiMessages.value = []
+  } finally {
+    restoring = false
+  }
+}
+
+function newDialog(): void {
+  bubbles.value = []
+  apiMessages.value = []
+  preview.value = null
+  pending.value = []
+  error.value = ''
+  try { localStorage.removeItem(storageKey()) } catch { /* ignore */ }
+}
+
+watch([bubbles, apiMessages], persist, { deep: true })
+watch(() => state.projectId, () => restore())
 
 const bridge = (): Bridge | undefined =>
   (window as unknown as { __furnitureAI?: Bridge }).__furnitureAI
@@ -69,6 +123,7 @@ function add(role: Bubble['role'], text: string, extra: Partial<Bubble> = {}): v
 }
 
 onMounted(async () => {
+  restore()
   try {
     status.value = await apiAiStatus()
     configured.value = status.value.configured
@@ -268,9 +323,23 @@ async function applyPreview(): Promise<void> {
   try {
     const pid = state.projectId
     pushHistory('ИИ: пакет')
+    const pv = preview.value
+    const changed = [
+      ...(pv?.changes?.instances?.added || []),
+      ...(pv?.changes?.instances?.updated || []),
+    ]
+      .map((row: { id?: string }) => row.id)
+      .filter((id): id is string => !!id)
     await apiApplyActions(pid, pending.value, true)
     await openProject(pid, true, false, true)
-    add('system', 'Применено. Одно действие — один шаг истории.')
+    if (changed.length) {
+      const keep = changed.find((id) =>
+        state.project.instances.some((i) => i.id === id))
+      if (keep) selectQuiet(keep)
+      add('system', `Применено. Изменено объектов: ${changed.length}. Выделен первый.`)
+    } else {
+      add('system', 'Применено. Одно действие — один шаг истории.')
+    }
     notify('ИИ: изменения применены', 'undo')
     preview.value = null
     pending.value = []
@@ -313,7 +382,10 @@ function parseIssues(pv: Record<string, any>): string[] {
         <b>ИИ-конструктор</b>
         <span class="ai-model">{{ status?.model || 'deepseek' }}</span>
       </div>
-      <button class="ai-x" title="Закрыть" @click="ui.aiOpen = false">×</button>
+      <div class="ai-head-actions">
+        <button class="ai-new" title="Новый диалог" @click="newDialog">＋</button>
+        <button class="ai-x" title="Закрыть" @click="ui.aiOpen = false">×</button>
+      </div>
     </header>
     <div class="ai-context" :title="'Контекст: камера, выделение, комната, объекты, ошибки'">
       Вижу: {{ contextLabel }} · {{ state.project.name }}
@@ -413,7 +485,9 @@ function parseIssues(pv: Record<string, any>): string[] {
   font-size: 13px;
 }
 .ai-model { margin-left: 8px; color: #8d98a5; font-size: 10px; }
-.ai-x { border: 0; background: none; color: #9aa4b0; font-size: 20px; cursor: pointer; }
+.ai-head-actions { display: flex; align-items: center; gap: 2px; }
+.ai-new, .ai-x { border: 0; background: none; color: #9aa4b0; font-size: 18px; cursor: pointer; }
+.ai-x { font-size: 20px; }
 .ai-context {
   padding: 6px 12px;
   font-size: 10px;
