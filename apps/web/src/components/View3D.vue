@@ -32,6 +32,12 @@ import CameraPad from './CameraPad.vue'
 import { moduleInfo, relationsFor } from '../module/info'
 import { outlinePoints, roomWalls } from '../render25d/room'
 import { footprintOf } from '../state/geometry'
+import DimOverlay from './DimOverlay.vue'
+import {
+  DIM_D, DIM_H, DIM_OUT_OBJ, DIM_OUT_WALL, DIM_POS, DIM_REL, DIM_W,
+} from '../dims/colors'
+import type { DimLine, EdgeSpec } from '../dims/types'
+import { outerDims } from '../dims/outer'
 
 const canvasEl = ref<HTMLCanvasElement | null>(null)
 let renderer: import('../render3d/babylonScene').BabylonRenderer | null = null
@@ -463,22 +469,7 @@ const viewNameLabel = computed(() => {
   return labels[viewName.value] ?? 'Вид'
 })
 const selHull = ref<{ x: number; y: number }[]>([])
-const DIM_W = '#ffbe55'
-const DIM_H = '#7fe0c2'
-const DIM_D = '#7fb9f0'
-const DIM_POS = '#ffd28a'
-const DIM_REL = '#d8a6ff'
-const DIM_OUT_WALL = '#dfe7ee'
-const DIM_OUT_OBJ = '#9eabb8'
-const dimLines = ref<{
-  x1: number; y1: number; x2: number; y2: number
-  tx: number; ty: number; label: string; color: string; labelW: number; marker: string
-  /** Подсказка (что именно за препятствие). */
-  hint: string
-  /** Проекции реальных граней, к которым относится размер (у размера между
-   *  двумя объектами их две). */
-  edges: [number, number, number, number][]
-}[]>([])
+const dimLines = ref<DimLine[]>([])
 const partPill = ref<{ id: string; part: number } | null>(null)
 const pillPos = ref({ x: 0, y: 0 })
 let dimRaf = 0
@@ -606,12 +597,6 @@ function updateDims(): void {
   const H = z1 - z0
   const pad = Math.max(45, Math.max(W, D, H) * 0.06)
   const out: typeof dimLines.value = []
-  type EdgeSpec = {
-    a: [number, number, number]
-    b: [number, number, number]
-    from?: number
-    to?: number
-  }
   const lerpLocal = (
     a: [number, number, number],
     b: [number, number, number],
@@ -808,161 +793,14 @@ function updateDims(): void {
         ])
     }
   }
-  // Снаружи: расстояния от модуля до стен и соседних объектов. Рисуем в
-  // своей палитре (стена — белая, объект — серая), чтобы не путать с
-  // размерами деталей внутри.
+  // Снаружи: расстояния от модуля до стен/перегородок и соседних объектов.
   if (ui.dimsOuter) {
-    const room = state.project.room
-    const p = inst.params
-    const zStart = inst.z || 0
-    const total = p.mount === 'wall'
-      ? p.H
-      : (p.plinthH || 0) + p.H + (p.worktopT || 0)
-    const zEnd = zStart + total
-    // Внешние расстояния рисуем у нижней плоскости объекта.
-    const zMid = zStart + 4
-    const box = footprintOf(
-      inst.x, inst.y,
-      d.corpus.W || p.W, d.corpus.D || p.D,
-      inst.rot,
-    )
-    const xMid = box.x + box.w / 2
-    const yMid = box.y + box.d / 2
-    type Outer = {
-      gap: number
-      a: { x: number; y: number; z: number }
-      b: { x: number; y: number; z: number }
-      label: string
-      color: string
-      hint: string
-    }
-    // Стены и перегородки — реальные препятствия: расстояние считаем до
-    // ближайшей стены вдоль луча, а не по габариту комнаты. Иначе модуль
-    // «видит» объект в другой комнате через стену.
-    const wallSegs = roomWalls(room)
-    const wallGap = (
-      axis: 'x' | 'y',
-      sign: -1 | 1,
-      fixed: number,
-    ): number => {
-      let best = Infinity
-      for (const w of wallSegs) {
-        const ax = w.a.x
-        const ay = w.a.y
-        const bx = w.a.x + w.dx * w.len
-        const by = w.a.y + w.dy * w.len
-        if (axis === 'x') {
-          if (Math.abs(by - ay) < 0.5) continue
-          const t = (fixed - ay) / (by - ay)
-          if (t < 0 || t > 1) continue
-          const x = ax + (bx - ax) * t
-          const d = sign < 0 ? box.x - x : x - (box.x + box.w)
-          if (d >= 0) best = Math.min(best, d)
-        } else {
-          if (Math.abs(bx - ax) < 0.5) continue
-          const t = (fixed - ax) / (bx - ax)
-          if (t < 0 || t > 1) continue
-          const y = ay + (by - ay) * t
-          const d = sign < 0 ? box.y - y : y - (box.y + box.d)
-          if (d >= 0) best = Math.min(best, d)
-        }
-      }
-      return best
-    }
-    const gLeft = wallGap('x', -1, yMid)
-    const gRight = wallGap('x', 1, yMid)
-    const gBack = wallGap('y', -1, xMid)
-    const gFront = wallGap('y', 1, xMid)
-    let left: Outer = {
-      gap: gLeft,
-      a: { x: box.x - gLeft, y: yMid, z: zMid },
-      b: { x: box.x, y: yMid, z: zMid },
-      label: `← ${Math.round(gLeft)}`,
-      color: DIM_OUT_WALL,
-      hint: 'до стены',
-    }
-    let right: Outer = {
-      gap: gRight,
-      a: { x: box.x + box.w, y: yMid, z: zMid },
-      b: { x: box.x + box.w + gRight, y: yMid, z: zMid },
-      label: `→ ${Math.round(gRight)}`,
-      color: DIM_OUT_WALL,
-      hint: 'до стены',
-    }
-    let back: Outer = {
-      gap: gBack,
-      a: { x: xMid, y: box.y - gBack, z: zMid },
-      b: { x: xMid, y: box.y, z: zMid },
-      label: `↑ ${Math.round(gBack)}`,
-      color: DIM_OUT_WALL,
-      hint: 'до стены',
-    }
-    let front: Outer = {
-      gap: gFront,
-      a: { x: xMid, y: box.y + box.d, z: zMid },
-      b: { x: xMid, y: box.y + box.d + gFront, z: zMid },
-      label: `↓ ${Math.round(gFront)}`,
-      color: DIM_OUT_WALL,
-      hint: 'до стены',
-    }
-    for (const o of state.project.instances) {
-      if (o.id === inst.id) continue
-      const od = derived[o.id]
-      const op = o.params
-      const ot = op.mount === 'wall'
-        ? op.H
-        : (op.plinthH || 0) + op.H + (op.worktopT || 0)
-      const oz0 = o.z || 0
-      const oz1 = oz0 + ot
-      if (oz1 <= zStart + 0.5 || oz0 >= zEnd - 0.5) continue
-      const ob = footprintOf(
-        o.x, o.y,
-        od?.corpus.W || op.W, od?.corpus.D || op.D, o.rot,
-      )
-      const name = o.name || 'объект'
-      if (ob.y < box.y + box.d - 0.5 && ob.y + ob.d > box.y + 0.5 &&
-          ob.x + ob.w <= box.x + 0.5) {
-        const gap = box.x - (ob.x + ob.w)
-        if (gap >= 0 && gap < left.gap) {
-          left = { gap, a: { x: ob.x + ob.w, y: yMid, z: zMid },
-            b: { x: box.x, y: yMid, z: zMid },
-            label: `← ${Math.round(gap)}`, color: DIM_OUT_OBJ,
-            hint: `до «${name}»` }
-        }
-      }
-      if (ob.y < box.y + box.d - 0.5 && ob.y + ob.d > box.y + 0.5 &&
-          ob.x >= box.x + box.w - 0.5) {
-        const gap = ob.x - (box.x + box.w)
-        if (gap >= 0 && gap < right.gap) {
-          right = { gap, a: { x: box.x + box.w, y: yMid, z: zMid },
-            b: { x: ob.x, y: yMid, z: zMid },
-            label: `→ ${Math.round(gap)}`, color: DIM_OUT_OBJ,
-            hint: `до «${name}»` }
-        }
-      }
-      if (ob.x < box.x + box.w - 0.5 && ob.x + ob.w > box.x + 0.5 &&
-          ob.y + ob.d <= box.y + 0.5) {
-        const gap = box.y - (ob.y + ob.d)
-        if (gap >= 0 && gap < back.gap) {
-          back = { gap, a: { x: xMid, y: ob.y + ob.d, z: zMid },
-            b: { x: xMid, y: box.y, z: zMid },
-            label: `↑ ${Math.round(gap)}`, color: DIM_OUT_OBJ,
-            hint: `до «${name}»` }
-        }
-      }
-      if (ob.x < box.x + box.w - 0.5 && ob.x + ob.w > box.x + 0.5 &&
-          ob.y >= box.y + box.d - 0.5) {
-        const gap = ob.y - (box.y + box.d)
-        if (gap >= 0 && gap < front.gap) {
-          front = { gap, a: { x: xMid, y: box.y + box.d, z: zMid },
-            b: { x: xMid, y: ob.y, z: zMid },
-            label: `↓ ${Math.round(gap)}`, color: DIM_OUT_OBJ,
-            hint: `до «${name}»` }
-        }
-      }
-    }
-    // Все четыре стороны, если расстояние положительное.
-    for (const c of [left, right, back, front]) {
+    for (const c of outerDims(
+      inst,
+      state.project.instances,
+      derived,
+      state.project.room,
+    )) {
       if (!Number.isFinite(c.gap) || c.gap <= 2) continue
       add(c.a, c.b, c.label, c.color, 0.5, [], c.hint)
     }
@@ -2040,65 +1878,10 @@ onBeforeUnmount(() => {
         </span>
       </div>
 
-      <svg v-if="(ui.dims3d || ui.dimsOuter || ui.dimsAll) && dimLines.length" class="view__dims">
-        <defs>
-          <marker
-            id="dim-arrow"
-            viewBox="0 0 10 10"
-            refX="9"
-            refY="5"
-            markerWidth="5.5"
-            markerHeight="5.5"
-            orient="auto-start-reverse"
-          >
-            <path d="M0,0 L10,5 L0,10 z" fill="#ffbe55" stroke="#0b0d0f" stroke-width="0.6" />
-          </marker>
-          <marker id="dim-arrow-h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
-            <path d="M0,0 L10,5 L0,10 z" fill="#7fe0c2" stroke="#0b0d0f" stroke-width="0.6" />
-          </marker>
-          <marker id="dim-arrow-d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
-            <path d="M0,0 L10,5 L0,10 z" fill="#7fb9f0" stroke="#0b0d0f" stroke-width="0.6" />
-          </marker>
-          <marker id="dim-arrow-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
-            <path d="M0,0 L10,5 L0,10 z" fill="#ffd28a" stroke="#0b0d0f" stroke-width="0.6" />
-          </marker>
-          <marker id="dim-arrow-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
-            <path d="M0,0 L10,5 L0,10 z" fill="#d8a6ff" stroke="#0b0d0f" stroke-width="0.6" />
-          </marker>
-          <marker id="dim-arrow-wall" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
-            <path d="M0,0 L10,5 L0,10 z" fill="#e9eff5" stroke="#0b0d0f" stroke-width="0.6" />
-          </marker>
-          <marker id="dim-arrow-out" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
-            <path d="M0,0 L10,5 L0,10 z" fill="#aeb9c4" stroke="#0b0d0f" stroke-width="0.6" />
-          </marker>
-        </defs>
-        <g v-for="(d, i) in dimLines" :key="i">
-          <title v-if="d.hint">{{ d.hint }}</title>
-          <line
-            :x1="d.x1" :y1="d.y1" :x2="d.x2" :y2="d.y2"
-            :style="{ stroke: d.color }"
-            :marker-start="`url(#${d.marker})`"
-            :marker-end="`url(#${d.marker})`"
-          />
-          <line
-            v-for="(e, ei) in d.edges"
-            :key="ei"
-            class="view__dims-edge"
-            :x1="e[0]" :y1="e[1]" :x2="e[2]" :y2="e[3]"
-            :style="{ stroke: d.color }"
-          />
-          <rect
-            class="view__dims-badge"
-            :x="d.tx - d.labelW / 2"
-            :y="d.ty - 9"
-            :width="d.labelW"
-            :height="18"
-            rx="4"
-            :style="{ stroke: d.color }"
-          />
-          <text :x="d.tx" :y="d.ty" :style="{ fill: d.color }">{{ d.label }}</text>
-        </g>
-      </svg>
+      <DimOverlay
+        v-if="(ui.dims3d || ui.dimsOuter || ui.dimsAll) && dimLines.length"
+        :lines="dimLines"
+      />
 
       <svg
         v-if="selHull.length && !state.presentation"

@@ -23,6 +23,7 @@ import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData'
 import { CreateBox } from '@babylonjs/core/Meshes/Builders/boxBuilder'
 import { CreateCylinder } from '@babylonjs/core/Meshes/Builders/cylinderBuilder'
 import { CreateSphere } from '@babylonjs/core/Meshes/Builders/sphereBuilder'
+import { buildHandleMeshes } from './handles'
 import { CreateTorus } from '@babylonjs/core/Meshes/Builders/torusBuilder'
 import { CreateCapsule } from '@babylonjs/core/Meshes/Builders/capsuleBuilder'
 import '@babylonjs/core/Rendering/edgesRenderer'
@@ -1147,67 +1148,18 @@ export class BabylonRenderer {
       // Меш — ребёнок двери/фасада, поэтому ручка едет вместе с открытием.
       const holes = o.op_part ? handleHoles.get(o.op_part) : undefined
       if ((o.kind === 'door' || o.kind === 'drawerfront') && holes?.length) {
-        // Ручка — сборка из бара и стоек/кнопки, дочерняя к створке:
-        // открывается и закрывается вместе с фасадом.
-        const xs = holes.map((h) => h.x)
-        const ys = holes.map((h) => h.y)
-        const minX = Math.min(...xs)
-        const maxX = Math.max(...xs)
-        const minY = Math.min(...ys)
-        const maxY = Math.max(...ys)
-        const cx = ((minX + maxX) / 2 - o.sx / 2) * MM
-        const cy = ((minY + maxY) / 2 - o.sz / 2) * MM
-        const spanX = maxX - minX
-        const spanY = maxY - minY
-        const model = String(inst.params.handle || 'bar-128')
-        const knob = model.startsWith('knob') || (spanX < 1 && spanY < 1)
-        const vertical = spanY > spanX + 1
-        const centers = Math.max(spanX, spanY, 0)
-        const barLen = Math.max(96, centers + 24)
-        const frontZ = (-o.sy / 2) * MM
-        const hm = this.hardwareMaterial()
-        const makeHandle = (
-          name: string,
-          diameter: number,
-          length: number,
-          x: number,
-          y: number,
-          z: number,
-          axis: 'x' | 'y' | 'z',
-        ): Mesh => {
-          const m = CreateCylinder(
-            `${key}:${name}`,
-            {
-              diameter: diameter * MM,
-              height: length * MM,
-              tessellation: 20,
-            },
-            this.scene,
-          )
-          m.parent = mesh
-          m.position.set(x, y, z)
-          if (axis === 'x') m.rotation.z = Math.PI / 2
-          else if (axis === 'z') m.rotation.x = Math.PI / 2
-          m.material = hm
-          m.isPickable = false
-          m.metadata = { instanceId: inst.id, part, hardware: true }
-          m.setEnabled(this.hardwareVisible)
-          return m
-        }
-        if (knob) {
-          makeHandle('handle-stem', 8, 16, cx, cy, frontZ - 8 * MM, 'z')
-          makeHandle('handle-knob', 30, 14, cx, cy, frontZ - 22 * MM, 'z')
-        } else if (vertical) {
-          makeHandle('handle-bar', 12, barLen, cx, cy, frontZ - 28 * MM, 'y')
-          const py = Math.min(barLen / 2 - 12, Math.max(12, centers / 2))
-          makeHandle('handle-post-a', 8, 28, cx, cy - py * MM, frontZ - 14 * MM, 'z')
-          makeHandle('handle-post-b', 8, 28, cx, cy + py * MM, frontZ - 14 * MM, 'z')
-        } else {
-          makeHandle('handle-bar', 12, barLen, cx, cy, frontZ - 28 * MM, 'x')
-          const px = Math.min(barLen / 2 - 12, Math.max(12, centers / 2))
-          makeHandle('handle-post-a', 8, 28, cx - px * MM, cy, frontZ - 14 * MM, 'z')
-          makeHandle('handle-post-b', 8, 28, cx + px * MM, cy, frontZ - 14 * MM, 'z')
-        }
+        buildHandleMeshes({
+          scene: this.scene,
+          parent: mesh,
+          key,
+          instanceId: inst.id,
+          part,
+          host: { sx: o.sx, sy: o.sy, sz: o.sz },
+          holes,
+          model: String(inst.params.handle || 'bar-128'),
+          material: this.hardwareMaterial(),
+          visible: this.hardwareVisible,
+        })
       }
       if (this.quality === 'realistic' &&
         ['corpus', 'facade', 'worktop', 'plinth'].includes(o.role || 'corpus')) {

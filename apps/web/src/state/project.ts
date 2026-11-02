@@ -1304,9 +1304,13 @@ export function canPlaceInstance(
   if (z1 > state.project.room.h + 0.5) return false
   // Навесной шкаф ниже 1100 мм — ошибка стандарта (опасно для головы).
   if (patch.z != null && p.mount === 'wall' && z < 1100) return false
-  if (!roomContains(x, y, p.W, p.D, inst.rot)) return false
-  if (wallBodyHit(x, y, p.W, p.D, inst.rot, z, z1)) return false
-  const r: Box3 = { ...footprintOf(x, y, p.W, p.D, inst.rot), z0: z, z1 }
+  // Для проверки позиции берём фактический габарит корпуса (может быть
+  // больше номинальных W/D из-за столешницы/цоколя).
+  const selfW = derived[id]?.corpus.W ?? p.W
+  const selfD = derived[id]?.corpus.D ?? p.D
+  if (!roomContains(x, y, selfW, selfD, inst.rot)) return false
+  if (wallBodyHit(x, y, selfW, selfD, inst.rot, z, z1)) return false
+  const r: Box3 = { ...footprintOf(x, y, selfW, selfD, inst.rot), z0: z, z1 }
   if (state.project.instances.some(
     (i) => i.id !== id && overlaps(r, footprint(i)),
   )) return false

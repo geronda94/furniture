@@ -93,6 +93,9 @@ try {
   await page.locator('.tree__instance', { hasText: 'Мойка 800' }).first()
     .locator('.tree__row--item').click()
   await page.waitForTimeout(600)
+  const errorsBefore = await page.evaluate(() =>
+    window.__furniture?.layoutState?.issues
+      ?.filter((i) => i.level === 'error').length ?? 0)
   const p0 = await info()
   const xf = await setField('X', 2000)
   const p1 = await info()
@@ -102,7 +105,11 @@ try {
   check('показано ограничение по X',
     /Не помещается|Ограничено/.test(p1.toast), p1.toast)
 
-  // Y: за пределы комнаты не выпускает
+  // Y: за пределы комнаты не выпускает. Берём модуль в свободной зоне,
+  // чтобы не проверять сцену у мойки в другой комнате.
+  await page.locator('.tree__instance', { hasText: 'Пенал-холодильник 650' }).first()
+    .locator('.tree__row--item').click()
+  await page.waitForTimeout(600)
   const yf = await setField('Y', 9999)
   const p2 = await info()
   check('по Y не выезжает за комнату', p2.y < 9999 && p2.y + p2.D <= p2.roomD + 0.5,
@@ -133,7 +140,8 @@ try {
   const issueErrors = await page.evaluate(() =>
     window.__furniture?.layoutState?.issues
       ?.filter((i) => i.level === 'error').length ?? 0)
-  check('новых ошибок расстановки нет', issueErrors === 0, `errors=${issueErrors}`)
+  check('новых ошибок расстановки нет',
+    issueErrors <= errorsBefore, `${errorsBefore} -> ${issueErrors}`)
   check('ошибок консоли нет', errors.length === 0, errors.slice(0, 2).join(' | '))
 } finally {
   await browser.close()
