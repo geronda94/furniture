@@ -155,6 +155,8 @@ def ai_guide():
         "actions": [
             "add_instance {preset?, params?, x?, y?, z?, rot?, name?}",
             "update_instance {id, params?, x?, y?, z?, rot?, name?}",
+            "add_row {wall, items: [{preset?, params?, name?}], start?, gap?}",
+            "fit_module {id, to: ceiling|worktop, target?}",
             "duplicate_instance {id, name?}",
             "delete_instance {id}",
             "resize_room {w?, d?, h?, wallT?, shape?, cutW?, cutD?, outline?}",

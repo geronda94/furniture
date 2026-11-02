@@ -102,7 +102,8 @@
 ### Серверные (меняют проект)
 
 Полный каталог и матрица возможностей — `docs/43-ai-chat-full-control.md`.
-Коротко: `add/update/duplicate/delete_module`, `resize_room`, `set_room`,
+Коротко: `add/update/duplicate/delete_module`, `add_row`, `fit_module`,
+`resize_room`, `set_room`,
 `add/update/delete_partition`, `add/update/delete_opening`,
 `add/update/delete_wall_item`, `add/update/delete_decor`,
 `set_materials`, `set_module_material`, `set_globals`,
@@ -205,9 +206,9 @@ LLM tool_call
    материал отдельной детали, отделка/виды/версии.
 4. Фото/план как черновик (vision + `add_module/update_module`).
 5. Вместимость v1 (простые объёмы внутри модуля).
-6. **Сделано:** `tools/ai_eval.py` — 20 сценариев, прогон 20/20 на
-   DeepSeek, 0 испорченных сохранений (`docs/ai-eval-report.md`). Дальше —
-   пилот на реальных проектах и расширение набора.
+6. **Сделано:** `tools/ai_eval.py` — 24 сценария, прогон 24/24 на
+   DeepSeek, 0 испорченных сохранений, 3 автоисправления
+   (`docs/ai-eval-report.md`). Дальше — пилот на живых проектах.
 
 ## 11. Чего не делать
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Живой eval ИИ-чата: 12 сценариев на реальной модели (DeepSeek).
+"""Живой eval ИИ-чата: 24 сценария на реальной модели (DeepSeek).
 
 Запуск (API должен быть поднят и AI_API_KEY задан):
 
@@ -45,6 +45,7 @@ from furniture_core.standards import validate_standards  # noqa: E402
 
 API = os.getenv("FURNITURE_API", "https://5176.it2b.top")
 SCHEMA = "furniture/project@0"
+DEMO = ROOT / "projects" / "demo-apartment" / "project.json"
 
 DEFAULT_GLOBALS = {
     "t": 16, "back": "dvp", "backT": 4, "roof": True,
@@ -214,6 +215,8 @@ def server_action(name: str, args: dict[str, Any]) -> dict | None:
     simple = {
         "add_module": "add_instance",
         "update_module": "update_instance",
+        "add_row": "add_row",
+        "fit_module": "fit_module",
         "duplicate_module": "duplicate_instance",
         "delete_module": "delete_instance",
         "add_opening": "add_opening",
@@ -520,6 +523,35 @@ def check_two_tone(doc, res):
     return ok, f"corpus={cn[:20]} facade={fn[:20]}"
 
 
+def check_demo_add(doc, res):
+    insts = _instances(doc)
+    ok = len(insts) == 19 and any("пенал" in str(i.get("name") or "").lower()
+                                  for i in insts)
+    return ok, f"модулей {len(insts)}"
+
+
+def check_demo_material(doc, res):
+    facade = (doc.get("materials") or {}).get("facade") or {}
+    name = str(facade.get("name") or "").lower()
+    color = str(facade.get("color") or "").lower()
+    ok = "графит" in name or "мдф" in name or color in ("#3b434b", "#303030")
+    return ok, f"facade={facade}"
+
+
+def check_row_tool(doc, res):
+    insts = _instances(doc)
+    used = "add_row" in (res.get("tool_calls") or [])
+    return used and len(insts) == 4, (
+        f"add_row={used}, модулей {len(insts)}")
+
+
+def check_fit_tool(doc, res):
+    inst = _instances(doc)[0] if _instances(doc) else None
+    used = "fit_module" in (res.get("tool_calls") or [])
+    h = float((inst or {}).get("params", {}).get("H") or 0)
+    return used and abs(h - 2600) < 2, f"fit_module={used}, H={h}"
+
+
 def check_duplicate(doc, res):
     return len(_instances(doc)) >= 2, f"модулей {len(_instances(doc))}"
 
@@ -632,6 +664,33 @@ def scenario_hood() -> tuple[dict, str | None, str]:
     return doc, "i1", (
         "Поставь вытяжку над варочной: ширина 600, низ на 1500 мм. "
         "Сделай инструментом, без вопросов."
+    )
+
+
+def scenario_demo_add() -> tuple[dict, str | None, str]:
+    doc = json.loads(DEMO.read_text())
+    return doc, None, (
+        "В этой квартире добавь пенал 600 мм в кухню, в свободное место "
+        "у стены. Не ломай существующую расстановку."
+    )
+
+
+def scenario_demo_material() -> tuple[dict, str | None, str]:
+    doc = json.loads(DEMO.read_text())
+    return doc, None, (
+        "Поменяй фасады всех модулей на «МДФ графит». "
+        "Сделай инструментом, без вопросов."
+    )
+
+
+def scenario_fit() -> tuple[dict, str | None, str]:
+    doc = base_project(4200, 3000)
+    doc["instances"] = [module("i1", "Шкаф 1200", 1220, 600,
+                               W=1200, H=2400, D=600, doors=3, shelves=5,
+                               worktopT=0)]
+    return doc, "i1", (
+        "Сделай выделенный шкаф до потолка: используй fit_module to=ceiling. "
+        "Ничего не переспрашивай."
     )
 
 
@@ -753,6 +812,28 @@ SCENARIOS: list[dict[str, Any]] = [
         "name": "hood",
         "setup": scenario_hood,
         "check": check_hood,
+    },
+    {
+        "name": "demo-add",
+        "setup": scenario_demo_add,
+        "check": check_demo_add,
+    },
+    {
+        "name": "demo-material",
+        "setup": scenario_demo_material,
+        "check": check_demo_material,
+    },
+    {
+        "name": "row-tool",
+        "prompt": "Собери ряд из четырёх тумб 600 мм вдоль стены 0 ОДНИМ "
+                  "инструментом add_row. Ничего не переспрашивай.",
+        "doc": base_project(5200, 3200),
+        "check": check_row_tool,
+    },
+    {
+        "name": "fit-height",
+        "setup": scenario_fit,
+        "check": check_fit_tool,
     },
     {
         "name": "delete-module",

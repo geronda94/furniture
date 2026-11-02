@@ -213,6 +213,10 @@ function serverActions(
       return { actions: [{ op: 'add_instance', ...args }] }
     case 'update_module':
       return { actions: [{ op: 'update_instance', ...args }] }
+    case 'add_row':
+      return { actions: [{ op: 'add_row', ...args }] }
+    case 'fit_module':
+      return { actions: [{ op: 'fit_module', ...args }] }
     case 'duplicate_module':
       return { actions: [{ op: 'duplicate_instance', ...args }] }
     case 'delete_module': {
@@ -295,6 +299,8 @@ function serverActions(
 const TOOL_LABEL: Record<string, string> = {
   add_module: 'Добавляю модуль',
   update_module: 'Меняю модуль',
+  add_row: 'Ставлю ряд',
+  fit_module: 'Подгоняю высоту',
   duplicate_module: 'Копирую модуль',
   delete_module: 'Удаляю модуль',
   add_opening: 'Добавляю проём',

@@ -1221,3 +1221,6 @@ No module named 'reportlab'` → воркер uvicorn падал на каждо
 | BY12 | Живой eval: 20 сценариев, метрики успеха/ошибок/правок/времени | ✅ | `tools/ai_eval.py`, `docs/ai-eval-report.md` |
 | BY13 | Автоисправление предпросмотра: ошибки уходят модели, до 2 раундов; промпт про координаты/высоту/ряды/технику | ✅ | `AiChatPanel.vue`, `ai_tools.py` |
 | BY14 | Прогон на DeepSeek: 20/20, 0 испорченных сохранений | ✅ | `docs/ai-eval-report.md` |
+| BY15 | `add_row` — ряд модулей вдоль стены одним действием; пресеты сохраняют имена | ✅ | `actions.py`, `ai_tools.py` |
+| BY16 | `fit_module` — высота до потолка / рабочая поверхность 900 | ✅ | `actions.py`, `ai_tools.py` |
+| BY17 | Eval 24 сценария (добавлены demo-квартира, add_row, fit_module): 24/24, автоисправлений 3 | ✅ | `tools/ai_eval.py`, `docs/ai-eval-report.md` |

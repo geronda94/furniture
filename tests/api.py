@@ -671,6 +671,53 @@ def main() -> int:
         finally:
             c.delete(f"/api/projects/{fpid}")
 
+        # Ряд одним действием и подгонка высоты.
+        wpid = f"test-row-{int(time.time() * 1000):x}"
+        try:
+            wdoc = project("Row")
+            wdoc["room"].update({
+                "outline": [[0, 0], [5200, 0], [5200, 3200], [0, 3200]],
+                "partitions": [], "openings": [], "wallItems": [],
+            })
+            c.put(f"/api/projects/{wpid}", json=wdoc)
+            r = c.post(f"/api/projects/{wpid}/actions", json={
+                "actions": [{"op": "add_row", "wall": 0, "items": [
+                    {"preset": "sink800"}, {"preset": "base600"},
+                    {"preset": "base600"},
+                ]}],
+                "commit": True, "strict": True,
+            })
+            wdoc = c.get(f"/api/projects/{wpid}").json()
+            names = [i["name"] for i in wdoc["instances"]]
+            ok &= check("row: ряд одним действием",
+                        r.status_code == 200 and len(names) == 3
+                        and "Мойка 800" in names,
+                        str(names))
+            ok &= check("row: валидатор чист",
+                        c.get(f"/api/projects/{wpid}/layout").json()
+                        ["errors"] == 0)
+            r = c.post(f"/api/projects/{wpid}/actions", json={
+                "actions": [{"op": "add_instance",
+                             "preset": "wardrobe1200"}],
+                "commit": True, "strict": False,
+            })
+            wid = r.json()["results"][0]["id"]
+            r = c.post(f"/api/projects/{wpid}/actions", json={
+                "actions": [{"op": "fit_module", "id": wid,
+                             "to": "ceiling"}],
+                "commit": True, "strict": True,
+            })
+            wdoc = c.get(f"/api/projects/{wpid}").json()
+            w = next(i for i in wdoc["instances"] if i["id"] == wid)
+            ok &= check("row: fit_module до потолка",
+                        r.status_code == 200
+                        and w["params"]["H"] == 2600
+                        and c.get(f"/api/projects/{wpid}/layout").json()
+                        ["errors"] == 0,
+                        f'H={w["params"]["H"]}')
+        finally:
+            c.delete(f"/api/projects/{wpid}")
+
         # Выгрузки для цеха: SVG раскроя, DXF деталей, XLSX.
         for fmt in ("svg", "dxf", "xlsx"):
             r = c.post(f"/api/projects/{pid}/export/{fmt}")

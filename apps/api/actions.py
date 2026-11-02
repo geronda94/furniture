@@ -18,8 +18,10 @@ from .placement import (
     find_free_wall_item,
     height_problem,
     prop_free,
+    scene_context,
     wall_item_free,
 )
+from .quickstart import _place
 from .room import (
     add_opening as room_add_opening,
     add_partition as room_add_partition,
@@ -96,15 +98,23 @@ MODULE_PRESETS = [
 
 
 
+def params_for(doc: dict, act: dict) -> dict:
+    """Параметры модуля: DEFAULT_PARAMS → globals → пресет → params."""
+    preset = next((p for p in MODULE_PRESETS
+                   if p["key"] == act.get("preset")), MODULE_PRESETS[0])
+    globals_ = {k: v for k, v in (doc.get("globals") or {}).items()
+                if k != "autoApply"}
+    params = {**DEFAULT_PARAMS, **globals_}
+    if preset:
+        params.update(preset["params"])
+    params.update(act.get("params") or {})
+    return params
+
+
 def apply_action(doc: dict, act: dict) -> dict:
     op = act.get("op")
     if op == "add_instance":
-        preset = next((p for p in MODULE_PRESETS
-                       if p["key"] == act.get("preset")), MODULE_PRESETS[0])
-        globals_ = {k: v for k, v in (doc.get("globals") or {}).items()
-                    if k != "autoApply"}
-        params = {**DEFAULT_PARAMS, **globals_,
-                  **preset["params"], **(act.get("params") or {})}
+        params = params_for(doc, act)
         room = doc.setdefault("room", {})
         instances = doc.setdefault("instances", [])
         props = doc.get("props", [])
@@ -438,6 +448,111 @@ def apply_action(doc: dict, act: dict) -> dict:
                 if key in DEFAULT_PARAMS and key not in overrides:
                     params[key] = value
         return {"op": op}
+    if op == "add_row":
+        room = doc.setdefault("room", {})
+        instances = doc.setdefault("instances", [])
+        props = doc.get("props", [])
+        wall_index = int(act.get("wall") or 0)
+        wall = next((w for w in room_walls(room)
+                     if w.index == wall_index), None)
+        if wall is None:
+            raise ValueError(
+                f"нет стены №{wall_index + 1}; доступны 0…"
+                f"{len(room_walls(room)) - 1}",
+            )
+        items = act.get("items") or []
+        if not isinstance(items, list) or not items:
+            raise ValueError("add_row: нужен непустой items[]")
+        cursor = float(act.get("start") if act.get("start") is not None
+                       else 20.0)
+        gap = float(act.get("gap") or 0)
+        created: list[dict] = []
+        for item in items:
+            if not isinstance(item, dict):
+                raise ValueError("add_row: каждый item — объект")
+            params = params_for(doc, item)
+            W = float(params.get("W") or 600)
+            D = float(params.get("D") or 560)
+            H = float(params.get("H") or 720)
+            mount = str(params.get("mount") or "floor")
+            plinth = float(params.get("plinthH") or 0)
+            worktop = float(params.get("worktopT") or 0)
+            z = float(item.get("z", 1450 if mount == "wall" else 0))
+            ctx = scene_context(room, instances + created, props)
+            start = cursor
+            found = None
+            while start + W <= wall.length + 0.5:
+                x, y, rot = _place(wall, start, W, D)
+                if candidate_free(
+                    room, instances + created, props, x, y, rot, W, D, H,
+                    mount, plinth, worktop, z, params=params, ctx=ctx,
+                ):
+                    found = (start, x, y, rot)
+                    break
+                start += 10
+            if found is None:
+                name = str(item.get("name") or item.get("preset") or "модуль")
+                raise ValueError(
+                    f"ряд: «{name}» {W:.0f} мм не помещается на стене "
+                    f"№{wall_index + 1} после x={cursor:.0f} мм "
+                    f"(длина {wall.length:.0f} мм). Уменьшите ширину или "
+                    "выберите другую стену.",
+                )
+            start, x, y, rot = found
+            preset = next((pr for pr in MODULE_PRESETS
+                           if pr["key"] == item.get("preset")), None)
+            name = (item.get("name")
+                    or (preset["label"] if preset else None)
+                    or f"Модуль {len(instances) + len(created) + 1}")
+            inst = {
+                "id": new_id("i"), "product": "base-cabinet",
+                "name": str(name),
+                "x": round(x, 1), "y": round(y, 1), "z": round(z, 1),
+                "rot": round(rot, 1), "zLocked": True, "params": params,
+            }
+            created.append(inst)
+            cursor = start + W + gap
+        instances.extend(created)
+        return {"op": op, "ids": [i["id"] for i in created],
+                "count": len(created),
+                "x": [i["x"] for i in created]}
+    if op == "fit_module":
+        inst = next((i for i in doc.get("instances", [])
+                     if i.get("id") == act.get("id")), None)
+        if not inst:
+            raise ValueError(f"нет модуля {act.get('id')}")
+        p = inst.setdefault("params", {})
+        mount = str(p.get("mount") or "floor")
+        room_h = float((doc.get("room") or {}).get("h") or 2700)
+        z = float(inst.get("z") or 0)
+        plinth = float(p.get("plinthH") or 0) if mount != "wall" else 0.0
+        worktop = float(p.get("worktopT") or 0) if mount != "wall" else 0.0
+        mode = str(act.get("to") or "ceiling")
+        if mode == "ceiling":
+            target = room_h
+        elif mode == "worktop":
+            target = float(act.get("target") or 900)
+        else:
+            raise ValueError("fit_module: to = ceiling | worktop")
+        H = max(120.0, round(target - z - plinth - worktop))
+        old_h = float(p.get("H") or 0)
+        p["H"] = H
+        others = [i for i in doc.get("instances", [])
+                  if i.get("id") != inst.get("id")]
+        if not candidate_free(
+            doc.get("room") or {}, others, doc.get("props", []),
+            float(inst.get("x") or 0), float(inst.get("y") or 0),
+            float(inst.get("rot") or 0), float(p.get("W") or 600),
+            float(p.get("D") or 560), H, mount, plinth, worktop, z,
+            params=p,
+        ):
+            p["H"] = old_h
+            raise ValueError(
+                "после подгонки высоты модуль куда-то упирается — "
+                "проверьте позицию",
+            )
+        return {"op": op, "id": inst["id"], "H": H,
+                "surface": round(z + plinth + H + worktop, 1)}
     if op == "duplicate_instance":
         src = next((i for i in doc.get("instances", [])
                     if i.get("id") == act.get("id")), None)
