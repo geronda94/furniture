@@ -6,6 +6,7 @@ import type { BabylonRenderer } from '../render3d/babylonScene'
 import { state, derived, partSelection, layoutState, ui } from '../state/project'
 import { moduleInfo, relationsFor } from '../module/info'
 import { roomWalls } from '../render25d/room'
+import { outerDims } from '../dims/outer'
 
 export type AiCameraState = ReturnType<BabylonRenderer['cameraState']>
 
@@ -18,6 +19,7 @@ export type AiSelection =
       params: Record<string, unknown>
       corpus?: { W: number; H: number; D: number }
       world: { x: number; y: number; z: number; rot: number }
+      gaps: { label: string; gap: number; hint: string }[]
     }
   | {
       kind: 'part'
@@ -147,6 +149,15 @@ function selectionContext(): AiSelection {
         params: inst.params as unknown as Record<string, unknown>,
         corpus: derived[inst.id]?.corpus,
         world: { x: inst.x, y: inst.y, z: inst.z || 0, rot: inst.rot },
+        gaps: outerDims(
+          inst, state.project.instances, derived, state.project.room,
+        )
+          .filter((g) => Number.isFinite(g.gap) && g.gap > 2)
+          .map((g) => ({
+            label: g.label,
+            gap: Math.round(g.gap),
+            hint: g.hint,
+          })),
       }
     }
   }

@@ -30,7 +30,8 @@
 | Снимок контекста сцены | `apps/web/src/ai/context.ts` | ✅ |
 | Клиентские инструменты (камера, выделение, вид, размеры, снимок) | `apps/web/src/ai/tools.ts` | ✅ |
 | Доступ из браузера для отладки | `window.__furnitureAI` (`?perf=1` / dev) | ✅ |
-| Чат-панель и LLM-провайдер | — | ⏳ следующий шаг |
+| LLM-провайдер (DeepSeek, OpenAI-совместимый) | `apps/api/routers/ai.py` | ✅ |
+| Чат-панель | `components/AiChatPanel.vue` | ✅ v1 (без стриминга) |
 
 Контекст и инструменты уже проверяются e2e `tests/e2e/ai-context.mjs`.
 
@@ -151,6 +152,8 @@ LLM tool_call
 
 ## 7. LLM-провайдер
 
+- По умолчанию — **DeepSeek**: `AI_BASE_URL=https://api.deepseek.com`,
+  `AI_MODEL=deepseek-chat`, ключ `DEEPSEEK_API_KEY` (или `AI_API_KEY`).
 - OpenAI-совместимый API: `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL`,
   `AI_MAX_TOKENS`, `AI_TIMEOUT`.
 - Подходит OpenAI, OpenRouter, локальный Ollama (`/v1`).
@@ -186,11 +189,13 @@ LLM tool_call
 
 1. **Сделано:** контекст сцены, клиентские инструменты, `/api/ai/tools`,
    `/preview`, strict actions, API-тесты.
-2. **Следующее:** `POST /api/ai/chat` (провайдер + tool-calls) и панель чата
-   с карточками/diff/undo; 5 базовых команд.
-3. Фото/план как черновик (vision + `add_module/update_module`).
-4. Вместимость v1 (простые объёмы внутри модуля).
-5. 20 eval-сценариев, замеры, пилот.
+2. **Сделано (v1):** `POST /api/ai/chat` с DeepSeek, панель чата, tool-calls,
+   предпросмотр, apply/undo; 5 базовых команд.
+3. **Следующее:** стриминг, подсветка изменений, больше операций
+   (стены/декор/материалы), фото/план.
+4. Фото/план как черновик (vision + `add_module/update_module`).
+5. Вместимость v1 (простые объёмы внутри модуля).
+6. 20 eval-сценариев, замеры, пилот.
 
 ## 11. Чего не делать
 

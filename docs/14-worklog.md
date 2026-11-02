@@ -1143,3 +1143,15 @@ No module named 'reportlab'` → воркер uvicorn падал на каждо
 | BS6 | API-тесты: tools, preview diff, атомарность, без сохранения | ✅ | `tests/api.py` |
 | BS7 | Дизайн внедрения ИИ: провайдер, чат, карточки, diff, undo, eval, безопасность | ✅ | `docs/42-ai-integration.md` |
 | BS8 | e2e `ai-context`: контекст, выделение, камера, снимок, tools | ✅ | `tests/e2e/ai-context.mjs` |
+
+## BT. Сессия 2026-11-02: ИИ-чат на DeepSeek
+
+| # | Задача | Статус | Где |
+|---|---|---|---|
+| BT1 | `/api/ai/status` и `/api/ai/chat`: прокси к DeepSeek (OpenAI-совместимый), ключ только в env | ✅ | `apps/api/routers/ai.py` |
+| BT2 | Системный промпт + контекст сцены + JSON Schema инструментов; tool-calling | ✅ | `ai.py`, `ai_tools.py` |
+| BT3 | Панель чата: контекст, сообщения, tool-calls, карточка предпросмотра, apply/undo, подсказка при отсутствии ключа | ✅ | `AiChatPanel.vue` |
+| BT4 | Клиентский цикл: выполняет камеру/выделение, собирает серверные действия, делает preview и strict apply | ✅ | `AiChatPanel.vue`, `api.ts` |
+| BT5 | `openProject(..., preserveView)` — после применения камера/выделение не сбрасываются | ✅ | `state/project.ts` |
+| BT6 | env: `DEEPSEEK_API_KEY`, `AI_BASE_URL`, `AI_MODEL`, лимит `RATE_AI_PER_MIN` | ✅ | `.env.example`, `compose.yaml` |
+| BT7 | Тесты: API status/chat/preview, e2e ai-context/ai-chat | ✅ | `tests/api.py`, `tests/e2e/` |

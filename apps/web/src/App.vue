@@ -8,6 +8,7 @@ import AddObjectModal from './components/AddObjectModal.vue'
 import StatusBar from './components/StatusBar.vue'
 import PresentationBar from './components/PresentationBar.vue'
 import ObjectModal from './components/ObjectModal.vue'
+import AiChatPanel from './components/AiChatPanel.vue'
 import PropPanel from './components/PropPanel.vue'
 import FinishModal from './components/FinishModal.vue'
 import Toast from './components/Toast.vue'
@@ -317,6 +318,7 @@ onBeforeUnmount(() => {
     <PresentationBar v-if="state.presentation" />
     <AddObjectModal v-if="ui.addOpen" @close="ui.addOpen = false" />
     <ObjectModal v-if="ui.object.open" />
+    <AiChatPanel />
     <PropPanel v-if="!ui.object.open && !state.presentation" />
     <FinishModal v-if="ui.finishOpen" @close="ui.finishOpen = false" />
     <DemoTour v-if="ui.tourOpen" />

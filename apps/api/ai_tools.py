@@ -28,7 +28,7 @@ TOOLS: list[dict[str, Any]] = [
         "kind": "server",
         "action": "add_instance",
         "implemented": True,
-        "description": "Добавить модуль из пресета (тумба/ящики/мойка/пенал/навесной).",
+        "description": "Добавить модуль из пресета: base600, base800, drawers600, drawers-cabinet, sink800, wardrobe1200, chest900, nightstand, tall600, open600, island, wall600, wall800, mix900.",
         "schema": _obj({
             "preset": STR, "name": STR, "x": NUM, "y": NUM, "z": NUM,
             "rot": NUM, "params": {"type": "object"},
@@ -243,8 +243,13 @@ RULES = [
 
 
 def tools_payload() -> dict[str, Any]:
+    from .actions import MODULE_PRESETS
     return {
         "schema": "furniture/ai-tools@1",
+        "presets": [
+            {"key": p["key"], "label": p["label"], "group": p.get("group")}
+            for p in MODULE_PRESETS
+        ],
         "preview": "POST /api/projects/{id}/preview",
         "apply": "POST /api/projects/{id}/actions {commit:true, strict:true}",
         "context": "камера, выделение, комната, объекты, ошибки — собирает клиент",

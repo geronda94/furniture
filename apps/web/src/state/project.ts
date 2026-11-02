@@ -178,6 +178,8 @@ export const state = reactive({
 export const ui = reactive({
   /** открыта модалка «Добавить объект» */
   addOpen: false,
+  /** открыт ИИ-чат */
+  aiOpen: false,
   /** активная вкладка библиотеки при открытии */
   addTab: 'furniture' as 'furniture' | 'tech' | 'decor' | 'opening',
   /** основной вид: 3D или 2D-развёртки стен без WebGL */
@@ -3767,20 +3769,25 @@ export async function openProject(
   id: string,
   skipFlush = false,
   reuseDerived = false,
+  preserveView = false,
 ): Promise<void> {
   if (!skipFlush && !(await flushSave())) {
     throw new Error('Не удалось сохранить текущий проект перед открытием другого')
   }
+  const prevSelection = state.selection
   const raw = await apiGetProject(id)
   state.project = normalizeProject(raw)
   state.projectId = id
-  state.selection = state.project.instances[0]?.id ?? null
+  const keep = preserveView && prevSelection &&
+    state.project.instances.some((i) => i.id === prevSelection)
+  state.selection = keep ? prevSelection
+    : state.project.instances[0]?.id ?? null
   state.selected = state.selection ? [state.selection] : []
   state.openingId = null
   state.folderId = null
   state.roomSelected = false
   state.wallIndex = null
-  state.fitToken++
+  if (!preserveView) state.fitToken++
   try {
     localStorage.setItem('furniture.project', id)
   } catch {

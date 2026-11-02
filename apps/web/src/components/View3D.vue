@@ -1674,16 +1674,14 @@ onMounted(async () => {
     const { BabylonRenderer } = await import('../render3d/babylonScene')
     if (!canvasEl.value) return
     renderer = new BabylonRenderer(canvasEl.value)
-    if (perfOn || import.meta.env.DEV) {
-      const ai = {
-        context: () => (renderer ? buildSceneContext(renderer) : null),
-        tools: CLIENT_TOOLS,
-        run: (name: string, args: Record<string, unknown> = {}) =>
-          renderer
-            ? runAiTool(name, args, renderer)
-            : Promise.resolve({ ok: false, error: 'renderer не готов' }),
-      }
-      ;(window as unknown as Record<string, unknown>).__furnitureAI = ai
+    // ИИ-чат и отладка: контекст сцены и клиентские инструменты.
+    ;(window as unknown as Record<string, unknown>).__furnitureAI = {
+      context: () => (renderer ? buildSceneContext(renderer) : null),
+      tools: CLIENT_TOOLS,
+      run: (name: string, args: Record<string, unknown> = {}) =>
+        renderer
+          ? runAiTool(name, args, renderer)
+          : Promise.resolve({ ok: false, error: 'renderer не готов' }),
     }
     if (perfOn) {
       ;(window as unknown as Record<string, unknown>).__furnitureRenderer = renderer
@@ -1786,6 +1784,7 @@ onBeforeUnmount(() => {
           <button class="tab" :class="{ 'tab--active': ui.dimsOuter }" title="Расстояния до стен и соседних объектов" @click="ui.dimsOuter = !ui.dimsOuter">Снаружи</button>
           <button class="tab" :class="{ 'tab--active': ui.dimsAll }" title="Все зазоры между полками и ящиками модуля" @click="ui.dimsAll = !ui.dimsAll">Зазоры</button>
         </div>
+        <button class="tab" title="ИИ-конструктор: чат и правки проекта" @click="ui.aiOpen = true">ИИ</button>
 
         <button v-if="ui.master" class="tab" title="Вписать комнату в кадр" @click="fit('room')">Вписать</button>
         <button class="tab" title="2D-развёртки стен без WebGL" @click="ui.renderMode = 'draft'; ui.draftTab = 'walls'; ui.viewSheetOpen = false">2D-стены</button>
@@ -2065,6 +2064,11 @@ onBeforeUnmount(() => {
               </button>
               <button class="tab" :class="{ 'tab--active': ui.dimsAll }" @click="ui.dimsAll = !ui.dimsAll">
                 Зазоры <small>все полки и ящики</small>
+              </button>
+            </div>
+            <div class="view__sheet-row">
+              <button class="tab" @click="ui.aiOpen = true; viewMore = false">
+                Открыть ИИ-чат
               </button>
             </div>
           </div>

@@ -35,6 +35,12 @@ services:
       RATE_LAYOUT_PER_MIN: ${RATE_LAYOUT_PER_MIN:-300}
       RATE_NORMALIZE_PER_MIN: ${RATE_NORMALIZE_PER_MIN:-60}
       RATE_SAVE_PER_MIN: ${RATE_SAVE_PER_MIN:-180}
+      RATE_AI_PER_MIN: ${RATE_AI_PER_MIN:-30}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_BASE_URL: ${AI_BASE_URL:-https://api.deepseek.com}
+      AI_MODEL: ${AI_MODEL:-deepseek-chat}
+      AI_MAX_TOKENS: ${AI_MAX_TOKENS:-2000}
+      AI_TIMEOUT: ${AI_TIMEOUT:-90}
       PYTHONPATH: /app
     volumes:
       - .:/app

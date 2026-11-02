@@ -679,3 +679,111 @@ export async function apiProjectCutting(pid: string): Promise<ProjectCutting> {
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
   return r.json() as Promise<ProjectCutting>
 }
+
+/* ---------- ИИ-чат ---------- */
+
+export interface AiChatToolCall {
+  id: string
+  type: 'function'
+  function: { name: string; arguments: string }
+}
+
+export interface AiChatMessage {
+  role: 'user' | 'assistant' | 'tool'
+  content: string
+  tool_calls?: AiChatToolCall[]
+  tool_call_id?: string
+  name?: string
+}
+
+export interface AiChatReply {
+  configured: boolean
+  message?: string
+  model?: string
+  message_data?: {
+    role: 'assistant'
+    content: string
+    tool_calls: AiChatToolCall[]
+  }
+  usage?: Record<string, unknown>
+}
+
+export interface AiStatus {
+  configured: boolean
+  provider: string
+  model: string
+  tools: number
+}
+
+export async function apiAiStatus(): Promise<AiStatus> {
+  const r = await fetch('/api/ai/status')
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  return r.json()
+}
+
+export async function apiAiChat(
+  messages: AiChatMessage[],
+  context: Record<string, unknown>,
+): Promise<AiChatReply> {
+  const r = await fetch('/api/ai/chat', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ messages, context }),
+  })
+  if (r.status === 503) {
+    const d = await r.json().catch(() => ({}))
+    const detail = d.detail ?? d
+    return { configured: false, message: detail.message || 'ИИ не настроен' }
+  }
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}))
+    const detail = d.detail ?? d
+    throw new Error(detail.message || `HTTP ${r.status}`)
+  }
+  const data = await r.json()
+  return {
+    configured: true,
+    model: data.model,
+    message_data: data.message,
+    usage: data.usage,
+  }
+}
+
+export async function apiPreviewProject(
+  pid: string,
+  actions: Record<string, unknown>[],
+): Promise<Record<string, unknown>> {
+  const r = await fetch(`/api/projects/${pid}/preview`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ actions }),
+  })
+  const data = await r.json().catch(() => ({}))
+  if (!r.ok) {
+    const detail = data.detail ?? data
+    throw new Error(detail.message || `HTTP ${r.status}`)
+  }
+  return data
+}
+
+export async function apiApplyActions(
+  pid: string,
+  actions: Record<string, unknown>[],
+  strict = true,
+): Promise<Record<string, unknown>> {
+  const r = await fetch(`/api/projects/${pid}/actions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ actions, commit: true, strict }),
+  })
+  const data = await r.json().catch(() => ({}))
+  if (!r.ok) {
+    const detail = data.detail ?? data
+    throw new Error(
+      typeof detail === 'string'
+        ? detail
+        : detail.message || `HTTP ${r.status}`,
+    )
+  }
+  return data
+}

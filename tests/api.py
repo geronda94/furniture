@@ -214,6 +214,16 @@ def main() -> int:
         ok &= check("actions: глобальная толщина унаследована",
                     inst["params"].get("t") == 16)
 
+        st = c.get("/api/ai/status")
+        stj = st.json()
+        ok &= check("ai: status", st.status_code == 200
+                    and "configured" in stj and "model" in stj,
+                    f'configured={stj.get("configured")}')
+        if not stj.get("configured"):
+            r = c.post("/api/ai/chat", json={
+                "messages": [{"role": "user", "content": "привет"}],
+            })
+            ok &= check("ai: chat без ключа — 503", r.status_code == 503)
         tools = c.get("/api/ai/tools")
         tj = tools.json()
         ok &= check("ai: tools endpoint",

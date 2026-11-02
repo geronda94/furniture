@@ -58,6 +58,7 @@ VALIDATE_PER_MIN = int(os.getenv("RATE_VALIDATE_PER_MIN", "240"))
 LAYOUT_PER_MIN = int(os.getenv("RATE_LAYOUT_PER_MIN", "300"))
 NORMALIZE_PER_MIN = int(os.getenv("RATE_NORMALIZE_PER_MIN", "60"))
 SAVE_PER_MIN = int(os.getenv("RATE_SAVE_PER_MIN", "180"))
+AI_PER_MIN = int(os.getenv("RATE_AI_PER_MIN", "30"))
 
 
 def heavy_limit(request: Request, bucket: str, limit: int) -> None:
