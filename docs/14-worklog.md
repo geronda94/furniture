@@ -1224,3 +1224,5 @@ No module named 'reportlab'` → воркер uvicorn падал на каждо
 | BY15 | `add_row` — ряд модулей вдоль стены одним действием; пресеты сохраняют имена | ✅ | `actions.py`, `ai_tools.py` |
 | BY16 | `fit_module` — высота до потолка / рабочая поверхность 900 | ✅ | `actions.py`, `ai_tools.py` |
 | BY17 | Eval 24 сценария (добавлены demo-квартира, add_row, fit_module): 24/24, автоисправлений 3 | ✅ | `tools/ai_eval.py`, `docs/ai-eval-report.md` |
+| BY18 | Материал отдельной детали: `set_part_material`/`reset_part_material`, клиент считает uid и stage, сервер хранит `partOverrides` | ✅ | `ai/tools.ts`, `actions.py`, `AiChatPanel.vue` |
+| BY19 | e2e `ai-part-material` и eval-сценарий: материал детали через preview/apply | ✅ | `tests/e2e/ai-part-material.mjs`, `tools/ai_eval.py` |

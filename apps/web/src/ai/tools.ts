@@ -42,6 +42,7 @@ import {
 } from '../state/project'
 import { defaultProject } from '../state/defaults'
 import { moduleInfo } from '../module/info'
+import { partUid, resolveObjectMaterial } from '../material/vars'
 
 export type AiToolResult = {
   ok: boolean
@@ -51,6 +52,8 @@ export type AiToolResult = {
   switchTo?: string
   /** Перенести текущий диалог в новый проект (create/quickstart). */
   switchCopy?: boolean
+  /** Готовые серверные операции, которые панель добавит в пакет. */
+  stage?: Record<string, unknown>[]
 }
 
 type Args = Record<string, unknown>
@@ -69,6 +72,8 @@ export const CLIENT_TOOLS = [
   { name: 'project_create', description: 'Создать пустой проект и открыть.' },
   { name: 'project_quickstart', description: 'Проект под ключ: комната + сценарий.' },
   { name: 'project_delete', description: 'Удалить проект (кроме текущего).' },
+  { name: 'set_part_material', description: 'Материал отдельной детали модуля.' },
+  { name: 'reset_part_material', description: 'Сбросить материал детали.' },
   { name: 'version_create', description: 'Сохранить версию проекта.' },
   { name: 'version_list', description: 'Список версий проекта.' },
   { name: 'version_restore', description: 'Откатить проект к версии.' },
@@ -311,6 +316,52 @@ export async function runAiTool(
             missing: rows.filter((x) => !x.currency).length,
             currency: state.project.market || '',
           },
+        }
+      }
+      case 'set_part_material': {
+        const id = str(args.id) || state.selection
+        const part = num(args.part)
+        if (!id || part == null) {
+          return { ok: false, error: 'set_part_material: нужен id и part' }
+        }
+        const inst = state.project.instances.find((i) => i.id === id)
+        const obj = derived[id]?.objects[part]
+        if (!inst || !obj) {
+          return { ok: false, error: 'деталь не найдена: проверьте id/part' }
+        }
+        const cur = resolveObjectMaterial(
+          state.project.materials,
+          state.project.materialVars,
+          inst,
+          obj,
+          part,
+        )
+        const material = {
+          ...cur,
+          ...((args.patch as Record<string, unknown> | undefined) || {}),
+        }
+        return {
+          ok: true,
+          result: { uid: partUid(obj), name: obj.name, material },
+          stage: [{
+            op: 'set_part_override', id, uid: partUid(obj), material,
+          }],
+        }
+      }
+      case 'reset_part_material': {
+        const id = str(args.id) || state.selection
+        const part = num(args.part)
+        if (!id || part == null) {
+          return { ok: false, error: 'reset_part_material: нужен id и part' }
+        }
+        const obj = derived[id]?.objects[part]
+        if (!obj) {
+          return { ok: false, error: 'деталь не найдена: проверьте id/part' }
+        }
+        return {
+          ok: true,
+          result: { uid: partUid(obj), name: obj.name, reset: true },
+          stage: [{ op: 'reset_part_override', id, uid: partUid(obj) }],
         }
       }
       case 'get_parts': {

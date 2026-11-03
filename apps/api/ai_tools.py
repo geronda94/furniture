@@ -97,7 +97,8 @@ GUIDE: list[str] = [
     "Если валидатор дал ошибки — вызови fix_issues с их кодами или предложи "
     "человеку выбор; не сохраняй проект с errors > 0.",
     "Материалы: set_materials меняет проект целиком, set_module_material — "
-    "конкретный модуль (роль + патч цвета/названия/рисунка).",
+    "конкретный модуль (роль + патч цвета/названия/рисунка), "
+    "set_part_material — одну деталь (part — 0-based индекс из get_parts).",
     "Корпусная мебель с раскроем — add_module. Техника и мягкая мебель "
     "(вытяжка, холодильник, плита, диван, растение, ТВ) — add_decor: это "
     "объекты сцены, они не входят в деталировку. type у декора — английский "
@@ -356,6 +357,32 @@ TOOLS: list[dict[str, Any]] = [
                               "back", "drawer"]},
             "patch": OBJ,
         }, ["id", "role", "patch"]),
+    },
+    {
+        "name": "set_part_material",
+        "kind": "client",
+        "implemented": True,
+        "description": (
+            "Материал ОДНОЙ детали модуля: id, part (0-based индекс из "
+            "get_parts/контекста), patch (name/color/accent/pattern/texScale). "
+            "Например «полку — дубом, фасад — графитом»."
+        ),
+        "schema": _obj({
+            "id": STR, "part": NUM,
+            "patch": _obj({
+                "name": STR, "color": STR, "accent": STR,
+                "pattern": {"type": "string",
+                            "enum": ["solid", "wood", "stone", "metal"]},
+                "texScale": NUM,
+            }),
+        }, ["part", "patch"]),
+    },
+    {
+        "name": "reset_part_material",
+        "kind": "client",
+        "implemented": True,
+        "description": "Сбросить материал отдельной детали (id, part).",
+        "schema": _obj({"id": STR, "part": NUM}, ["part"]),
     },
     {
         "name": "set_globals",

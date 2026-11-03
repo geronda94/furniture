@@ -106,7 +106,8 @@
 `resize_room`, `set_room`,
 `add/update/delete_partition`, `add/update/delete_opening`,
 `add/update/delete_wall_item`, `add/update/delete_decor`,
-`set_materials`, `set_module_material`, `set_globals`,
+`set_materials`, `set_module_material`, `set_part_material`,
+`reset_part_material`, `set_globals`,
 `add/update/delete_folder`, `rename_project`, `normalize_layout`,
 `fix_issues`, `preview_actions`.
 
@@ -208,7 +209,8 @@ LLM tool_call
 5. Вместимость v1 (простые объёмы внутри модуля).
 6. **Сделано:** `tools/ai_eval.py` — 24 сценария, прогон 24/24 на
    DeepSeek, 0 испорченных сохранений, 3 автоисправления
-   (`docs/ai-eval-report.md`). Дальше — пилот на живых проектах.
+   (`docs/ai-eval-report.md`), материал детали. Дальше — пилот на живых
+   проектах.
 
 ## 11. Чего не делать
 

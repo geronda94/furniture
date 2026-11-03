@@ -664,6 +664,33 @@ def apply_action(doc: dict, act: dict) -> dict:
         doc["folders"] = [f for f in doc.get("folders", [])
                           if f.get("id") != act.get("id")]
         return {"op": op, "removed": before - len(doc["folders"])}
+    if op == "set_part_override":
+        inst = next((i for i in doc.get("instances", [])
+                     if i.get("id") == act.get("id")), None)
+        if not inst:
+            raise ValueError(f"нет модуля {act.get('id')}")
+        uid = str(act.get("uid") or "")
+        material = act.get("material")
+        if not uid or not isinstance(material, dict) or not material:
+            raise ValueError(
+                "set_part_override: нужны uid детали и полный material",
+            )
+        overrides = inst.setdefault("partOverrides", {})
+        overrides[uid] = dict(material)
+        return {"op": op, "id": inst["id"], "uid": uid}
+    if op == "reset_part_override":
+        inst = next((i for i in doc.get("instances", [])
+                     if i.get("id") == act.get("id")), None)
+        if not inst:
+            raise ValueError(f"нет модуля {act.get('id')}")
+        uid = str(act.get("uid") or "")
+        overrides = inst.get("partOverrides") or {}
+        overrides.pop(uid, None)
+        if overrides:
+            inst["partOverrides"] = overrides
+        else:
+            inst.pop("partOverrides", None)
+        return {"op": op, "id": inst["id"], "uid": uid}
     if op == "set_instance_material":
         inst = next((i for i in doc.get("instances", [])
                      if i.get("id") == act.get("id")), None)

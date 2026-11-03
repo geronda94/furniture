@@ -26,7 +26,8 @@ type Bridge = {
   tools: { name: string }[]
   run: (name: string, args: Record<string, unknown>) =>
     Promise<{ ok: boolean; result?: unknown; error?: string;
-      switchTo?: string; switchCopy?: boolean }>
+      switchTo?: string; switchCopy?: boolean;
+      stage?: Record<string, unknown>[] }>
 }
 
 type Bubble = {
@@ -338,6 +339,8 @@ const TOOL_LABEL: Record<string, string> = {
   redo: 'Возвращаю',
   save: 'Сохраняю',
   export_file: 'Готовлю файл',
+  set_part_material: 'Крашу деталь',
+  reset_part_material: 'Сбрасываю материал детали',
   version_create: 'Сохраняю версию',
   version_list: 'Смотрю версии',
   version_restore: 'Откатываю версию',
@@ -409,6 +412,7 @@ async function runLoop(api: Bridge): Promise<void> {
           note = `Деталировка: ${p?.total ?? 0} деталей`
         }
         add('tool', note)
+        if (r.ok && r.stage?.length) staged.push(...r.stage)
         if (r.switchTo) {
           switchTo = r.switchTo
           switchCopy = r.switchCopy !== false

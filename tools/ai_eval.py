@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Живой eval ИИ-чата: 24 сценария на реальной модели (DeepSeek).
+"""Живой eval ИИ-чата: 25 сценариев на реальной модели (DeepSeek).
 
 Запуск (API должен быть поднят и AI_API_KEY задан):
 
@@ -30,7 +30,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
 
+from apps.api.common import cfg_for_shop  # noqa: E402
 from apps.api.routers.projects import _module_cost  # noqa: E402
+from furniture_core.solve import solve  # noqa: E402
 from furniture_core.layout import (  # noqa: E402
     normalize_layout,
     outline_points,
@@ -210,6 +212,25 @@ DELETE_TOOLS = {"delete_module", "delete_opening", "delete_wall_item",
                 "delete_decor"}
 
 
+def module_objects(doc: dict, inst: dict) -> list[dict]:
+    cfg, _ = cfg_for_shop(doc.get("shop"))
+    globals_ = {k: v for k, v in (doc.get("globals") or {}).items()
+                if k != "autoApply"}
+    product = {**inst, "params": {**globals_, **(inst.get("params") or {})}}
+    try:
+        res = solve(product, cfg, market=doc.get("market"),
+                    shop=doc.get("shop"), supplier=doc.get("supplier"))
+    except Exception:
+        return []
+    return res.get("objects") or []
+
+
+def part_uid(o: dict) -> str:
+    return (f"{o.get('name')}|{int(o.get('sec') or 0)}|"
+            f"{o.get('drawer_id') or ''}@{round(float(o.get('x') or 0))}"
+            f"x{round(float(o.get('z') or 0))}")
+
+
 def server_action(name: str, args: dict[str, Any]) -> dict | None:
     """Вернуть {op:…} или None, если инструмент клиентский."""
     simple = {
@@ -278,9 +299,48 @@ def client_tool(name: str, args: dict[str, Any], doc: dict,
                      if i.get("id") == iid), None)
         if not inst:
             raise ValueError("нет модуля")
-        return {"id": iid, "name": inst.get("name"),
-                "params": inst.get("params"),
-                "elements": [], "note": "деталировка доступна в UI"}
+        objects = module_objects(doc, inst)
+        return {
+            "id": iid, "name": inst.get("name"),
+            "params": inst.get("params"),
+            "elements": [{
+                "index": n, "name": o.get("name"), "kind": o.get("kind"),
+                "w": o.get("w"), "d": o.get("d"), "h": o.get("h"),
+            } for n, o in enumerate(objects[:60])],
+            "total": len(objects),
+        }
+    if name in ("set_part_material", "reset_part_material"):
+        iid = args.get("id") or selection_id
+        inst = next((i for i in doc.get("instances") or []
+                     if i.get("id") == iid), None)
+        if not inst:
+            raise ValueError("нет модуля")
+        part = int(args.get("part") if args.get("part") is not None else -1)
+        objects = module_objects(doc, inst)
+        if part < 0 or part >= len(objects):
+            raise ValueError(f"part вне диапазона 0…{len(objects) - 1}")
+        obj = objects[part]
+        uid = part_uid(obj)
+        if name == "reset_part_material":
+            return {
+                "__stage__": [{"op": "reset_part_override",
+                               "id": iid, "uid": uid}],
+                "result": {"uid": uid, "name": obj.get("name"), "reset": True},
+            }
+        patch = dict(args.get("patch") or {})
+        material = {
+            "name": str(patch.get("name") or obj.get("name") or "Материал"),
+            "color": str(patch.get("color") or "#b9b7b1"),
+            "accent": str(patch.get("accent") or patch.get("color")
+                          or "#b9b7b1"),
+            "pattern": str(patch.get("pattern") or "solid"),
+        }
+        return {
+            "__stage__": [{"op": "set_part_override", "id": iid,
+                           "uid": uid, "material": material}],
+            "result": {"uid": uid, "name": obj.get("name"),
+                       "material": material},
+        }
     if name in ("undo", "redo", "save", "camera_set", "camera_focus",
                 "selection_set", "select_all", "toggle_part", "view_mode",
                 "walls_mode", "dims_set", "ui_panel", "scene_screenshot",
@@ -299,7 +359,7 @@ def client_tool(name: str, args: dict[str, Any], doc: dict,
 
 class Api:
     def __init__(self, base: str) -> None:
-        self.c = httpx.Client(base_url=base, timeout=120, follow_redirects=True)
+        self.c = httpx.Client(base_url=base, timeout=180, follow_redirects=True)
         self.pid: str | None = None
 
     def login(self) -> None:
@@ -342,9 +402,14 @@ class Api:
     def chat(self, messages: list[dict], context: dict) -> dict:
         last = ""
         for attempt in range(4):
-            r = self.c.post("/api/ai/chat", json={
-                "messages": messages, "context": context,
-            })
+            try:
+                r = self.c.post("/api/ai/chat", json={
+                    "messages": messages, "context": context,
+                })
+            except httpx.HTTPError as exc:
+                last = f"{exc.__class__.__name__}: {exc}"
+                time.sleep(4 + attempt * 5)
+                continue
             if r.status_code == 429 or r.status_code >= 500:
                 last = f"HTTP {r.status_code}: {r.text[:120]}"
                 time.sleep(8 + attempt * 6)
@@ -523,6 +588,15 @@ def check_two_tone(doc, res):
     return ok, f"corpus={cn[:20]} facade={fn[:20]}"
 
 
+def check_part_material(doc, res):
+    inst = _instances(doc)[0] if _instances(doc) else None
+    overrides = (inst or {}).get("partOverrides") or {}
+    ok = bool(overrides) and any(
+        str(m.get("color") or "").lower() == "#a9825a"
+        for m in overrides.values())
+    return ok, f"overrides={list(overrides.values())[:1]}"
+
+
 def check_demo_add(doc, res):
     insts = _instances(doc)
     ok = len(insts) == 19 and any("пенал" in str(i.get("name") or "").lower()
@@ -664,6 +738,15 @@ def scenario_hood() -> tuple[dict, str | None, str]:
     return doc, "i1", (
         "Поставь вытяжку над варочной: ширина 600, низ на 1500 мм. "
         "Сделай инструментом, без вопросов."
+    )
+
+
+def scenario_part_material() -> tuple[dict, str | None, str]:
+    doc = base_project(4200, 3000)
+    doc["instances"] = [module("i1", "Тумба 800", 820, 560)]
+    return doc, "i1", (
+        "Покрась верхнюю полку выделенного модуля в дуб: название «Дуб», "
+        "цвет #a9825a. Используй инструменты, ничего не переспрашивай."
     )
 
 
@@ -814,6 +897,11 @@ SCENARIOS: list[dict[str, Any]] = [
         "check": check_hood,
     },
     {
+        "name": "part-material",
+        "setup": scenario_part_material,
+        "check": check_part_material,
+    },
+    {
         "name": "demo-add",
         "setup": scenario_demo_add,
         "check": check_demo_add,
@@ -903,8 +991,17 @@ def run_scenario(api: Api, sc: dict, model: str) -> dict:
                     else:
                         if action is None:
                             try:
-                                result = {"ok": True, "result": client_tool(
-                                    name, args, doc, selection)}
+                                out = client_tool(name, args, doc, selection)
+                                if isinstance(out, dict) and "__stage__" in out:
+                                    batch = out.get("__stage__") or []
+                                    staged.extend(batch)
+                                    result = {
+                                        "ok": True, "staged": True,
+                                        "actions": len(batch),
+                                        "result": out.get("result"),
+                                    }
+                                else:
+                                    result = {"ok": True, "result": out}
                             except ValueError as exc:
                                 result = {"ok": False, "error": str(exc)}
                         elif action["op"] == "__batch__":

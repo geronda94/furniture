@@ -175,6 +175,8 @@ def ai_guide():
             "delete_decor {id}",
             "set_materials {materials}",
             "set_instance_material {id, role, patch}",
+            "set_part_override {id, uid, material}",
+            "reset_part_override {id, uid}",
             "set_globals {patch}",
             "add_folder {name, ids?}",
             "update_folder {id, name?, ids?}",
