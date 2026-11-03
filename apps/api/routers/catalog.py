@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 
 from ..actions import DEFAULT_PARAMS, MODULE_PRESETS
 from ..common import MATERIALS, ROOT, SCHEMA, SHOP
+from ..decor import decor_catalog
 from ..storage import using_db
 from furniture_core import load_config
 from furniture_core.hardware import (
@@ -50,6 +51,12 @@ def catalog():
             "drawer_front_max_w": 900,
         },
     }
+
+
+@router.get("/api/decor/catalog")
+def decor():
+    """Справочник декора: группы, типы и пресеты (specs/decor.yaml)."""
+    return decor_catalog()
 
 
 @router.get("/api/materials")

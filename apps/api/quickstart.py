@@ -311,6 +311,8 @@ def generate(
             "x": float(s.get("x", 300)),
             "z": float(s.get("z", 1100)),
             "w": 80.0, "h": 80.0,
+            # выступ от стены: без него 3D-меш розетки получает NaN.
+            "depth": float(s.get("depth", 12.0)),
         })
 
     props: list[dict[str, Any]] = []

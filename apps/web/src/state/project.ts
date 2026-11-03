@@ -36,7 +36,6 @@ import type {
   Opening,
   OpeningKind,
   Prop,
-  PropType,
   Room,
   RoomSurface,
   ViewStyle,
@@ -47,7 +46,6 @@ import type {
 import { outlinePoints, pointInPoly, roomBounds, roomWallLength, roomWalls } from '../render25d/room'
 import {
   cornersOf,
-  distanceToSeg,
   footprintOf,
   insideOrEdge,
   overlaps,
@@ -55,7 +53,23 @@ import {
   zSpan,
   normalizeRot,
 } from './geometry'
-import type { Box2, Box3, WallFace } from './geometry'
+import type { Box3, WallFace } from './geometry'
+import {
+  findPropSpot as findDecorSpot,
+  propBox,
+  propCorners,
+  moduleCollides as moduleCollidesWith,
+  propCollides as propCollidesWith,
+  snapPlacement as snapPlacementPure,
+  wallItemAt,
+  wallItemLabel,
+} from './placement'
+import {
+  DECOR_GROUPS,
+  DECOR_PRESETS,
+  type DecorCategory,
+  type DecorPreset,
+} from './decorCatalog'
 
 // Совместимость: эти помощники исторически импортировали из state/project.
 export { wallFaces, zSpan, normalizeRot } from './geometry'
@@ -706,118 +720,16 @@ export function revealProps(): void {
   state.propsToken++
 }
 
-/** Заготовки декора: размеры по умолчанию для библиотеки. */
-export type PropCategory =
-  | 'soft' | 'beds' | 'tables' | 'storage' | 'decor' | 'tech' | 'bath'
+/** Категории библиотеки объектов (справочник — specs/decor.yaml). */
+export type PropCategory = DecorCategory
+export type PropPreset = DecorPreset
 
-export const PROP_GROUPS: { id: PropCategory; label: string }[] = [
-  { id: 'soft', label: 'Мягкая мебель' },
-  { id: 'beds', label: 'Кровати' },
-  { id: 'tables', label: 'Столы и стулья' },
-  { id: 'storage', label: 'Корпусная мебель' },
-  { id: 'tech', label: 'Техника' },
-  { id: 'bath', label: 'Сантехника' },
-  { id: 'decor', label: 'Декор' },
-]
+/** Группы библиотеки: генерируются из specs/decor.yaml. */
+export const PROP_GROUPS: { id: PropCategory; label: string }[] =
+  DECOR_GROUPS.map((g) => ({ id: g.id, label: g.label }))
 
-export interface PropPreset {
-  key: string
-  type: PropType
-  name: string
-  category: PropCategory
-  group: string
-  w: number
-  d: number
-  h: number
-  color: string
-  accent?: string
-  icon: string
-}
-
-const G = (id: PropCategory): string =>
-  PROP_GROUPS.find((g) => g.id === id)?.label ?? 'Декор'
-
-const prop = (
-  key: string, type: PropType, name: string, category: PropCategory,
-  w: number, d: number, h: number, color: string, icon: string,
-  accent?: string,
-): PropPreset => ({
-  key, type, name, category, group: G(category),
-  w, d, h, color, accent, icon,
-})
-
-/** Библиотека объектов: категория «Мебель» с субкатегориями + техника/декор. */
-export const PROP_PRESETS: PropPreset[] = [
-  // --- мягкая мебель ---
-  prop('sofa-small', 'sofa', 'Диван 2-местный', 'soft',
-    1600, 900, 850, '#5f6a72', '🛋', '#9aa5ad'),
-  prop('sofa', 'sofa', 'Диван 3-местный', 'soft',
-    2200, 950, 850, '#5f6a72', '🛋', '#9aa5ad'),
-  prop('sofa-compact', 'sofa', 'Диван компакт', 'soft',
-    1200, 850, 820, '#6d7379', '🛋', '#9aa5ad'),
-  prop('armchair', 'armchair', 'Кресло', 'soft',
-    850, 850, 800, '#6b6f64', '🪑', '#a3a795'),
-  prop('armchair-xl', 'armchair', 'Кресло широкое', 'soft',
-    950, 900, 820, '#6b6f64', '🪑', '#a3a795'),
-
-  // --- кровати (ГОСТ 13025.2: 700/800/900, 1100…1800 × 1860–2050) ---
-  prop('bed-90', 'bed', 'Кровать 900', 'beds',
-    900, 2000, 900, '#8d7a66', '🛏', '#c8b6a2'),
-  prop('bed-120', 'bed', 'Кровать 1200', 'beds',
-    1200, 2000, 900, '#8d7a66', '🛏', '#c8b6a2'),
-  prop('bed', 'bed', 'Кровать 1600', 'beds',
-    1600, 2000, 900, '#8d7a66', '🛏', '#c8b6a2'),
-  prop('bed-180', 'bed', 'Кровать 1800', 'beds',
-    1800, 2000, 900, '#8d7a66', '🛏', '#c8b6a2'),
-
-  // --- столы и стулья ---
-  prop('dining-table', 'coffee-table', 'Обеденный стол 1600', 'tables',
-    1600, 900, 750, '#7b6652', '🪵', '#a68b6c'),
-  prop('dining-table-1200', 'coffee-table', 'Обеденный стол 1200', 'tables',
-    1200, 800, 750, '#7b6652', '🪵', '#a68b6c'),
-  prop('coffee-table', 'coffee-table', 'Журнальный стол', 'tables',
-    1100, 650, 420, '#7b6652', '🪵', '#a68b6c'),
-  prop('chair', 'chair', 'Стул', 'tables',
-    450, 480, 850, '#8a6b4f', '🪑', '#b08a63'),
-  prop('bar-chair', 'chair', 'Барный стул', 'tables',
-    450, 500, 1050, '#8a6b4f', '🪑', '#b08a63'),
-
-  // --- корпусная мебель (декор, вне BOM) ---
-  prop('dresser', 'dresser', 'Комод', 'storage',
-    1000, 450, 900, '#7b6652', '🗄', '#a68b6c'),
-  prop('tv-stand', 'dresser', 'ТВ-тумба', 'storage',
-    1800, 450, 500, '#7b6652', '🗄', '#a68b6c'),
-
-  // --- техника ---
-  prop('fridge', 'fridge', 'Холодильник', 'tech',
-    700, 650, 1850, '#c8ccd0', '🧊', '#9aa0a5'),
-  prop('stove', 'stove', 'Плита', 'tech',
-    600, 560, 850, '#2b2f33', '🔥', '#6b7378'),
-  prop('sink', 'sink', 'Мойка', 'tech',
-    800, 560, 850, '#c8ccd0', '🚰', '#9aa0a5'),
-  prop('tv', 'tv', 'Телевизор', 'tech',
-    1500, 90, 850, '#121417', '📺'),
-  prop('hood', 'hood', 'Вытяжка', 'tech',
-    600, 500, 600, '#b9c0c5', '💨', '#7c858c'),
-
-  // --- сантехника ---
-  prop('toilet', 'toilet', 'Унитаз', 'bath',
-    450, 650, 780, '#f0f1ec', '🚽', '#d5d7d0'),
-  prop('bathtub', 'bathtub', 'Ванна', 'bath',
-    1700, 800, 560, '#f0f1ec', '🛁', '#d5d7d0'),
-  prop('vanity', 'vanity', 'Тумба с раковиной', 'bath',
-    1200, 550, 850, '#f0f1ec', '🚿', '#d5d7d0'),
-  prop('shower', 'shower', 'Душевая', 'bath',
-    1000, 900, 2100, '#cfd4d8', '🚿', '#9aa0a5'),
-
-  // --- декор ---
-  prop('lamp', 'lamp', 'Торшер', 'decor',
-    350, 350, 1650, '#e8dcc4', '💡', '#c9b489'),
-  prop('plant', 'plant', 'Растение', 'decor',
-    450, 450, 1200, '#4e7a45', '🪴', '#3d6236'),
-  prop('rug', 'rug', 'Ковёр', 'decor',
-    2000, 1500, 12, '#8d7f70', '🟫'),
-]
+/** Пресеты декора: генерируются из specs/decor.yaml (tools/gen_decor_catalog.py). */
+export const PROP_PRESETS: PropPreset[] = DECOR_PRESETS
 
 export const selectedProp = computed<Prop | null>(() => {
   if (!state.propId) return null
@@ -825,43 +737,6 @@ export const selectedProp = computed<Prop | null>(() => {
 })
 
 let propSeq = 0
-
-/** Свободное место под декор: спираль от центра комнаты. */
-function findPropSpot(w: number, d: number): { x: number; y: number } {
-  const room = state.project.room
-  const pad = 120
-  const boxes: { x0: number; y0: number; x1: number; y1: number }[] = []
-  for (const inst of state.project.instances) {
-    const b = footprintOf(inst.x, inst.y, inst.params.W, inst.params.D, inst.rot)
-    boxes.push({ x0: b.x, y0: b.y, x1: b.x + b.w, y1: b.y + b.d })
-  }
-  for (const pr of state.project.props ?? []) {
-    boxes.push({
-      x0: pr.x - pr.w / 2, y0: pr.y - pr.d / 2,
-      x1: pr.x + pr.w / 2, y1: pr.y + pr.d / 2,
-    })
-  }
-  const fits = (x: number, y: number): boolean => {
-    const x0 = x - w / 2, x1 = x + w / 2
-    const y0 = y - d / 2, y1 = y + d / 2
-    if (x0 < pad || y0 < pad) return false
-    if (x1 > room.w - pad || y1 > room.d - pad) return false
-    return !boxes.some((b) =>
-      x1 > b.x0 - 60 && x0 < b.x1 + 60 && y1 > b.y0 - 60 && y0 < b.y1 + 60)
-  }
-  const cx = room.w / 2
-  const cy = room.d / 2
-  if (fits(cx, cy)) return { x: Math.round(cx), y: Math.round(cy) }
-  for (let r = 200; r <= Math.max(room.w, room.d); r += 200) {
-    for (let a = 0; a < 360; a += 30) {
-      const rad = (a * Math.PI) / 180
-      const x = cx + Math.cos(rad) * r
-      const y = cy + Math.sin(rad) * r
-      if (fits(x, y)) return { x: Math.round(x), y: Math.round(y) }
-    }
-  }
-  return { x: Math.round(cx), y: Math.round(cy) }
-}
 
 /** Выбрать декор (с открытием панели или без). */
 export function selectProp(id: string | null, openPanel = true): void {
@@ -886,16 +761,25 @@ export function addProp(
     ?? PROP_PRESETS.find((p) => p.type === keyOrType)
   if (!preset) return null
   const type = preset.type
-  pushHistory(`Добавлен декор: ${preset.name}`)
-  const room = state.project.room
   const props = state.project.props ?? []
   propSeq++
   let id = `p${Date.now().toString(36)}${propSeq}`
   while (props.some((p) => p.id === id)) id += 'x'
-  const spot = at ?? findPropSpot(preset.w, preset.d)
+  const probe: Prop = {
+    id, type, name: preset.name, x: 0, y: 0, z: 0, rot: 0,
+    w: preset.w, d: preset.d, h: preset.h,
+    color: preset.color, accent: preset.accent,
+  }
+  const spot = at ?? findDecorSpot(
+    state.project.room, state.project.instances, props,
+    preset.w, preset.d, preset.h,
+    type === 'rug'
+      ? undefined
+      : (sx, sy) => !propCollides({ ...probe, x: sx, y: sy }, sx, sy),
+  )
   const x = Math.round(spot.x)
   const y = Math.round(spot.y)
-  props.push({
+  const candidate: Prop = {
     id,
     type,
     name: preset.name,
@@ -908,7 +792,15 @@ export function addProp(
     h: preset.h,
     color: preset.color,
     accent: preset.accent,
-  })
+  }
+  // Ковёр — покрытие пола: его можно класть под мебель.
+  if (type !== 'rug' && propCollides(candidate, x, y)) {
+    notify('Декор не помещается: стена, мебель, розетка или другой декор',
+      null, 'error')
+    return null
+  }
+  pushHistory(`Добавлен декор: ${preset.name}`)
+  props.push(candidate)
   state.project.props = props
   state.propId = id
   state.propPanelOpen = true
@@ -938,47 +830,16 @@ export function updateProp(id: string, patch: Partial<Prop>, quiet = false): voi
   scheduleSave()
 }
 
-/** Габарит декора (центр + поворот) в мировых осях. */
-function propBox(
-  x: number, y: number, w: number, d: number, rot: number,
-): Box2 {
-  const a = (rot * Math.PI) / 180
-  const cs = Math.cos(a)
-  const sn = Math.sin(a)
-  let minX = Infinity
-  let minY = Infinity
-  let maxX = -Infinity
-  let maxY = -Infinity
-  for (const [lx, ly] of [
-    [-w / 2, -d / 2], [w / 2, -d / 2], [w / 2, d / 2], [-w / 2, d / 2],
-  ]) {
-    const wx = x + lx * cs - ly * sn
-    const wy = y + lx * sn + ly * cs
-    minX = Math.min(minX, wx)
-    maxX = Math.max(maxX, wx)
-    minY = Math.min(minY, wy)
-    maxY = Math.max(maxY, wy)
-  }
-  return { x: minX, y: minY, w: maxX - minX, d: maxY - minY }
-}
-
 /** Декор не входит в стены, мебель и другой декор (ковёр — покрытие пола). */
 function propCollides(prop: Prop, x: number, y: number): boolean {
-  const flat = propBox(x, y, prop.w, prop.d, prop.rot ?? 0)
-  if (!roomContains(flat.x, flat.y, flat.w, flat.d, 0)) return true
-  const z0 = Number(prop.z) || 0
-  const z1 = z0 + (Number(prop.h) || 0)
-  if (wallBodyHit(flat.x, flat.y, flat.w, flat.d, 0, z0, z1)) return true
-  const box: Box3 = { ...flat, z0, z1 }
-  const props = state.project.props ?? []
-  return state.project.instances.some((i) => overlaps(box, footprint(i)))
-    || props.some((p) => {
-      if (p.id === prop.id) return false
-      if (p.type === 'rug' || prop.type === 'rug') return false
-      const pb = propBox(p.x, p.y, p.w, p.d, p.rot ?? 0)
-      const pz0 = Number(p.z) || 0
-      return overlaps(box, { ...pb, z0: pz0, z1: pz0 + (Number(p.h) || 0) })
-    })
+  return propCollidesWith(prop, x, y, {
+    room: state.project.room,
+    instances: state.project.instances,
+    props: state.project.props ?? [],
+    roomContains,
+    wallBodyHit,
+    footprint,
+  })
 }
 
 /** Перемещение декора мышью: история пишется один раз на drag. */
@@ -1002,6 +863,19 @@ export function moveProp(id: string, x: number, y: number): void {
       return
     }
   }
+  const z0 = Number(prop.z) || 0
+  const blocker = wallItemAt(
+    state.project.room,
+    propCorners(x, y, prop.w, prop.d, prop.rot ?? 0),
+    z0, z0 + (Number(prop.h) || 0),
+  )
+  notify(
+    blocker
+      ? `Декор не помещается: мешает ${wallItemLabel(blocker)} на стене`
+      : 'Декор не помещается: стена, мебель или другой декор',
+    null,
+    'error',
+  )
 }
 
 export function rotateProp(id: string, delta: number): void {
@@ -1246,18 +1120,15 @@ export function moveSelection(
     if (!st) continue
     next.set(id, { x: st.x + sdx, y: st.y + sdy })
   }
-  // проверка: группа не должна пересечь невыделенные модули
+  // проверка: группа не должна пересечь стены, проёмы, розетки, декор и
+  // невыделенные модули. При отказе — короткое предупреждение (с троттлингом).
   for (const [id, p] of next) {
     const inst = state.project.instances.find((i) => i.id === id)
     if (!inst) continue
-    const flat = footprintOf(p.x, p.y, inst.params.W, inst.params.D, inst.rot)
-    const [z0, z1] = zSpan(inst)
-    const bb: Box3 = { ...flat, z0, z1 }
-    if (!roomContains(p.x, p.y, inst.params.W, inst.params.D, inst.rot)) return
-    if (wallBodyHit(p.x, p.y, inst.params.W, inst.params.D, inst.rot, z0, z1)) return
-    for (const other of state.project.instances) {
-      if (moved.has(other.id)) continue
-      if (overlaps(bb, footprint(other))) return
+    const reason = moveBlockReason(inst, p.x, p.y, moved)
+    if (reason) {
+      warnMoveBlocked(reason)
+      return
     }
   }
   for (const [id, p] of next) {
@@ -1320,6 +1191,11 @@ export function canPlaceInstance(
   const selfD = derived[id]?.corpus.D ?? p.D
   if (!roomContains(x, y, selfW, selfD, inst.rot)) return false
   if (wallBodyHit(x, y, selfW, selfD, inst.rot, z, z1)) return false
+  if (wallItemAt(
+    state.project.room,
+    cornersOf(x, y, selfW, selfD, inst.rot),
+    z, z1,
+  )) return false
   const r: Box3 = { ...footprintOf(x, y, selfW, selfD, inst.rot), z0: z, z1 }
   if (state.project.instances.some(
     (i) => i.id !== id && overlaps(r, footprint(i)),
@@ -1331,6 +1207,21 @@ export function canPlaceInstance(
     const pz0 = Number(pr.z) || 0
     return overlaps(r, { ...pb, z0: pz0, z1: pz0 + (Number(pr.h) || 0) })
   })
+}
+
+/** Настенный предмет, который мешает модулю в точке (для предупреждения). */
+function wallBlockerFor(
+  inst: Instance, x: number, y: number, z: number,
+) {
+  const p = inst.params
+  const total = p.mount === 'wall'
+    ? p.H
+    : (p.plinthH || 0) + p.H + (p.worktopT || 0)
+  return wallItemAt(
+    state.project.room,
+    cornersOf(x, y, p.W, p.D, inst.rot),
+    z, z + total,
+  )
 }
 
 /** Координаты объекта в комнате (X, Y, Z). Z залочен у напольной мебели. */
@@ -1364,7 +1255,17 @@ export function setInstancePosition(
     }
   }
   if (best === current) {
-    notify('Не помещается: стена, потолок или другой объект', null, 'error')
+    const bx = axis === 'x' ? target : inst.x
+    const by = axis === 'y' ? target : inst.y
+    const bz = axis === 'z' ? target : (inst.z || 0)
+    const blocker = wallBlockerFor(inst, bx, by, bz)
+    notify(
+      blocker
+        ? `Не помещается: мешает ${wallItemLabel(blocker)} на стене`
+        : 'Не помещается: стена, потолок или другой объект',
+      null,
+      'error',
+    )
     return false
   }
   pushHistory('Позиция модуля')
@@ -1372,8 +1273,14 @@ export function setInstancePosition(
   else if (axis === 'y') inst.y = best
   else inst.z = best
   if (best !== target) {
+    const bx = axis === 'x' ? target : inst.x
+    const by = axis === 'y' ? target : inst.y
+    const bz = axis === 'z' ? target : (inst.z || 0)
+    const blocker = wallBlockerFor(inst, bx, by, bz)
     notify(
-      `Ограничено до ${best} мм: упор в стену, потолок или соседа`,
+      blocker
+        ? `Ограничено до ${best} мм: мешает ${wallItemLabel(blocker)} на стене`
+        : `Ограничено до ${best} мм: упор в стену, потолок или соседа`,
       null,
       'error',
     )
@@ -2249,21 +2156,58 @@ function collides(
   D: number,
   rot = 0,
 ): boolean {
-  if (!roomContains(x, y, W, D, rot)) return true
-  const [z0, z1] = zSpan(inst)
-  if (wallBodyHit(x, y, W, D, rot, z0, z1)) return true
-  const flat = footprintOf(x, y, W, D, rot)
-  const r: Box3 = { ...flat, z0, z1 }
-  if (state.project.instances.some(
-    (i) => i.id !== inst.id && overlaps(r, footprint(i)),
-  )) return true
-  // Декор (кроме ковра) — тоже препятствие.
-  return (state.project.props ?? []).some((pr) => {
-    if (pr.type === 'rug') return false
-    const pz0 = Number(pr.z) || 0
-    const pb = propBox(pr.x, pr.y, pr.w, pr.d, pr.rot ?? 0)
-    return overlaps(r, { ...pb, z0: pz0, z1: pz0 + (Number(pr.h) || 0) })
+  return moduleCollidesWith(inst, x, y, W, D, rot, {
+    room: state.project.room,
+    instances: state.project.instances,
+    props: state.project.props ?? [],
+    roomContains,
+    wallBodyHit,
+    footprint,
+    zSpan,
   })
+}
+
+let moveWarnAt = 0
+function warnMoveBlocked(reason: string): void {
+  const now = Date.now()
+  if (now - moveWarnAt < 1500) return
+  moveWarnAt = now
+  notify(`Не помещается: ${reason}`, null, 'error')
+}
+
+/** Почему модуль не встаёт в точку (для предупреждения при перетаскивании). */
+function moveBlockReason(
+  inst: Instance, x: number, y: number, ignore: Set<string>,
+): string | null {
+  const p = inst.params
+  const [z0, z1] = zSpan(inst)
+  if (!roomContains(x, y, p.W, p.D, inst.rot)) return 'стена или контур комнаты'
+  if (wallBodyHit(x, y, p.W, p.D, inst.rot, z0, z1)) {
+    return 'стена или проём'
+  }
+  const wi = wallItemAt(
+    state.project.room,
+    cornersOf(x, y, p.W, p.D, inst.rot),
+    z0, z1,
+  )
+  if (wi) return `${wallItemLabel(wi)} на стене`
+  const flat = footprintOf(x, y, p.W, p.D, inst.rot)
+  const bb: Box3 = { ...flat, z0, z1 }
+  for (const pr of state.project.props ?? []) {
+    if (pr.type === 'rug') continue
+    const pb = propBox(pr.x, pr.y, pr.w, pr.d, pr.rot ?? 0)
+    const pz0 = Number(pr.z) || 0
+    if (overlaps(bb, { ...pb, z0: pz0, z1: pz0 + (Number(pr.h) || 0) })) {
+      return `декор «${pr.name || pr.id}»`
+    }
+  }
+  for (const other of state.project.instances) {
+    if (ignore.has(other.id)) continue
+    if (overlaps(bb, footprint(other))) {
+      return `модуль «${other.name || other.id}»`
+    }
+  }
+  return null
 }
 
 function findFreeNear(
@@ -2298,81 +2242,14 @@ function snapPlacement(
   y: number,
   withGuides: boolean,
 ): { x: number; y: number } {
-  const room = state.project.room
-  const box = footprintOf(x, y, inst.params.W, inst.params.D, inst.rot)
-  const ox = box.x - x
-  const oy = box.y - y
-  const W = box.w
-  const D = box.d
-  const SNAP = 60
-  const others = state.project.instances
-    .filter((i) => i.id !== inst.id)
-    .map(footprint)
-
-  const b = roomBounds(room)
-  const xCands: { value: number; guide: number }[] = [
-    { value: b.minX, guide: b.minX },
-    { value: b.maxX - W, guide: b.maxX },
-  ]
-  const yCands: { value: number; guide: number }[] = [
-    { value: b.minY, guide: b.minY },
-    { value: b.maxY - D, guide: b.maxY },
-  ]
-  // внутренние грани стен: прижимаем к ним, а не к осевой линии
-  const corners = cornersOf(x, y, W, D, inst.rot)
-  for (const f of wallFaces(room)) {
-    let sMin = Infinity
-    let sMax = -Infinity
-    for (const p of corners) {
-      const s = (p.x - f.ax) * f.dx + (p.y - f.ay) * f.dy
-      sMin = Math.min(sMin, s)
-      sMax = Math.max(sMax, s)
-    }
-    if (sMax < -5 || sMin > f.len + 5) continue
-    if (Math.abs(f.nx) > 0.9) {
-      const v = f.nx > 0 ? f.ax : f.ax - W
-      xCands.push({ value: v, guide: f.ax })
-    }
-    if (Math.abs(f.ny) > 0.9) {
-      const v = f.ny > 0 ? f.ay : f.ay - D
-      yCands.push({ value: v, guide: f.ay })
-    }
-  }
-  for (const o of others) {
-    xCands.push({ value: o.x, guide: o.x })
-    xCands.push({ value: o.x + o.w, guide: o.x + o.w })
-    xCands.push({ value: o.x - W, guide: o.x })
-    xCands.push({ value: o.x + o.w - W, guide: o.x + o.w })
-    yCands.push({ value: o.y, guide: o.y })
-    yCands.push({ value: o.y + o.d, guide: o.y + o.d })
-    yCands.push({ value: o.y - D, guide: o.y })
-    yCands.push({ value: o.y + o.d - D, guide: o.y + o.d })
-  }
-
-  const pick = (
-    val: number,
-    cands: { value: number; guide: number }[],
-  ): { value: number; guide: number } | null => {
-    let best: { value: number; guide: number } | null = null
-    for (const c of cands) {
-      if (Math.abs(c.value - val) > SNAP) continue
-      if (!best || Math.abs(c.value - val) < Math.abs(best.value - val)) {
-        best = c
-      }
-    }
-    return best
-  }
-
-  const sx = pick(box.x, xCands)
-  const sy = pick(box.y, yCands)
-  const nx = clamp(Math.round((sx ? sx.value : box.x) / 10) * 10, b.minX, b.maxX - W)
-  const ny = clamp(Math.round((sy ? sy.value : box.y) / 10) * 10, b.minY, b.maxY - D)
-
+  const r = snapPlacementPure(
+    inst, x, y, state.project.room, state.project.instances, withGuides,
+  )
   if (withGuides) {
-    state.guides.x = sx ? sx.guide : null
-    state.guides.y = sy ? sy.guide : null
+    state.guides.x = r.guideX
+    state.guides.y = r.guideY
   }
-  return { x: nx - ox, y: ny - oy }
+  return { x: r.x, y: r.y }
 }
 
 export function clearGuides(): void {
@@ -2416,6 +2293,11 @@ export function canResizeModule(
   // Габарит в плане: стены, проёмы, другие модули (с учётом высоты).
   if (!roomContains(inst.x, inst.y, next.W, next.D, inst.rot)) return false
   if (wallBodyHit(inst.x, inst.y, next.W, next.D, inst.rot, z0, z1)) return false
+  if (wallItemAt(
+    state.project.room,
+    cornersOf(inst.x, inst.y, next.W, next.D, inst.rot),
+    z0, z1,
+  )) return false
   const r: Box3 = { ...footprintOf(inst.x, inst.y, next.W, next.D, inst.rot), z0, z1 }
   if (state.project.instances.some(
     (i) => i.id !== id && overlaps(r, footprint(i)),

@@ -22,10 +22,14 @@ UI **не считает** деталировку сам; движок **не з
 | Путь | Ответственность |
 |---|---|
 | `state/defaults.ts` | типы проекта, пресеты, материалы, нормализация JSON |
+| `state/decorCatalog.ts` | **генерируется** из `specs/decor.yaml`: группы, типы, пресеты декора |
 | `state/geometry.ts` | чистая геометрия плана: боксы, повороты, `zSpan`, `overlaps` |
+| `state/placement.ts` | чистая расстановка: `propBox`, `propCollides`, `moduleCollides`, `findPropSpot`, `snapPlacement`, `wallItemAt` (розетки/выступы стен) |
 | `state/project.ts` | реактивный store: selection, история, solver, сохранение, действия, проверки перемещения/размера |
 | `api.ts` | типы и HTTP-клиент (solve, projects, materials, layout, actions) |
 | `render3d/babylonScene.ts` | Babylon-сцена: комната, мебель, материалы, камера, выбор, тени |
+| `render3d/props/context.ts` | общий контекст примитивов/материалов декора |
+| `render3d/props/builders.ts` | 18 билдеров декора (`PROP_BUILDERS`, полнота проверяется типами) |
 | `render3d/handles.ts` | геометрия ручек (бар/кнопка) — без состояния рендерера |
 | `render25d/*` | Canvas 2D: план, развёртки, миниатюры, превью конструктора |
 | `dims/types.ts` | типы размерной разметки (`DimLine`, `EdgeSpec`) |
@@ -148,11 +152,29 @@ UI **не считает** деталировку сам; движок **не з
 4. **Проверки ИИ-результата** — strict-PUT / `validate` (docs/22), плюс
    клиентские проверки из `state/project.ts`.
 
-## 6. Оставшийся технический долг
+## 6. Технический долг: что сделано и что осталось
 
-- `state/project.ts` (~125 КБ) и `render3d/babylonScene.ts` (~130 КБ) всё ещё
-  крупные: следующие безопасные шаги — вынести `setInstancePosition`/
-  `resizeModule`/`canPlace*` в `state/placement.ts`, а `syncProps` — в
-  `render3d/props.ts`.
+Сделано (2026-11-03):
+
+- справочник декора вынесен в `specs/decor.yaml`; API, ИИ и веб больше не
+  держат три копии (`tools/gen_decor_catalog.py`, `/api/decor/catalog`);
+- чистая расстановка — `state/placement.ts` (`propBox`, `propCollides`,
+  `moduleCollides`, `findPropSpot`, `snapPlacement`), store оставляет обёртки
+  с доступом к `state`;
+- 18 билдеров декора — `render3d/props/`; `syncProps` стал оркестратором, а
+  реестр `PROP_BUILDERS: Record<DecorType, …>` ловит пропущенный тип на `tsc`.
+
+Осталось:
+
+- `state/project.ts` (~120 КБ): следующий безопасный шаг — вынести
+  `state`/`ui`/историю в `state/core.ts`, затем домены `props`, `selection`,
+  `materials`, `room`, `solver`, `persistence`; `project.ts` остаётся фасадом
+  с реэкспортами. Приоритет: `setInstancePosition`/`resizeModule`/`canPlace*`.
+- `render3d/babylonScene.ts` (~2 800 строк): `syncInstances` (~800 строк) —
+  следующий кандидат на `render3d/instances/` (корпус, фасады, ящики,
+  фурнитура, анимации); затем комнаты/стены и камера.
+- Рантайм A2 (`docs/37` §5): материалы кромок, тени только у крупных деталей,
+  заморозка матриц, LOD/thin instances. Требует решения по правилу «каждый
+  элемент — отдельный объект» для схематичного режима.
 - Часть нормативных фиксов валидации ручная (помечено в UI).
 - Мебель сцены (диваны/комоды) не в BOM — это объекты сцены.

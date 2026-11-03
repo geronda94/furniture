@@ -1,0 +1,335 @@
+# Справочник декора и предметов интерьера (единый источник).
+# Используется API (/api/decor/catalog, /api/ai/tools) и веб-клиентом
+# (apps/web/src/state/decorCatalog.ts генерируется tools/gen_decor_catalog.py).
+# Экземпляры предметов хранятся в проекте: projects.doc.props[] (JSONB).
+schema: decor/catalog@1
+
+groups:
+  - id: soft
+    label: Мягкая мебель
+  - id: beds
+    label: Кровати
+  - id: tables
+    label: Столы и стулья
+  - id: storage
+    label: Корпусная мебель
+  - id: tech
+    label: Техника
+  - id: bath
+    label: Сантехника
+  - id: decor
+    label: Декор
+
+# Порядок важен: это enum для ИИ (add_decor.type).
+types:
+  - sofa
+  - armchair
+  - bed
+  - coffee-table
+  - chair
+  - dresser
+  - fridge
+  - stove
+  - sink
+  - tv
+  - hood
+  - toilet
+  - bathtub
+  - vanity
+  - shower
+  - lamp
+  - plant
+  - rug
+
+presets:
+  # --- мягкая мебель ---
+  - key: sofa-small
+    type: sofa
+    name: Диван 2-местный
+    category: soft
+    w: 1600
+    d: 900
+    h: 850
+    color: "#5f6a72"
+    accent: "#9aa5ad"
+    icon: "🛋"
+  - key: sofa
+    type: sofa
+    name: Диван 3-местный
+    category: soft
+    w: 2200
+    d: 950
+    h: 850
+    color: "#5f6a72"
+    accent: "#9aa5ad"
+    icon: "🛋"
+  - key: sofa-compact
+    type: sofa
+    name: Диван компакт
+    category: soft
+    w: 1200
+    d: 850
+    h: 820
+    color: "#6d7379"
+    accent: "#9aa5ad"
+    icon: "🛋"
+  - key: armchair
+    type: armchair
+    name: Кресло
+    category: soft
+    w: 850
+    d: 850
+    h: 800
+    color: "#6b6f64"
+    accent: "#a3a795"
+    icon: "🪑"
+  - key: armchair-xl
+    type: armchair
+    name: Кресло широкое
+    category: soft
+    w: 950
+    d: 900
+    h: 820
+    color: "#6b6f64"
+    accent: "#a3a795"
+    icon: "🪑"
+
+  # --- кровати (ГОСТ 13025.2: 700/800/900, 1100…1800 × 1860–2050) ---
+  - key: bed-90
+    type: bed
+    name: Кровать 900
+    category: beds
+    w: 900
+    d: 2000
+    h: 900
+    color: "#8d7a66"
+    accent: "#c8b6a2"
+    icon: "🛏"
+  - key: bed-120
+    type: bed
+    name: Кровать 1200
+    category: beds
+    w: 1200
+    d: 2000
+    h: 900
+    color: "#8d7a66"
+    accent: "#c8b6a2"
+    icon: "🛏"
+  - key: bed
+    type: bed
+    name: Кровать 1600
+    category: beds
+    w: 1600
+    d: 2000
+    h: 900
+    color: "#8d7a66"
+    accent: "#c8b6a2"
+    icon: "🛏"
+  - key: bed-180
+    type: bed
+    name: Кровать 1800
+    category: beds
+    w: 1800
+    d: 2000
+    h: 900
+    color: "#8d7a66"
+    accent: "#c8b6a2"
+    icon: "🛏"
+
+  # --- столы и стулья ---
+  - key: dining-table
+    type: coffee-table
+    name: Обеденный стол 1600
+    category: tables
+    w: 1600
+    d: 900
+    h: 750
+    color: "#7b6652"
+    accent: "#a68b6c"
+    icon: "🪵"
+  - key: dining-table-1200
+    type: coffee-table
+    name: Обеденный стол 1200
+    category: tables
+    w: 1200
+    d: 800
+    h: 750
+    color: "#7b6652"
+    accent: "#a68b6c"
+    icon: "🪵"
+  - key: coffee-table
+    type: coffee-table
+    name: Журнальный стол
+    category: tables
+    w: 1100
+    d: 650
+    h: 420
+    color: "#7b6652"
+    accent: "#a68b6c"
+    icon: "🪵"
+  - key: chair
+    type: chair
+    name: Стул
+    category: tables
+    w: 450
+    d: 480
+    h: 850
+    color: "#8a6b4f"
+    accent: "#b08a63"
+    icon: "🪑"
+  - key: bar-chair
+    type: chair
+    name: Барный стул
+    category: tables
+    w: 450
+    d: 500
+    h: 1050
+    color: "#8a6b4f"
+    accent: "#b08a63"
+    icon: "🪑"
+
+  # --- корпусная мебель (декор, вне BOM) ---
+  - key: dresser
+    type: dresser
+    name: Комод
+    category: storage
+    w: 1000
+    d: 450
+    h: 900
+    color: "#7b6652"
+    accent: "#a68b6c"
+    icon: "🗄"
+  - key: tv-stand
+    type: dresser
+    name: ТВ-тумба
+    category: storage
+    w: 1800
+    d: 450
+    h: 500
+    color: "#7b6652"
+    accent: "#a68b6c"
+    icon: "🗄"
+
+  # --- техника ---
+  - key: fridge
+    type: fridge
+    name: Холодильник
+    category: tech
+    w: 700
+    d: 650
+    h: 1850
+    color: "#c8ccd0"
+    accent: "#9aa0a5"
+    icon: "🧊"
+  - key: stove
+    type: stove
+    name: Плита
+    category: tech
+    w: 600
+    d: 560
+    h: 850
+    color: "#2b2f33"
+    accent: "#6b7378"
+    icon: "🔥"
+  - key: sink
+    type: sink
+    name: Мойка
+    category: tech
+    w: 800
+    d: 560
+    h: 850
+    color: "#c8ccd0"
+    accent: "#9aa0a5"
+    icon: "🚰"
+  - key: tv
+    type: tv
+    name: Телевизор
+    category: tech
+    w: 1500
+    d: 90
+    h: 850
+    color: "#121417"
+    icon: "📺"
+  - key: hood
+    type: hood
+    name: Вытяжка
+    category: tech
+    w: 600
+    d: 500
+    h: 600
+    color: "#b9c0c5"
+    accent: "#7c858c"
+    icon: "💨"
+
+  # --- сантехника ---
+  - key: toilet
+    type: toilet
+    name: Унитаз
+    category: bath
+    w: 450
+    d: 650
+    h: 780
+    color: "#f0f1ec"
+    accent: "#d5d7d0"
+    icon: "🚽"
+  - key: bathtub
+    type: bathtub
+    name: Ванна
+    category: bath
+    w: 1700
+    d: 800
+    h: 560
+    color: "#f0f1ec"
+    accent: "#d5d7d0"
+    icon: "🛁"
+  - key: vanity
+    type: vanity
+    name: Тумба с раковиной
+    category: bath
+    w: 1200
+    d: 550
+    h: 850
+    color: "#f0f1ec"
+    accent: "#d5d7d0"
+    icon: "🚿"
+  - key: shower
+    type: shower
+    name: Душевая
+    category: bath
+    w: 1000
+    d: 900
+    h: 2100
+    color: "#cfd4d8"
+    accent: "#9aa0a5"
+    icon: "🚿"
+
+  # --- декор ---
+  - key: lamp
+    type: lamp
+    name: Торшер
+    category: decor
+    w: 350
+    d: 350
+    h: 1650
+    color: "#e8dcc4"
+    accent: "#c9b489"
+    icon: "💡"
+  - key: plant
+    type: plant
+    name: Растение
+    category: decor
+    w: 450
+    d: 450
+    h: 1200
+    color: "#4e7a45"
+    accent: "#3d6236"
+    icon: "🪴"
+  - key: rug
+    type: rug
+    name: Ковёр
+    category: decor
+    w: 2000
+    d: 1500
+    h: 12
+    color: "#8d7f70"
+    icon: "🟫"

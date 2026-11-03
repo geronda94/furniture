@@ -1242,3 +1242,41 @@ No module named 'reportlab'` → воркер uvicorn падал на каждо
 | BZ8 | Зависимости и Docker: pypdfium2, ezdxf, python-multipart; pip retries | ✅ | `requirements.txt`, `Dockerfile.api` |
 | BZ9 | Тесты: PDF/SVG/DXF/PNG/415 в API; e2e `ai-plan-import` (SVG → проект, PNG без vision) | ✅ | `tests/api.py`, `tests/e2e/ai-plan-import.mjs` |
 | BZ10 | Документация | ✅ | `docs/44-plan-import.md`, 42/43/41 |
+
+## CA. Сессия 2026-11-03: единый справочник декора и разгрузка рендера
+
+| # | Задача | Статус | Где |
+|---|---|---|---|
+| CA1 | Единый справочник декора: группы, 18 типов, 28 пресетов | ✅ | `specs/decor.yaml` |
+| CA2 | Генератор TS из YAML + проверка `--check` в тестах | ✅ | `tools/gen_decor_catalog.py`, `apps/web/src/state/decorCatalog.ts` |
+| CA3 | API-загрузчик и `GET /api/decor/catalog`; `DECOR_TYPES` больше не дублируется | ✅ | `apps/api/decor.py`, `apps/api/routers/catalog.py`, `ai_tools.py` |
+| CA4 | `PROP_GROUPS`/`PROP_PRESETS` в store — реэкспорт сгенерированного каталога | ✅ | `apps/web/src/state/project.ts` |
+| CA5 | Чистая геометрия расстановки вынесена из store | ✅ | `apps/web/src/state/placement.ts` |
+| CA6 | Билдеры декора вынесены из класса сцены (18 типов, реестр с проверкой типов) | ✅ | `apps/web/src/render3d/props/builders.ts`, `context.ts` |
+| CA7 | Контракт: YAML ↔ API ↔ TS ↔ 3D-билдеры | ✅ | `tests/decor.py`, `tests/api.py`, CI |
+| CA8 | Документация карты кода и остатка техдолга | ✅ | `docs/41`, `docs/28` |
+| CA9 | Разгрузка `syncInstances` (818 строк) и доменный сплит `project.ts` | ⬜ следующая сессия | `docs/41` §6 |
+| CA10 | Рантайм A2: материалы кромок, тени, заморозка матриц/LOD | ⬜ по решению | `docs/37` §5 |
+
+## CB. Сессия 2026-11-03: ручки высоких створок
+
+| # | Задача | Статус | Где |
+|---|---|---|---|
+| CB1 | Высокая напольная створка (≥ 1200 мм): вертикальная ручка, центр 1000 мм от низа | ✅ | `furniture_core/assembly.py` |
+| CB2 | Короткая створка и навесной шкаф сохранили прежнюю логику (верх/низ, горизонтально) | ✅ | `assembly.py` |
+| CB3 | `handleHeight` переопределяет центр; кнопка на высокой створке — на удобной высоте | ✅ | `assembly.py` |
+| CB4 | Регрессия: вертикально/горизонтально, 1000 мм, навесной, handleHeight, кнопка, профиль | ✅ | `tests/handles.py`, CI |
+| CB5 | Документация правила и каталога | ✅ | `docs/04`, `docs/20`, `specs/hardware.yaml` |
+
+## CC. Сессия 2026-11-03: аудит валидаторов и физики 3D
+
+| # | Задача | Статус | Где |
+|---|---|---|---|
+| CC1 | Прогон `layout + scene + standards` на демо: 0 ошибок; 1 предупреждение в demo-apartment (заполнитель 100 мм) | ✅ | `tools/validate_project.py` |
+| CC2 | Найдено: сервер проверяет розетки, а фронтенд при перетаскивании — нет | ✅ | `state/placement.ts` |
+| CC3 | Настенные предметы (`wallItems`, выступ `depth`) учитываются в коллизиях модуля, декора, ресайза, drag и поиска места | ✅ | `placement.ts`, `project.ts` |
+| CC4 | Предупреждения при упоре: «мешает розетка/выключатель/полка на стене» | ✅ | `setInstancePosition`, `moveSelection`, `moveProp` |
+| CC5 | Quickstart создаёт розетку с `depth: 12` (было без глубины → NaN в 3D) | ✅ | `apps/api/quickstart.py` |
+| CC6 | Мебель не утопает в стене: рендер-зазор 1.5 мм, убран `zOffset` стены | ✅ | `render3d/babylonScene.ts` |
+| CC7 | E2E: розетка блокирует модуль, предупреждение, зазор до стены | ✅ | `tests/e2e/socket-block.mjs`, CI |
+| CC8 | Кровати/диваны/столы — пока декор сцен, не BOM; ГОСТ-размеры проверяются, конструктив (ламели, каркас) не генерируется | ⬜ проектное ограничение | `docs/29` |

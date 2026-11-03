@@ -61,6 +61,25 @@ def main() -> int:
     r = c.get("/api/health")
     ok &= check("health", r.status_code == 200 and r.json().get("ok") is True)
 
+    r = c.post("/api/quickstart", json={
+        "name": "socket-depth-test", "kind": "kitchen", "wall": 0,
+        "room": {"w": 3600, "d": 2800, "h": 2700, "wallT": 100},
+        "sockets": [{"wall": 0, "x": 1500, "z": 1100}],
+    })
+    wi = (r.json().get("project") or {}).get("room", {}).get("wallItems", [])
+    ok &= check("quickstart: розетка с выступом depth",
+                r.status_code == 200 and wi
+                and all(float(w.get("depth") or 0) > 0 for w in wi),
+                str(wi))
+
+    r = c.get("/api/decor/catalog")
+    decor = r.json()
+    ok &= check("decor catalog", r.status_code == 200
+                and len(decor.get("groups", [])) == 7
+                and len(decor.get("types", [])) == 18
+                and len(decor.get("presets", [])) == 28,
+                str(len(decor.get("presets", []))))
+
     # Rate limit тяжёлых эндпоинтов: бюджет на пользователя, порог из env.
     limits = api_main.common
     prev_solve = limits.SOLVE_PER_MIN
@@ -500,6 +519,22 @@ def main() -> int:
             strict_ok = c.put(f"/api/projects/{lpid}?strict=1", json=doc)
             ok &= check("layout: strict PUT принимает чистый проект",
                         strict_ok.status_code == 200)
+
+            dpid = f"test-decor-{int(time.time() * 1000):x}"
+            ddoc = project("Decor defaults")
+            c.put(f"/api/projects/{dpid}", json=ddoc)
+            dec = c.post(f"/api/projects/{dpid}/actions", json={
+                "actions": [{"op": "add_decor", "type": "sofa"}],
+                "commit": False,
+            })
+            dprop = ((dec.json().get("project") or {}).get("props") or [{}])[-1]
+            ok &= check("decor: размеры и имя из specs/decor.yaml",
+                        dec.status_code == 200
+                        and dprop.get("name") == "Диван 3-местный"
+                        and (dprop.get("w"), dprop.get("d"), dprop.get("h"))
+                        == (2200, 950, 850),
+                        str(dprop))
+            c.delete(f"/api/projects/{dpid}")
 
             guide = c.get("/api/ai/guide").json()
             rules_text = " ".join(guide.get("rules", [])).lower()

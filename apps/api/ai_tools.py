@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .decor import decor_types as _decor_types
+
 
 def _obj(props: dict[str, Any], required: list[str] | None = None) -> dict:
     return {
@@ -30,11 +32,7 @@ CONFIRM = {
     "description": "true — человек явно подтвердил удаление/необратимое действие.",
 }
 
-DECOR_TYPES = [
-    "sofa", "armchair", "bed", "coffee-table", "chair", "dresser",
-    "fridge", "stove", "sink", "tv", "hood", "toilet", "bathtub",
-    "vanity", "shower", "lamp", "plant", "rug",
-]
+DECOR_TYPES = _decor_types()
 
 MODULE_PARAMS: dict[str, str] = {
     "W": "ширина корпуса, мм",

@@ -33,6 +33,12 @@ from .parts import hinge_count
 EDGE_WARN_MIN = 4.0       # минимальный запас до кромки для отверстия, мм
 MAX_WARNINGS = 24
 
+# Эргономика ручек. Короткая створка напольного модуля — ручка у верхней
+# кромки (горизонтально); высокая створка — вертикальная ручка на удобной
+# высоте, иначе до верхней кромки двухметрового шкафа не дотянуться.
+HANDLE_VERTICAL_FROM = 1200.0  # высота створки, мм
+HANDLE_COMFORT_HEIGHT = 1000.0  # центр вертикальной ручки от низа створки, мм
+
 
 @dataclass
 class Box:
@@ -246,37 +252,64 @@ def _handle_holes(
 ) -> list[dict]:
     if handle.mount == "profile" or handle.centers < 0:
         return []
-    # Ручка должна быть в зоне, до которой человек дотягивается:
-    # у напольных — у верхней кромки створки, у навесных — у нижней.
-    # Иначе у верхних шкафов ручка оказывается под потолком.
     low = handle.hole_dia / 2 + 2
     high = max(low, box.sz - handle.hole_dia / 2 - 2)
+    vertical = False
+
     if is_drawer:
+        # Фасад ящика: ручка по центру, горизонтально.
         y = box.sz / 2
-    elif handle_height is not None:
-        y = max(low, min(high, float(handle_height)))
     elif mount == "wall":
-        y = max(low, min(high, handle.door_top))
+        # Навесной шкаф: ручка у нижней кромки — до верхней не дотянуться.
+        target = (float(handle_height) if handle_height is not None
+                  else handle.door_top)
+        y = max(low, min(high, target))
+    elif box.sz >= HANDLE_VERTICAL_FROM:
+        # Высокая напольная створка: вертикальная ручка на удобной высоте.
+        target = (float(handle_height) if handle_height is not None
+                  else HANDLE_COMFORT_HEIGHT)
+        if handle.centers > 0:
+            vertical = True
+            # Держим обе точки сверловки внутри створки, не сдвигая центр.
+            half = handle.centers / 2
+            y = max(low + half, min(high - half, target))
+        else:
+            # Кнопка на высокой створке — на той же удобной высоте.
+            y = max(low, min(high, target))
     else:
-        y = max(low, min(high, box.sz - handle.door_top))
+        # Короткая напольная створка: ручка у верхней кромки.
+        target = (float(handle_height) if handle_height is not None
+                  else box.sz - handle.door_top)
+        y = max(low, min(high, target))
+
     out: list[dict] = []
     for hi, base_x in enumerate(_handle_centers(
             box, handle, is_drawer=is_drawer, hinge=hinge), start=1):
         if handle.centers <= 0:
-            xs = [base_x]
+            points = [(base_x, y)]
+        elif vertical:
+            points = [
+                (base_x, y - handle.centers / 2),
+                (base_x, y + handle.centers / 2),
+            ]
         else:
-            xs = [base_x - handle.centers / 2, base_x + handle.centers / 2]
-        for x in xs:
+            points = [
+                (base_x - handle.centers / 2, y),
+                (base_x + handle.centers / 2, y),
+            ]
+        for x, yy in points:
             x = max(handle.hole_dia / 2 + 2,
                     min(box.sx - handle.hole_dia / 2 - 2, x))
+            yy = max(low, min(high, yy))
             out.append(_op(
                 part=_part_name(box), part_kind=_kind(box.name),
-                face="наружная пласть", x=x, y=y,
+                face="наружная пласть", x=x, y=yy,
                 dia=handle.hole_dia, depth=handle.hole_depth,
                 kind="handle", hardware=handle.name,
                 hardware_id=handle.id, section=section,
-                note=f"{detail}; ручка {handle.name}, межцентровое "
-                     f"{handle.centers:g} мм",
+                note=f"{detail}; ручка {handle.name}, "
+                     f"{'вертикальная' if vertical else 'горизонтальная'}, "
+                     f"межцентровое {handle.centers:g} мм",
                 visibility="visible",
                 unit=f"{detail}-h{hi}",
             ))

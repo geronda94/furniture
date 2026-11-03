@@ -9,6 +9,7 @@ from furniture_core.layout import normalize_layout, room_walls
 from furniture_core.scene import normalize_scene
 
 from .common import new_id
+from .decor import decor_presets
 from .fixes import fix_issues as apply_issue_fixes
 from .placement import (
     GEOMETRY_KEYS,
@@ -336,12 +337,17 @@ def apply_action(doc: dict, act: dict) -> dict:
         return {"op": op, "removed": before - len(room["wallItems"])}
     if op == "add_decor":
         kind = act.get("type", "plant")
+        presets = decor_presets()
+        preset = (next((p for p in presets if p.get("key") == kind), None)
+                  or next((p for p in presets if p.get("type") == kind), None))
         room = doc.setdefault("room", {})
         instances = doc.get("instances", [])
         props = doc.setdefault("props", [])
-        w = float(act.get("w", 400))
-        d = float(act.get("d", 400))
-        h = float(act.get("h", 800))
+        # Размеры и цвет по умолчанию — из specs/decor.yaml, а не 400×400×800
+        # для любого типа (иначе кровать/диван получают бессмысленный габарит).
+        w = float(act.get("w") or (preset or {}).get("w") or 400)
+        d = float(act.get("d") or (preset or {}).get("d") or 400)
+        h = float(act.get("h") or (preset or {}).get("h") or 800)
         z = float(act.get("z", 0))
         rot = float(act.get("rot", 0))
         has_x = act.get("x") is not None
@@ -375,14 +381,16 @@ def apply_action(doc: dict, act: dict) -> dict:
             x, y = free
         prop = {
             "id": new_id("p"), "type": kind,
-            "name": act.get("name") or "Декор",
+            "name": act.get("name") or (preset or {}).get("name") or "Декор",
             "x": round(x, 1), "y": round(y, 1),
             "z": z, "rot": rot,
             "w": w, "d": d, "h": h,
-            "color": act.get("color") or "#7a8a6a",
+            "color": (act.get("color") or (preset or {}).get("color")
+                      or "#7a8a6a"),
         }
-        if act.get("accent"):
-            prop["accent"] = act["accent"]
+        accent = act.get("accent") or (preset or {}).get("accent")
+        if accent:
+            prop["accent"] = accent
         props.append(prop)
         return {"op": op, "id": prop["id"], "x": prop["x"], "y": prop["y"]}
     if op == "update_decor":
