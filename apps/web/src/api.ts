@@ -749,6 +749,72 @@ export async function apiAiChat(
   }
 }
 
+export interface PlanData {
+  units: 'mm'
+  confidence: number
+  needs_dimensions: boolean
+  questions: string[]
+  room: {
+    w: number; d: number; h: number; wallT: number; outline: number[][]
+  } | null
+  openings: {
+    kind: string; wall: number; x: number; w: number; z0: number; z1: number
+  }[]
+  partitions: { a: number[]; b: number[]; wallT?: number }[]
+  furniture: {
+    kind: string; preset: string; name: string
+    x: number; y: number; w: number; d: number; h: number; rot: number
+  }[]
+  notes: string[]
+  valid: boolean
+}
+
+export interface ImportedPlan {
+  schema: string
+  kind: 'pdf' | 'image' | 'dxf' | 'svg'
+  filename: string
+  page?: number | null
+  pages?: number | null
+  preview?: string | null
+  width?: number | null
+  height?: number | null
+  page_mm?: { w: number; h: number } | null
+  text: string
+  dimensions: { w: number; d: number; raw: string }[]
+  vector: {
+    outline?: number[][] | null; source?: string; segments?: number
+    units?: number; units_known?: boolean
+  } | null
+  vision: {
+    ok: boolean; reason?: string; model?: string; error?: string
+    hint?: string; plan?: PlanData | null
+  }
+  vision_status: { configured: boolean; model: string; hint: string }
+  plan: PlanData | null
+  notes: string[]
+}
+
+/** Импорт плана: PDF, изображение, DXF или SVG. */
+export async function apiAnalyzePlan(
+  pid: string,
+  file: File,
+  page = 1,
+): Promise<ImportedPlan> {
+  const fd = new FormData()
+  fd.append('file', file)
+  fd.append('page', String(page))
+  const r = await fetch(`/api/projects/${pid}/plan`, {
+    method: 'POST',
+    body: fd,
+  })
+  const data = await r.json().catch(() => ({}))
+  if (!r.ok) {
+    const detail = (data as { detail?: unknown }).detail
+    throw new Error(typeof detail === 'string' ? detail : `HTTP ${r.status}`)
+  }
+  return data as ImportedPlan
+}
+
 export async function apiPreviewProject(
   pid: string,
   actions: Record<string, unknown>[],

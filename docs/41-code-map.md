@@ -107,6 +107,11 @@ UI **не считает** деталировку сам; движок **не з
   операций; новые проекты открываются с переносом диалога.
 
 ### Автопостановка и действия ИИ (API)
+- `apps/api/plans.py` + `routers/plans.py` — импорт планов (PDF/изображение/
+  DXF/SVG), vision-разбор, `POST /api/projects/{id}/plan`; клиент —
+  `ai/tools.ts`/`AiChatPanel.vue` (карточка плана). Контракт — `docs/44`.
+- Пустой проект не должен получать демо-мебель: `normalizeProject` берёт
+  `instances` только если это массив (в т.ч. пустой).
 - `apps/api/placement.py` — единственное место, где ищется свободное место;
   геометрия берётся из `furniture_core.scene`, правила — как у валидатора.
 - `scene_context` считается один раз на перебор позиций; дальше сравнение по
@@ -126,7 +131,7 @@ UI **не считает** деталировку сам; движок **не з
 - e2e: `smoke`, `workbench`, `ui-audit`, `camera`, `touch`, `selection`,
   `camera-focus`, `size-row`, `pos-limits`, `outer-dims`, `validation`,
   `ai-context`, `ai-chat`, `ai-chat-flow`, `ai-placement`,
-  `ai-design-flow`.
+  `ai-design-flow`, `ai-part-material`, `ai-plan-import`.
 - Перед деплоем: `tsc`, `npm run build`, `tools/deploy.sh`, затем e2e на проде.
 - e2e запускать с `PW_CHROME=/usr/bin/google-chrome` (браузеры Playwright на
   сервере — другой версии) и `BASE_URL=http://127.0.0.1:5176`. Для `smoke`

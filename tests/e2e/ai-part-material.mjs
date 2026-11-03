@@ -87,6 +87,11 @@ try {
   if (await skip.count()) await skip.first().click().catch(() => {})
   await page.keyboard.press('Escape').catch(() => {})
   await page.waitForTimeout(500)
+  await page.waitForFunction(() => {
+    const d = window.__furnitureDbg?.derived
+    const id = window.__furnitureDbg?.state?.project?.instances?.[0]?.id
+    return !!(d && id && d[id]?.objects?.length)
+  }, null, { timeout: 30000 })
 
   const before = await page.evaluate(() => {
     const s = window.__furnitureDbg.state

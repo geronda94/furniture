@@ -19,6 +19,7 @@ import {
   closeDetail,
   closeObjectModal,
   derived,
+  ensureSolved,
   flushSave,
   openDetail,
   openObjectModal,
@@ -63,6 +64,16 @@ const num = (v: unknown): number | null =>
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 
+async function waitObjects(id: string) {
+  ensureSolved(id)
+  for (let i = 0; i < 24; i++) {
+    const objs = derived[id]?.objects
+    if (objs?.length) return objs
+    await new Promise((r) => setTimeout(r, 250))
+  }
+  return derived[id]?.objects
+}
+
 export const CLIENT_TOOLS = [
   { name: 'validate', description: 'Проверить проект: ошибки/предупреждения с подсказками.' },
   { name: 'get_quote', description: 'Смета: итог и стоимость по модулям.' },
@@ -98,6 +109,12 @@ export const CLIENT_TOOLS = [
 
 export function isClientTool(name: string): boolean {
   return CLIENT_TOOLS.some((t) => t.name === name)
+}
+
+export async function createEmptyProject(name: string): Promise<string> {
+  const id = `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+  await apiPutProject(id, projectDoc(name))
+  return id
 }
 
 function projectDoc(name: string): Record<string, unknown> {
@@ -325,7 +342,8 @@ export async function runAiTool(
           return { ok: false, error: 'set_part_material: нужен id и part' }
         }
         const inst = state.project.instances.find((i) => i.id === id)
-        const obj = derived[id]?.objects[part]
+        const objects = await waitObjects(id)
+        const obj = objects?.[part]
         if (!inst || !obj) {
           return { ok: false, error: 'деталь не найдена: проверьте id/part' }
         }
@@ -354,7 +372,8 @@ export async function runAiTool(
         if (!id || part == null) {
           return { ok: false, error: 'reset_part_material: нужен id и part' }
         }
-        const obj = derived[id]?.objects[part]
+        const objects = await waitObjects(id)
+        const obj = objects?.[part]
         if (!obj) {
           return { ok: false, error: 'деталь не найдена: проверьте id/part' }
         }
@@ -368,9 +387,11 @@ export async function runAiTool(
         const id = str(args.id) || state.selection
         if (!id) return { ok: false, error: 'get_parts: нужен id или выделенный модуль' }
         const inst = state.project.instances.find((i) => i.id === id)
-        const d = derived[id]
-        if (!inst || !d) return { ok: false, error: 'модуль ещё не рассчитан' }
-        const info = moduleInfo(inst, d.objects)
+        const objects = await waitObjects(id)
+        if (!inst || !objects?.length) {
+          return { ok: false, error: 'модуль ещё не рассчитан' }
+        }
+        const info = moduleInfo(inst, objects)
         if (!info) return { ok: false, error: 'у модуля нет деталей' }
         return {
           ok: true,
@@ -401,8 +422,7 @@ export async function runAiTool(
       }
       case 'project_create': {
         const name = str(args.name) || 'Новый проект'
-        const id = `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
-        await apiPutProject(id, projectDoc(name))
+        const id = await createEmptyProject(name)
         return {
           ok: true,
           switchTo: id,

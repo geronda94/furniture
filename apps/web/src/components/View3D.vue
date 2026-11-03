@@ -1686,7 +1686,7 @@ onMounted(async () => {
     if (perfOn) {
       ;(window as unknown as Record<string, unknown>).__furnitureRenderer = renderer
       ;(window as unknown as Record<string, unknown>).__furnitureDbg = {
-        state, ui, lowGpu, suggestDraft,
+        state, ui, lowGpu, suggestDraft, derived,
       }
     }
     renderer.setWallMode(state.wallMode)

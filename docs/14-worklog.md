@@ -1226,3 +1226,19 @@ No module named 'reportlab'` → воркер uvicorn падал на каждо
 | BY17 | Eval 24 сценария (добавлены demo-квартира, add_row, fit_module): 24/24, автоисправлений 3 | ✅ | `tools/ai_eval.py`, `docs/ai-eval-report.md` |
 | BY18 | Материал отдельной детали: `set_part_material`/`reset_part_material`, клиент считает uid и stage, сервер хранит `partOverrides` | ✅ | `ai/tools.ts`, `actions.py`, `AiChatPanel.vue` |
 | BY19 | e2e `ai-part-material` и eval-сценарий: материал детали через preview/apply | ✅ | `tests/e2e/ai-part-material.mjs`, `tools/ai_eval.py` |
+
+
+## BZ. Сессия 2026-11-03: импорт планов (PDF, изображения, DXF, SVG)
+
+| # | Задача | Статус | Где |
+|---|---|---|---|
+| BZ1 | Разбор PDF: рендер страницы, текстовый слой, размеры, page_mm | ✅ | `apps/api/plans.py` |
+| BZ2 | Изображения: превью и vision-разбор (OpenAI-совместимая модель), без vision — просьба о размерах | ✅ | `plans.py`, env `AI_VISION_*` |
+| BZ3 | DXF: единицы, отрезки/полилинии, контур по замкнутой полилинии | ✅ | `plans.py` (ezdxf) |
+| BZ4 | SVG: полигоны/линии/rect, viewBox, контур | ✅ | `plans.py` |
+| BZ5 | `POST /api/projects/{id}/plan`, лимит 25 МБ и rate limit, файл не сохраняется | ✅ | `routers/plans.py`, `common.py` |
+| BZ6 | Чат: 📎, карточка плана, «Новый проект по плану», «Применить в текущий» (только пустой), «Расставить мебель» с `context.plan` | ✅ | `AiChatPanel.vue`, `api.ts` |
+| BZ7 | Исправлен баг: пустой проект при загрузке получал демо-мебель (`normalizeProject`) | ✅ | `state/defaults.ts` |
+| BZ8 | Зависимости и Docker: pypdfium2, ezdxf, python-multipart; pip retries | ✅ | `requirements.txt`, `Dockerfile.api` |
+| BZ9 | Тесты: PDF/SVG/DXF/PNG/415 в API; e2e `ai-plan-import` (SVG → проект, PNG без vision) | ✅ | `tests/api.py`, `tests/e2e/ai-plan-import.mjs` |
+| BZ10 | Документация | ✅ | `docs/44-plan-import.md`, 42/43/41 |

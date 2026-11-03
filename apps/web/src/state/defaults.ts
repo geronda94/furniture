@@ -974,7 +974,7 @@ export function normalizeProject(raw: unknown): Project {
   const d = (raw ?? {}) as Partial<Project>
   const base = defaultProject()
   const globals = normalizeGlobals(d.globals)
-  const instances = (d.instances?.length ? d.instances : base.instances).map(
+  const instances = (Array.isArray(d.instances) ? d.instances : []).map(
     (i, idx) => ({
       id: i.id || `i${Math.random().toString(36).slice(2, 7)}`,
       product: i.product || 'base-cabinet',

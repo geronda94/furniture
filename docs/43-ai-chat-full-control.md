@@ -20,6 +20,7 @@
 | Область | Инструменты | Побочный эффект |
 |---|---|---|
 | Проекты | `project_list`, `project_open`, `project_create`, `project_quickstart`, `project_delete`, `rename_project` | новый проект открывается, диалог переносится |
+| План | 📎 PDF/PNG/DXF/SVG → контур, проёмы, перегородки; «Новый проект по плану» | см. `docs/44` |
 | Комната | `resize_room` (w/d/h/wallT, `rect`/`l`, произвольный `outline`), `set_room` (пол/потолок) | пересборка контура, подгонка проёмов и предметов |
 | Стены | `add_partition`, `update_partition`, `delete_partition` | удаление с проёмами/предметами запрещено |
 | Проёмы | `add_opening`, `update_opening`, `delete_opening` | проверка стены, пересечений, мебели и зоны подхода |
@@ -128,3 +129,7 @@ preview → apply».
 
 Материал **отдельной детали** — в чате (`set_part_material`, 0-based `part`
 из `get_parts`); хранится как `partOverrides` и проверен e2e.
+
+Импорт планов — PDF, изображения, DXF, SVG: `docs/44-plan-import.md`.
+Без vision-модели работают PDF с текстом, DXF и SVG; картинки показываются
+с просьбой прислать размеры.

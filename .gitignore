@@ -32,8 +32,11 @@ projects/*/previews/
 projects/*/cards/
 .auth/
 
-# резервные дампы БД (локальные, не в git)
-backups/
+# резервные дампы БД: полные — только локально; в git — обезличенный срез
+backups/*
+!backups/README.md
+!backups/committed/
+!backups/committed/**
 
 # локальные БД/выгрузки стратегии
 *.sqlite

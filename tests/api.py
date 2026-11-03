@@ -718,6 +718,76 @@ def main() -> int:
         finally:
             c.delete(f"/api/projects/{wpid}")
 
+        # Импорт планов: PDF, SVG, DXF, картинка.
+        import io as _io
+        from reportlab.pdfgen import canvas as _canvas
+
+        pdf = _io.BytesIO()
+        cv = _canvas.Canvas(pdf, pagesize=(842, 595))
+        cv.drawString(72, 500, "Apartment plan. Room 4200 x 3100 mm")
+        cv.rect(100, 100, 600, 400)
+        cv.save()
+        r = c.post(f"/api/projects/{pid}/plan",
+                   files={"file": ("plan.pdf", pdf.getvalue(),
+                                   "application/pdf")})
+        pj = r.json()
+        ok &= check("plan: PDF прочитан",
+                    r.status_code == 200 and pj.get("kind") == "pdf"
+                    and pj.get("preview", "").startswith("data:image/jpeg")
+                    and any(d["w"] == 4200 for d in pj.get("dimensions", [])),
+                    str(pj.get("dimensions")))
+        ok &= check("plan: комната из текста PDF",
+                    bool(pj.get("plan"))
+                    and pj["plan"]["room"]["w"] == 4200,
+                    str((pj.get("plan") or {}).get("room")))
+
+        svg = (b'<svg xmlns="http://www.w3.org/2000/svg" width="4200mm" '
+               b'height="3100mm" viewBox="0 0 4200 3100">'
+               b'<rect x="0" y="0" width="4200" height="3100"/></svg>')
+        r = c.post(f"/api/projects/{pid}/plan",
+                   files={"file": ("plan.svg", svg, "image/svg+xml")})
+        sj = r.json()
+        ok &= check("plan: SVG контур",
+                    r.status_code == 200 and sj.get("kind") == "svg"
+                    and sj.get("plan")
+                    and abs(sj["plan"]["room"]["w"] - 4200) < 1
+                    and abs(sj["plan"]["room"]["d"] - 3100) < 1,
+                    str((sj.get("plan") or {}).get("room")))
+
+        import ezdxf as _ezdxf
+        dxf = _ezdxf.new()
+        dxf.header["$INSUNITS"] = 4
+        dxf.modelspace().add_lwpolyline(
+            [(0, 0), (4200, 0), (4200, 3100), (0, 3100)], close=True)
+        dbuf = _io.StringIO()
+        dxf.write(dbuf)
+        r = c.post(f"/api/projects/{pid}/plan",
+                   files={"file": ("plan.dxf", dbuf.getvalue().encode(),
+                                   "application/dxf")})
+        dj = r.json()
+        ok &= check("plan: DXF контур",
+                    r.status_code == 200 and dj.get("kind") == "dxf"
+                    and dj.get("plan")
+                    and abs(dj["plan"]["room"]["w"] - 4200) < 1,
+                    str((dj.get("plan") or {}).get("room")))
+
+        from PIL import Image as _Image
+        img = _Image.new("RGB", (800, 600), "white")
+        ibuf = _io.BytesIO()
+        img.save(ibuf, "PNG")
+        r = c.post(f"/api/projects/{pid}/plan",
+                   files={"file": ("plan.png", ibuf.getvalue(), "image/png")})
+        ij = r.json()
+        ok &= check("plan: картинка и превью",
+                    r.status_code == 200 and ij.get("kind") == "image"
+                    and ij.get("preview", "").startswith("data:image/jpeg"),
+                    str(ij.get("vision")))
+
+        r = c.post(f"/api/projects/{pid}/plan",
+                   files={"file": ("plan.txt", b"hello", "text/plain")})
+        ok &= check("plan: неизвестный формат отклонён",
+                    r.status_code == 415, r.text[:80])
+
         # Выгрузки для цеха: SVG раскроя, DXF деталей, XLSX.
         for fmt in ("svg", "dxf", "xlsx"):
             r = c.post(f"/api/projects/{pid}/export/{fmt}")

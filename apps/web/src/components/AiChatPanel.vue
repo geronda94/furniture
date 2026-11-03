@@ -3,10 +3,12 @@ import { computed, onMounted, ref, watch } from 'vue'
 import {
   apiAiChat,
   apiAiStatus,
+  apiAnalyzePlan,
   apiApplyActions,
   apiPreviewProject,
   type AiChatMessage,
   type AiStatus,
+  type ImportedPlan,
 } from '../api'
 import {
   flushSave,
@@ -19,7 +21,7 @@ import {
   ui,
   undo,
 } from '../state/project'
-import { isClientTool } from '../ai/tools'
+import { createEmptyProject, isClientTool } from '../ai/tools'
 
 type Bridge = {
   context: () => Record<string, unknown>
@@ -49,6 +51,10 @@ const busy = ref(false)
 const error = ref('')
 const preview = ref<Record<string, any> | null>(null)
 const pending = ref<Record<string, unknown>[]>([])
+const plan = ref<ImportedPlan | null>(null)
+const planBusy = ref(false)
+const planError = ref('')
+const planInput = ref<HTMLInputElement | null>(null)
 let seq = 0
 let restoring = false
 
@@ -106,6 +112,129 @@ watch(() => state.projectId, () => restore())
 
 const bridge = (): Bridge | undefined =>
   (window as unknown as { __furnitureAI?: Bridge }).__furnitureAI
+
+const planApplyActions = computed<Record<string, unknown>[]>(() => {
+  const p = plan.value?.plan
+  if (!p?.room || p.needs_dimensions) return []
+  const actions: Record<string, unknown>[] = [{
+    op: 'resize_room',
+    w: p.room.w, d: p.room.d, h: p.room.h,
+    wallT: p.room.wallT, outline: p.room.outline,
+  }]
+  for (const part of p.partitions || []) {
+    actions.push({ op: 'add_partition', a: part.a, b: part.b,
+      wallT: part.wallT })
+  }
+  for (const o of p.openings || []) {
+    actions.push({
+      op: 'add_opening', kind: o.kind, wall: o.wall,
+      x: o.x, w: o.w, z0: o.z0, z1: o.z1,
+    })
+  }
+  return actions
+})
+
+const planSummary = computed(() => {
+  const p = plan.value
+  if (!p) return ''
+  const room = p.plan?.room
+  const bits = [
+    p.kind.toUpperCase(),
+    room ? `${Math.round(room.w)}×${Math.round(room.d)} мм`
+      : 'размеры не распознаны',
+  ]
+  if (p.plan?.openings?.length) bits.push(`проёмов ${p.plan.openings.length}`)
+  if (p.plan?.partitions?.length) {
+    bits.push(`перегородок ${p.plan.partitions.length}`)
+  }
+  if (p.plan?.confidence) {
+    bits.push(`уверенность ${Math.round(p.plan.confidence * 100)}%`)
+  }
+  return bits.join(' · ')
+})
+
+const planCurrentHint = computed(() => (
+  state.project.instances.length
+    ? 'В проекте есть мебель — применяйте план в новый проект.'
+    : ''
+))
+
+const planNotes = computed(() => {
+  const p = plan.value
+  if (!p) return ''
+  const notes = [...(p.plan?.notes || []), ...(p.notes || [])]
+    .filter((x, i, a) => x && a.indexOf(x) === i)
+  if (p.plan?.needs_dimensions && p.plan.questions?.length) {
+    notes.unshift('Нужны размеры: ' + p.plan.questions.join('; '))
+  }
+  return notes.slice(0, 3).join(' · ')
+})
+
+function withPlan<T extends Record<string, unknown>>(ctx: T): T {
+  if (plan.value?.plan) ctx.plan = plan.value.plan
+  return ctx
+}
+
+async function onPlanFile(ev: Event): Promise<void> {
+  const input = ev.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  planBusy.value = true
+  planError.value = ''
+  try {
+    const res = await apiAnalyzePlan(state.projectId, file)
+    plan.value = res
+    add('tool', `Файл: ${res.filename}`,
+      res.preview ? { image: res.preview } : {})
+    add('system', planSummary.value)
+  } catch (e) {
+    planError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    planBusy.value = false
+  }
+}
+
+async function applyPlan(): Promise<void> {
+  const actions = planApplyActions.value
+  if (!actions.length) {
+    planError.value = 'Комната не распознана — укажите размеры текстом'
+    return
+  }
+  planError.value = ''
+  await showPreview(actions)
+}
+
+async function applyPlanAsNewProject(): Promise<void> {
+  const p = plan.value
+  if (!p) return
+  const actions = planApplyActions.value
+  if (!actions.length) {
+    planError.value = 'Комната не распознана — укажите размеры текстом'
+    return
+  }
+  planError.value = ''
+  busy.value = true
+  try {
+    const name = `${p.filename.replace(/\.[^.]+$/, '') || 'План'} — проект`
+    const id = await createEmptyProject(name)
+    await switchProject(id, name, true)
+    await showPreview(actions)
+  } catch (e) {
+    planError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    busy.value = false
+  }
+}
+
+function askPlan(): void {
+  input.value = 'Расставь мебель по прикреплённому плану, комнату не меняй.'
+}
+
+function clearPlan(): void {
+  plan.value = null
+  planError.value = ''
+}
 
 const contextLabel = computed(() => {
   if (partSelection.instanceId && partSelection.part != null) {
@@ -356,8 +485,30 @@ const TOOL_LABEL: Record<string, string> = {
   scene_screenshot: 'Делаю снимок',
 }
 
+async function switchProject(
+  id: string, name: string, copy: boolean,
+): Promise<void> {
+  preview.value = null
+  pending.value = []
+  if (copy) {
+    add('system', `Открыт проект «${name}».`)
+    try {
+      localStorage.setItem(`furniture.ai.chat.${id}`, JSON.stringify({
+        bubbles: bubbles.value.map((b) => ({
+          id: b.id, role: b.role, text: b.text, tools: b.tools, error: b.error,
+        })),
+        apiMessages: apiMessages.value,
+      }))
+    } catch { /* ignore */ }
+    await openProject(id)
+  } else {
+    await openProject(id)
+    add('system', `Открыт проект «${state.project.name}».`)
+  }
+}
+
 async function runLoop(api: Bridge): Promise<void> {
-  let ctx = api.context()
+  let ctx = withPlan(api.context())
   const staged: Record<string, unknown>[] = []
   let switchTo: string | null = null
   let switchCopy = true
@@ -438,32 +589,14 @@ async function runLoop(api: Bridge): Promise<void> {
       })
     }
     if (switchTo) break
-    ctx = api.context()
+    ctx = withPlan(api.context())
   }
   if (switchTo) {
-    preview.value = null
-    pending.value = []
     if (staged.length) {
       add('system', 'Пакет отменён: проект сменился — повторите действия в новом проекте.',
         { error: true })
     }
-    if (switchCopy) {
-      // Новый проект: переносим диалог в его историю и открываем.
-      add('system', `Открыт проект «${switchName}».`)
-      try {
-        localStorage.setItem(`furniture.ai.chat.${switchTo}`, JSON.stringify({
-          bubbles: bubbles.value.map((b) => ({
-            id: b.id, role: b.role, text: b.text, tools: b.tools, error: b.error,
-          })),
-          apiMessages: apiMessages.value,
-        }))
-      } catch { /* ignore */ }
-      await openProject(switchTo)
-    } else {
-      // Существующий проект: показываем его собственную историю.
-      await openProject(switchTo)
-      add('system', `Открыт проект «${state.project.name}».`)
-    }
+    await switchProject(switchTo, switchName, switchCopy)
     return
   }
   if (staged.length > 12) {
@@ -606,6 +739,35 @@ function parseIssues(pv: Record<string, any>): string[] {
       Вижу: {{ contextLabel }} · {{ state.project.name }}
     </div>
 
+    <div v-if="plan" class="ai-plan">
+      <img v-if="plan.preview" class="ai-plan-shot" :src="plan.preview"
+        :alt="plan.filename">
+      <div class="ai-plan-body">
+        <b>{{ plan.filename }}</b>
+        <p>{{ planSummary }}</p>
+        <p v-if="planNotes" class="ai-plan-notes">{{ planNotes }}</p>
+        <p v-if="planError" class="ai-plan-error">{{ planError }}</p>
+        <p v-if="planCurrentHint" class="ai-plan-notes">{{ planCurrentHint }}</p>
+        <div class="ai-plan-actions">
+          <button class="btn btn--primary btn--sm"
+            :disabled="busy || !planApplyActions.length"
+            @click="applyPlanAsNewProject">
+            Новый проект по плану
+          </button>
+          <button class="btn btn--sm"
+            :disabled="busy || !planApplyActions.length
+              || state.project.instances.length > 0"
+            @click="applyPlan">
+            Применить в текущий
+          </button>
+          <button class="btn btn--sm" :disabled="busy || !configured"
+            @click="askPlan">Расставить мебель</button>
+          <button class="btn btn--ghost btn--sm" :disabled="busy"
+            @click="clearPlan">Убрать</button>
+        </div>
+      </div>
+    </div>
+
     <div class="ai-log">
       <div v-if="!bubbles.length" class="ai-empty">
         <p>Опишите, что сделать. Я вижу камеру, выделение и проект.</p>
@@ -639,6 +801,7 @@ function parseIssues(pv: Record<string, any>): string[] {
       </div>
     </div>
 
+    <p v-if="planBusy" class="ai-hint">Читаю план…</p>
     <p v-if="!configured" class="ai-hint">
       ИИ не настроен. Добавьте <code>DEEPSEEK_API_KEY</code> в <code>.env</code>
       и перезапустите <code>api</code>. Модель: <code>deepseek-chat</code>.
@@ -647,6 +810,12 @@ function parseIssues(pv: Record<string, any>): string[] {
     <p v-if="error" class="ai-error">{{ error }}</p>
 
     <form class="ai-form" @submit.prevent="send">
+      <button type="button" class="ai-attach" :disabled="busy || planBusy"
+        title="Прикрепить план: PDF, PNG/JPG, DXF, SVG"
+        @click="planInput?.click()">📎</button>
+      <input ref="planInput" type="file" hidden
+        accept=".pdf,.dxf,.svg,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff"
+        @change="onPlanFile">
       <textarea
         v-model="input"
         rows="2"
@@ -713,6 +882,39 @@ function parseIssues(pv: Record<string, any>): string[] {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.ai-plan {
+  margin: 8px 12px 0;
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid #3a424c;
+  border-radius: 7px;
+  background: #1a1f26;
+}
+.ai-plan-shot {
+  width: 84px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 5px;
+  border: 1px solid #2c323a;
+  flex: 0 0 auto;
+}
+.ai-plan-body { min-width: 0; font-size: 11px; }
+.ai-plan-body b { display: block; color: #e8ecf1; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.ai-plan-body p { margin: 3px 0; color: #cfd7df; }
+.ai-plan-notes { color: #9aa4b0; font-size: 10px; }
+.ai-plan-error { color: #ff8d8d; }
+.ai-plan-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.ai-attach {
+  flex: 0 0 auto;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid #343c46;
+  background: #1c2128;
+  color: #cfd7df;
+  cursor: pointer;
 }
 .ai-log { flex: 1; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
 .ai-empty { color: #9aa4b0; font-size: 12px; }
